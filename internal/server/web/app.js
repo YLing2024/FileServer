@@ -7,8 +7,23 @@
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+/* ============================================================
+   路径 → URL 编码（唯一出口）
+   文件名可能包含任意字符（# % + & 空格 中文 emoji …），
+   凡进入 URL 的路径/关键字必须经 pathParam 编码，禁止手写拼接。
+   ============================================================ */
 const enc = encodeURIComponent;
 const dec = decodeURIComponent;
+
+// pathParam 路径参数编码：query 值的安全编码（含 + 转义为 %2B）
+const pathParam = (p) => enc(p);
+
+// 所有 API 端点统一从这里构造 URL
+const fileURL = (p) => '/api/file?path=' + pathParam(p);
+const thumbURL = (p, w, h) => `/api/thumb?path=${pathParam(p)}&w=${w || 256}&h=${h || 256}`;
+const zipURL = (p) => '/api/zip?path=' + pathParam(p);
+const listURL = (p, sort, order) => `/api/list?path=${pathParam(p)}&sort=${sort}&order=${order}`;
+const searchURL = (q, p, limit) => `/api/search?q=${pathParam(q)}&path=${pathParam(p)}&limit=${limit}`;
 
 function fmtSize(n) {
   if (n == null) return '';
@@ -37,10 +52,6 @@ function fmtDur(sec) {
   const mm = String(m).padStart(2, '0'), ss = String(s).padStart(2, '0');
   return h > 0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
 }
-
-const fileURL = (p) => '/api/file?path=' + enc(p);
-const thumbURL = (p, w, h) => `/api/thumb?path=${enc(p)}&w=${w || 256}&h=${h || 256}`;
-const zipURL = (p) => '/api/zip?path=' + enc(p);
 
 async function api(url) {
   const resp = await fetch(url);
@@ -170,7 +181,7 @@ async function loadList(path) {
   $('searchClear').classList.add('hidden');
   showSkeleton(true);
   try {
-    const data = await api(`/api/list?path=${enc(state.path)}&sort=${state.sort}&order=${state.order}`);
+    const data = await api(listURL(state.path, state.sort, state.order));
     state.entries = data.entries;
     showSkeleton(false);
     render();
@@ -856,7 +867,7 @@ async function doSearch(q) {
   state.page = 0;
   showSkeleton(true);
   try {
-    const data = await api(`/api/search?q=${enc(q)}&path=${enc(state.path)}&limit=1000`);
+    const data = await api(searchURL(q, state.path, 1000));
     state.entries = data.results.map((r) => ({
       name: r.name, is_dir: r.is_dir, size: r.size, mtime: r.mtime, kind: r.kind,
       _searchPath: r.path, _searchDir: r.path.replace(/\/[^/]*$/, '') || '/',

@@ -112,6 +112,29 @@ func TestSpecialCharsEndToEnd(t *testing.T) {
 	}
 }
 
+// TestURLRoundTrip 编码往返无损：任意文件名经 QueryEscape/QueryUnescape 必须原样还原
+func TestURLRoundTrip(t *testing.T) {
+	names := append([]string{}, specialNames...)
+	names = append(names, "目录+%#& 空格", "/a/b/深层 路径/文件#1%.txt")
+	for _, n := range names {
+		enc := url.QueryEscape(n)
+		dec, err := url.QueryUnescape(enc)
+		if err != nil {
+			t.Errorf("解码失败 %q: %v", n, err)
+			continue
+		}
+		if dec != n {
+			t.Errorf("编码往返不一致: %q -> %q -> %q", n, enc, dec)
+		}
+		// 前端等价编码（encodeURIComponent 对空格用 %20，QueryEscape 用 +，需等价）
+		jsLike := strings.ReplaceAll(enc, "+", "%20")
+		dec2, err := url.QueryUnescape(jsLike)
+		if err != nil || dec2 != n {
+			t.Errorf("JS 风格编码往返不一致: %q -> %q -> %q", n, jsLike, dec2)
+		}
+	}
+}
+
 // TestThumbConcurrent 并发请求同一缩略图：全部成功且内容一致（singleflight 生效）
 func TestThumbConcurrent(t *testing.T) {
 	srv := New(t.TempDir(), Options{})
