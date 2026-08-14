@@ -66,10 +66,9 @@ def main():
         # 截图留档
         page.screenshot(path=".tools/shot-manyvideos.png")
 
-        # 刷新页面验证缓存（应秒出）
+        # 刷新页面验证缓存（URL 驱动导航：刷新后停留在当前目录 /manyvideos）
         page.reload(wait_until="networkidle")
-        page.click('.card:has-text("manyvideos")')
-        page.wait_for_timeout(2500)
+        page.wait_for_selector(".card.kind-video", timeout=8000)
         thumbs2 = page.locator('.card.kind-video img:not(.hidden)').count()
         print(f"[6] 刷新后（缓存命中）: {thumbs2} 个缩略图")
         if thumbs2 < 10:

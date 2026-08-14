@@ -343,15 +343,22 @@ function joinPath(dir, name) {
   return dir.replace(/\/+$/, '') + '/' + name;
 }
 
+// navigate 统一目录跳转：写入浏览器历史（URL 变为 /?path=xxx），
+// 使物理返回键/手机返回手势按目录层级逐级回退，而不是退出应用
 function navigate(path) {
-  if (path === state.path && !state.searching) return;
+  path = path || '/';
+  if (!state.searching && path === state.path) return;
+  const url = new URL(location.href);
+  url.search = '';
+  if (path !== '/') url.searchParams.set('path', path);
+  history.pushState({ path }, '', url);
   loadList(path);
 }
 
 function openEntry(e) {
-  const p = joinPath(state.path, e.name);
+  const p = entryPath(e);
   if (e.is_dir) {
-    loadList(p);
+    navigate(p);
     return;
   }
   const kind = fileKind(e);
@@ -616,11 +623,12 @@ function renderPreview(path, entry) {
     if (history.length > 1) {
       history.back(); // 由 popstate 统一处理
     } else {
-      // 无历史记录（直接打开预览链接）：原地返回浏览视图
+      // 无历史记录（直接打开预览链接）：原地返回根目录列表
       const url = new URL(location.href);
       url.search = '';
       history.replaceState({}, '', url);
       showBrowse();
+      loadList('/');
     }
   };
 
@@ -855,11 +863,11 @@ function exitSearch() {
   loadList(state.path);
 }
 
-// 搜索模式下点击条目：目录进入其所在目录，文件直接预览/下载
+// 搜索模式下点击条目：目录进入其所在目录（写入历史），文件直接预览/下载
 const _openEntry = openEntry;
 openEntry = function (e) {
   if (state.searching) {
-    if (e.is_dir) { loadList(e._searchDir); return; }
+    if (e.is_dir) { navigate(e._searchDir); return; }
     const p = e._searchPath;
     const kind = fileKind(e);
     if (kind === 'image') openLightbox(p, state.entries.filter((x) => !x.is_dir && fileKind(x) === 'image'));
@@ -872,7 +880,7 @@ openEntry = function (e) {
 
 /* ---------- 工具栏 ---------- */
 
-$('btnHome').addEventListener('click', () => { if (state.searching) exitSearch(); else loadList('/'); });
+$('btnHome').addEventListener('click', () => { if (state.searching) exitSearch(); else navigate('/'); });
 $('btnRefresh').addEventListener('click', () => {
   if (state.searching) doSearch(state.query); else loadList(state.path);
 });
@@ -943,16 +951,22 @@ document.addEventListener('keydown', (e) => {
 
 /* ---------- 浏览器历史 ---------- */
 
+// URL 驱动导航：目录路径在 ?path= 参数，预览目标在 ?view= 参数。
+// 物理返回键/手机返回手势/前进按钮都会触发 popstate，从这里恢复视图。
 window.addEventListener('popstate', () => {
-  const view = new URL(location.href).searchParams.get('view');
+  const params = new URL(location.href).searchParams;
+  const view = params.get('view');
   if (view) {
-    // 回到预览页：需要找到条目信息
+    // 回到预览页
     $('browse').classList.add('hidden');
     $('preview').classList.remove('hidden');
     const name = view.split('/').pop();
     renderPreview(view, { name, size: 0, mtime: 0 });
   } else {
-    showBrowse(); // 返回浏览视图：暂停并释放预览播放资源
+    // 回到列表页：从 URL 恢复目录（同时清理预览播放资源）
+    const path = params.get('path') || '/';
+    showBrowse();
+    loadList(path);
   }
 });
 
@@ -963,11 +977,13 @@ window.addEventListener('popstate', () => {
   document.documentElement.dataset.order = state.order;
   $('sortSelect').value = state.sort;
   setView(state.view);
-  const view = new URL(location.href).searchParams.get('view');
+  // 支持直接打开深层链接（刷新后也能恢复所在目录）
+  const params = new URL(location.href).searchParams;
+  const view = params.get('view');
   if (view) {
     const name = view.split('/').pop();
     renderPreview(view, { name, size: 0, mtime: 0 });
   } else {
-    loadList('/');
+    loadList(params.get('path') || '/');
   }
 })();
