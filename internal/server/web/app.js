@@ -1007,13 +1007,16 @@ window.addEventListener('popstate', () => {
   const params = new URL(location.href).searchParams;
   const view = params.get('view');
   if (view) {
-    // 回到预览页
+    // 离开列表页进入预览前，记住列表滚动位置
+    rememberScroll();
     $('browse').classList.add('hidden');
     $('preview').classList.remove('hidden');
     const name = view.split('/').pop();
     renderPreview(view, { name, size: 0, mtime: 0 });
   } else {
-    // 回到列表页：从 URL 恢复目录（同时清理预览播放资源）
+    // 回到列表页：先记住离开的预览所在目录（如有），再从 URL 恢复目录
+    // 注意：后退/前进时 state.path 仍是旧目录，需用它保存离开前的滚动位置
+    rememberScroll();
     const path = params.get('path') || '/';
     showBrowse();
     loadList(path);
