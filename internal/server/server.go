@@ -79,7 +79,19 @@ func (s *Server) frontendHandler() http.Handler {
 	if err != nil {
 		return http.NotFoundHandler()
 	}
-	return http.FileServer(http.FS(sub))
+	fileSrv := http.FileServer(http.FS(sub))
+	// 禁用浏览器对前端静态资源的缓存：开发迭代/重新构建后必须拿到最新 JS/CSS，
+	// 否则旧缓存会让改动看似"无效"（用户点进去还是旧版行为）。
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			w.Header().Set("Cache-Control", "no-store")
+		} else {
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		}
+		w.Header().Set("Pragma", "no-cache")
+		w.Header().Set("Expires", "0")
+		fileSrv.ServeHTTP(w, r)
+	})
 }
 
 // handleFile GET /api/file?path= 下载/预览文件（支持 Range 断点续传）

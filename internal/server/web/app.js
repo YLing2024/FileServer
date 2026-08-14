@@ -87,6 +87,7 @@ const state = {
   pageSize: 300,
   searching: false,
   query: '',
+  scrollMap: {}, // path -> 离开该目录时的滚动位置（返回时恢复）
 };
 
 const PAGE = 300;
@@ -185,6 +186,9 @@ async function loadList(path) {
     state.entries = data.entries;
     showSkeleton(false);
     render();
+    // 返回本目录时恢复之前记住的滚动位置
+    const saved = state.scrollMap[state.path];
+    if (saved != null) requestAnimationFrame(() => window.scrollTo(0, saved));
   } catch (e) {
     showSkeleton(false);
     toast(e.message, true);
@@ -354,11 +358,17 @@ function joinPath(dir, name) {
   return dir.replace(/\/+$/, '') + '/' + name;
 }
 
+// navigateOrBack 统一离开前的滚动记录：应用内跳转（navigate/后退/前进）都会调用
+function rememberScroll() {
+  state.scrollMap[state.path] = window.scrollY;
+}
+
 // navigate 统一目录跳转：写入浏览器历史（URL 变为 /?path=xxx），
 // 使物理返回键/手机返回手势按目录层级逐级回退，而不是退出应用
 function navigate(path) {
   path = path || '/';
   if (!state.searching && path === state.path) return;
+  rememberScroll(); // 离开前记住当前位置（返回时可恢复）
   const url = new URL(location.href);
   url.search = '';
   if (path !== '/') url.searchParams.set('path', path);

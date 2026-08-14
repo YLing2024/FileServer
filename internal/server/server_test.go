@@ -259,12 +259,16 @@ func TestAPIFrontend(t *testing.T) {
 	if resp.StatusCode != 200 || !strings.Contains(string(body), "html") {
 		t.Fatalf("前端页面异常: %d", resp.StatusCode)
 	}
-	// 静态资源可访问
-	for _, p := range []string{"/style.css", "/app.js"} {
+	// 静态资源可访问 + 禁用缓存（避免旧 JS 缓存让改动看似无效）
+	for _, p := range []string{"/style.css", "/app.js", "/"} {
 		r := get(t, ts.URL+p)
 		r.Body.Close()
 		if r.StatusCode != 200 {
 			t.Fatalf("静态资源 %s 异常: %d", p, r.StatusCode)
+		}
+		cc := r.Header.Get("Cache-Control")
+		if !strings.Contains(cc, "no-store") && !strings.Contains(cc, "no-cache") {
+			t.Errorf("%s 缺少禁用缓存头: %q", p, cc)
 		}
 	}
 }
