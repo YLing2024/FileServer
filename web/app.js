@@ -570,6 +570,32 @@ $('lightbox').addEventListener('touchend', (e) => {
 
 /* ---------- 预览页 ---------- */
 
+// 预览页播放器资源管理：返回/切换时必须暂停并释放，否则视频和声音会继续播放
+let pvVideo = null;      // 当前预览页 video/audio 元素
+let pvKeyHandler = null; // 播放器键盘监听（避免重复注册泄漏）
+
+function stopPreview() {
+  if (pvVideo) {
+    try {
+      pvVideo.pause();
+      pvVideo.removeAttribute('src');
+      pvVideo.load(); // 释放媒体资源（停止下载/解码/声音）
+    } catch (_) { /* ignore */ }
+    pvVideo = null;
+  }
+  if (pvKeyHandler) {
+    document.removeEventListener('keydown', pvKeyHandler);
+    pvKeyHandler = null;
+  }
+  $('pvMain').innerHTML = ''; // 移除 video/embed 等 DOM 元素
+}
+
+function showBrowse() {
+  stopPreview();
+  $('preview').classList.add('hidden');
+  $('browse').classList.remove('hidden');
+}
+
 function openPreview(path, entry) {
   // 使用 URL 参数记录预览目标，支持浏览器前进/后退
   const url = new URL(location.href);
@@ -580,14 +606,22 @@ function openPreview(path, entry) {
 }
 
 function renderPreview(path, entry) {
+  stopPreview(); // 清理上一个预览的播放资源
   $('browse').classList.add('hidden');
   $('preview').classList.remove('hidden');
   $('pvName').textContent = entry.name;
   $('pvMeta').textContent = fmtSize(entry.size) + (entry.mtime ? ' · ' + fmtTime(entry.mtime) : '');
   $('btnPvDownload').onclick = () => triggerDownload(fileURL(path), entry.name);
   $('btnBack').onclick = () => {
-    history.back();
-    // history.back 由 popstate 统一处理；无历史时直接返回浏览
+    if (history.length > 1) {
+      history.back(); // 由 popstate 统一处理
+    } else {
+      // 无历史记录（直接打开预览链接）：原地返回浏览视图
+      const url = new URL(location.href);
+      url.search = '';
+      history.replaceState({}, '', url);
+      showBrowse();
+    }
   };
 
   const main = $('pvMain');
@@ -754,7 +788,7 @@ function buildPlayer(container, path, entry, kind) {
     else player.requestFullscreen().catch(() => toast('全屏不可用', true));
   });
 
-  // 键盘快捷键
+  // 键盘快捷键（注册为模块级唯一监听，便于返回时移除）
   const keys = (e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
     switch (e.key) {
@@ -767,11 +801,9 @@ function buildPlayer(container, path, entry, kind) {
       case 'f': case 'F': if (fullBtn) fullBtn.click(); break;
     }
   };
-  if (fullBtn) document.addEventListener('keydown', keys);
-  else document.removeEventListener('keydown', keys);
-  // 清理旧监听（简单方案：模块级只保留一个）
-  window.__pvCleanup && window.__pvCleanup();
-  window.__pvCleanup = () => document.removeEventListener('keydown', keys);
+  pvKeyHandler = keys;
+  document.addEventListener('keydown', keys);
+  pvVideo = video;
 }
 
 /* ---------- 搜索 ---------- */
@@ -920,8 +952,7 @@ window.addEventListener('popstate', () => {
     const name = view.split('/').pop();
     renderPreview(view, { name, size: 0, mtime: 0 });
   } else {
-    $('preview').classList.add('hidden');
-    $('browse').classList.remove('hidden');
+    showBrowse(); // 返回浏览视图：暂停并释放预览播放资源
   }
 });
 

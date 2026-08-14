@@ -75,6 +75,45 @@ def main():
         if thumbs2 < 10:
             fail.append(f"刷新后缩略图只有 {thumbs2} 个")
 
+        # ===== Bug 3: 返回浏览页后视频必须停止播放（暂停+释放资源） =====
+        page.goto(BASE, wait_until="networkidle")
+        page.click('.card:has(.card-name:text-is("videos"))')
+        page.wait_for_timeout(800)
+        page.click('.card:has(.card-name:text-is("sample.mp4"))')
+        page.wait_for_selector("#player", timeout=8000)
+        page.click("#bigPlay")
+        page.wait_for_timeout(1500)
+        playing = page.evaluate("!document.querySelector('#player video').paused")
+        print(f"[7] 视频播放中: {playing}")
+        assert playing, "视频未能开始播放"
+
+        # 点返回按钮
+        page.click("#btnBack")
+        page.wait_for_timeout(600)
+        released = page.evaluate(
+            "!document.querySelector('#player') && document.querySelectorAll('#pvMain video').length === 0"
+        )
+        preview_hidden = page.evaluate("document.getElementById('preview').classList.contains('hidden')")
+        print(f"[8] 返回按钮后: 播放器已移除={released}, 预览页隐藏={preview_hidden}")
+        if not (released and preview_hidden):
+            fail.append("点返回后播放器未释放（声音可能仍在播放）")
+
+        # 键盘监听无残留：返回后按空格不应触发任何播放器行为
+        page.keyboard.press(" ")
+        page.wait_for_timeout(300)
+
+        # 再进预览播放，然后浏览器后退（popstate 路径）
+        page.click('.card:has(.card-name:text-is("sample.mp4"))')
+        page.wait_for_selector("#player", timeout=8000)
+        page.click("#bigPlay")
+        page.wait_for_timeout(1000)
+        page.go_back()
+        page.wait_for_timeout(600)
+        released2 = page.evaluate("document.querySelectorAll('#pvMain video').length === 0")
+        print(f"[9] 浏览器后退后: 播放器已释放={released2}")
+        if not released2:
+            fail.append("浏览器后退后播放器未释放")
+
         browser.close()
 
     print("\n=== 回归测试结果 ===")
@@ -88,7 +127,7 @@ def main():
         for f in fail:
             print("  ✗", f)
         sys.exit(1)
-    print("两个 bug 均已修复 ✓")
+    print("全部回归测试通过 ✓")
     sys.exit(0)
 
 
