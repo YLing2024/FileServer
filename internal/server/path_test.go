@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"os"
@@ -24,7 +24,7 @@ func newTestServer(t *testing.T) (*Server, string) {
 	mk("dir1/b.txt")
 	mk("dir1/sub/c.txt")
 	mk("中文 文件.txt")
-	return NewServer(root, Options{}), root
+	return New(root, Options{}), root
 }
 
 func TestSafePath(t *testing.T) {
@@ -86,7 +86,7 @@ func TestSafePathSymlink(t *testing.T) {
 		t.Skipf("无法创建符号链接: %v", err)
 	}
 
-	srv := NewServer(root, Options{})
+	srv := New(root, Options{})
 	// 通过链接逃逸到外部目录必须被拒绝
 	if abs, err := srv.safePath("link/secret.txt"); err == nil {
 		t.Fatalf("符号链接逃逸未被拦截: %q", abs)

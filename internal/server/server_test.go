@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"archive/zip"
@@ -9,7 +9,6 @@ import (
 	"image/jpeg"
 	"image/png"
 	"io"
-	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -24,10 +23,6 @@ func zipNewReader(data []byte) ([]*zip.File, error) {
 		return nil, err
 	}
 	return zr.File, nil
-}
-
-func fsSubWeb() (fs.FS, error) {
-	return fs.Sub(webFS, "web")
 }
 
 func newTestHTTPServer(t *testing.T) (*httptest.Server, *Server, string) {
@@ -236,7 +231,7 @@ func TestAPISearch(t *testing.T) {
 }
 
 func TestAPIAuth(t *testing.T) {
-	srv := NewServer(t.TempDir(), Options{Auth: "admin:secret"})
+	srv := New(t.TempDir(), Options{Auth: "admin:secret"})
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -255,9 +250,7 @@ func TestAPIAuth(t *testing.T) {
 }
 
 func TestAPIFrontend(t *testing.T) {
-	srv := NewServer(t.TempDir(), Options{})
-	sub, _ := fsSubWeb()
-	srv.frontend = sub
+	srv := New(t.TempDir(), Options{})
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 	resp := get(t, ts.URL+"/")
@@ -265,5 +258,13 @@ func TestAPIFrontend(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != 200 || !strings.Contains(string(body), "html") {
 		t.Fatalf("前端页面异常: %d", resp.StatusCode)
+	}
+	// 静态资源可访问
+	for _, p := range []string{"/style.css", "/app.js"} {
+		r := get(t, ts.URL+p)
+		r.Body.Close()
+		if r.StatusCode != 200 {
+			t.Fatalf("静态资源 %s 异常: %d", p, r.StatusCode)
+		}
 	}
 }

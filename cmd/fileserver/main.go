@@ -1,20 +1,22 @@
+// FileServer 局域网文件服务器入口
+//
+// 双击 exe 即用：自动检测局域网 IP 并打印访问地址，自动打开浏览器。
+// 局域网内任意设备可只读浏览/预览/下载当前目录（或 --dir 指定目录）的文件。
 package main
 
 import (
-	"embed"
 	"errors"
 	"flag"
 	"fmt"
-	"io/fs"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
-)
 
-//go:embed web
-var webFS embed.FS
+	"fileserver/internal/platform"
+	"fileserver/internal/server"
+)
 
 func main() {
 	port := flag.Int("port", 0, "监听端口（默认 8080，被占用自动递增）")
@@ -25,9 +27,9 @@ func main() {
 	verbose := flag.Bool("v", false, "详细访问日志")
 	flag.Parse()
 
-	setConsoleUTF8()
+	platform.SetConsoleUTF8()
 
-	// 服务根目录
+	// 服务根目录：默认 exe 所在目录（双击场景）
 	root := *dir
 	if root == "" {
 		exe, err := os.Executable()
@@ -44,7 +46,7 @@ func main() {
 		log.Fatalf("服务目录无效: %s", rootAbs)
 	}
 
-	// 监听端口（自动递增）
+	// 监听端口（占用自动递增）
 	startPort := *port
 	if startPort <= 0 {
 		startPort = 8080
@@ -54,14 +56,7 @@ func main() {
 		log.Fatalf("无法监听端口: %v", err)
 	}
 
-	// 前端资源
-	sub, err := fs.Sub(webFS, "web")
-	if err != nil {
-		log.Fatalf("前端资源加载失败: %v", err)
-	}
-
-	srv := NewServer(rootAbs, Options{Hidden: *hidden, Auth: *auth, Verbose: *verbose})
-	srv.frontend = sub
+	srv := server.New(rootAbs, server.Options{Hidden: *hidden, Auth: *auth, Verbose: *verbose})
 	handler := srv.Handler()
 
 	// ---- 控制台输出 ----
@@ -70,7 +65,7 @@ func main() {
 	fmt.Println("└──────────────────────────────────────────────┘")
 	fmt.Printf("服务目录: %s\n", rootAbs)
 	fmt.Printf("本机访问: http://127.0.0.1:%d\n", actualPort)
-	ips := lanIPs()
+	ips := server.LanIPs()
 	if len(ips) == 0 {
 		fmt.Println("局域网访问: 未检测到局域网 IP（请检查网络连接）")
 	} else {
@@ -86,7 +81,7 @@ func main() {
 	fmt.Println("------------------------------------------------------------------")
 
 	if !*noBrowser {
-		go openBrowser(fmt.Sprintf("http://127.0.0.1:%d", actualPort))
+		go platform.OpenBrowser(fmt.Sprintf("http://127.0.0.1:%d", actualPort))
 	}
 
 	log.Printf("服务已启动: %s (port %d)", rootAbs, actualPort)

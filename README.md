@@ -71,7 +71,7 @@ build.bat
 产物在 `dist\FileServer.exe`。手动构建：
 
 ```
-.tools\go\bin\go build -trimpath -ldflags "-s -w" -o dist\FileServer.exe .
+.tools\go\bin\go build -trimpath -ldflags "-s -w" -o dist\FileServer.exe ./cmd/fileserver
 ```
 
 ## 测试
@@ -80,20 +80,38 @@ build.bat
 # 后端单元/集成测试
 .tools\go\bin\go test ./...
 
-# 前端冒烟测试（桌面端 10 项、移动端 4 项、bug 回归 2 项）
+# 前端 Playwright 测试（桌面/移动端/回归/导航）
 # 需要 Python + playwright，且先启动服务：dist\FileServer.exe --dir .\testdata --port 8099 --no-browser
 python scripts\smoke_test.py
 python scripts\mobile_test.py
 python scripts\regression_test.py
+python scripts\nav_test.py
 ```
 
 ## 项目结构
 
 ```
-web\          前端（HTML/CSS/JS，零依赖，嵌入 exe）
-*.go          后端（Go 标准库 + golang.org/x/image）
-fetch-tools.ps1   下载 Go 工具链
-build.bat     一键构建
+├── cmd/
+│   └── fileserver/       入口：参数解析、启动、控制台输出、自动开浏览器
+├── internal/
+│   ├── server/           核心服务（HTTP 路由、路径安全、缩略图、zip、搜索）
+│   │   ├── server.go      Server 与路由、认证、日志
+│   │   ├── path.go        路径安全（防穿越/符号链接逃逸）
+│   │   ├── list.go        目录列表与排序
+│   │   ├── thumb.go       图片缩略图 + 磁盘/内存缓存
+│   │   ├── ffmpeg.go      视频抽帧（可选增强）
+│   │   ├── zip.go         目录打包下载
+│   │   ├── search.go      递归搜索
+│   │   ├── lanip.go       局域网 IP 检测
+│   │   └── web/           前端资源（嵌入 exe）
+│   └── platform/          平台适配（控制台 UTF-8、打开浏览器）
+├── scripts/               Playwright 测试脚本
+├── testdata/              测试数据
+├── build.bat              一键构建（输出 dist\FileServer.exe）
+├── fetch-tools.ps1        下载 Go 工具链（免安装）
+├── dl.py                  工具链下载器（断点续传）
+├── release.ps1            发布包打包
+└── README.md
 ```
 
 ## 常见问题

@@ -1,9 +1,9 @@
-package main
+package server
 
 import "net"
 
-// lanIPs 返回本机所有非回环、非 APIPA 的 IPv4 地址
-func lanIPs() []string {
+// LanIPs 返回本机所有非回环、非 APIPA 的 IPv4 地址
+func LanIPs() []string {
 	var out []string
 	ifs, err := net.Interfaces()
 	if err != nil {

@@ -22,7 +22,7 @@ echo [构建] 整理依赖...
 if errorlevel 1 goto :fail
 
 echo [构建] 编译 FileServer.exe ...
-"%GOEXE%" build -trimpath -ldflags "-s -w" -o dist\FileServer.exe .
+"%GOEXE%" build -trimpath -ldflags "-s -w" -o dist\FileServer.exe ./cmd/fileserver
 if errorlevel 1 goto :fail
 
 echo.
