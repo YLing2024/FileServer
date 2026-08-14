@@ -130,7 +130,21 @@ function kindIcon(kind, cls) {
   const svg = KIND_ICONS[kind] || KIND_ICONS.other;
   return `<span class="type-icon ${cls || ''}"><svg viewBox="0 0 24 24">${svg}</svg></span>`;
 }
-function fileKind(entry) { return entry.is_dir ? 'dir' : (entry.kind || 'other'); }
+// kindByExt 根据扩展名推断文件类型（刷新恢复预览时 entry 缺 kind 字段，据此兜底）
+const KIND_EXT_MAP = [
+  [/\.(jpg|jpeg|png|gif|webp|bmp|tiff|tif|svg|ico|avif|jfif)$/i, 'image'],
+  [/\.(mp4|mkv|mov|webm|avi|wmv|flv|m4v|m2ts|3gp|rmvb|rm|mpg|mpeg|ogv)$/i, 'video'],
+  [/\.(mp3|wav|flac|aac|ogg|m4a|wma|opus|mid|midi|ape|amr)$/i, 'audio'],
+  [/\.pdf$/i, 'pdf'],
+  [/\.(zip|rar|7z|tar|gz|bz2|xz|iso|zst)$/i, 'archive'],
+  [/\.(txt|md|log|json|xml|yaml|yml|ini|conf|cfg|csv|toml|srt|ass|vtt|nfo|rtf|url)$/i, 'text'],
+  [/\.(c|cpp|h|hpp|go|rs|py|js|mjs|ts|tsx|jsx|html|htm|css|scss|java|kt|swift|sh|bat|cmd|ps1|sql|php|rb|lua|pl|vue|svelte|dockerfile|gradle|properties)$/i, 'code'],
+];
+function kindByExt(name) {
+  for (const [re, k] of KIND_EXT_MAP) if (re.test(name)) return k;
+  return 'other';
+}
+function fileKind(entry) { return entry.is_dir ? 'dir' : (entry.kind || kindByExt(entry.name || '')); }
 
 /* ---------- 面包屑 ---------- */
 
