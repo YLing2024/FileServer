@@ -1,4 +1,4 @@
-# fetch-tools.ps1 - 下载构建工具链到 .tools\ 目录（免安装、免管理员权限）
+﻿# fetch-tools.ps1 - 下载构建工具链到 .tools\ 目录（免安装、免管理员权限）
 # 用法:
 #   .\fetch-tools.ps1              # 仅下载 Go 工具链（构建必需）
 #   .\fetch-tools.ps1 -WithFfmpeg  # 额外下载 ffmpeg（用于自测服务端视频缩略图）
