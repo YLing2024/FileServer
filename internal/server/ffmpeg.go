@@ -75,25 +75,34 @@ func (s *Server) serveVideoThumb(w http.ResponseWriter, r *http.Request, abs str
 		serveCached(w, r, key, data, "image/jpeg")
 		return
 	}
-	tmp, err := os.CreateTemp("", "fsvthumb-*.jpg")
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "创建临时文件失败")
-		return
-	}
-	tmpPath := tmp.Name()
-	tmp.Close()
-	defer os.Remove(tmpPath)
 
-	if err := s.ff.Thumb(context.Background(), abs, tmpPath, wq, hq); err != nil {
-		writeErr(w, http.StatusNotFound, "视频抽帧失败: "+err.Error())
+	// singleflight：同一视频的并发抽帧请求只执行一次；ffmpeg 本身还有并发信号量兜底
+	data, ok := s.thumbs.Do(key, func() ([]byte, bool) {
+		if data, ok := s.thumbs.Get(key); ok {
+			return data, true
+		}
+		tmp, err := os.CreateTemp("", "fsvthumb-*.jpg")
+		if err != nil {
+			return nil, false
+		}
+		tmpPath := tmp.Name()
+		tmp.Close()
+		defer os.Remove(tmpPath)
+
+		if err := s.ff.Thumb(context.Background(), abs, tmpPath, wq, hq); err != nil {
+			return nil, false
+		}
+		data, err := os.ReadFile(tmpPath)
+		if err != nil {
+			return nil, false
+		}
+		s.thumbs.Put(key, data)
+		return data, true
+	})
+	if !ok {
+		writeErr(w, http.StatusNotFound, "视频抽帧失败")
 		return
 	}
-	data, err := os.ReadFile(tmpPath)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "读取抽帧结果失败")
-		return
-	}
-	s.thumbs.Put(key, data)
 	serveCached(w, r, key, data, "image/jpeg")
 }
 

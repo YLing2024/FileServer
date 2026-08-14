@@ -644,7 +644,7 @@ function renderPreview(path, entry) {
     main.innerHTML = `<embed class="pv-embed" src="${esc(fileURL(path))}" type="application/pdf">`;
   } else if (kind === 'text' || kind === 'code') {
     if (entry.size > 2 * 1024 * 1024) {
-      main.innerHTML = `<div class="pv-hint">文件较大（超过 2MB），不进行在线预览<br><button class="btn primary" onclick="triggerDownload('${esc(fileURL(path))}', '${esc(entry.name)}')">下载文件</button></div>`;
+      pvHint(main, '文件较大（超过 2MB），不进行在线预览', path, entry.name);
     } else {
       main.innerHTML = '<pre class="pv-text">加载中…</pre>';
       fetch(fileURL(path))
@@ -653,7 +653,22 @@ function renderPreview(path, entry) {
         .catch(() => { main.innerHTML = '<div class="pv-hint">文本加载失败</div>'; });
     }
   } else {
-    main.innerHTML = `<div class="pv-hint">该文件类型不支持在线预览<br><button class="btn primary" onclick="triggerDownload('${esc(fileURL(path))}', '${esc(entry.name)}')">下载文件</button></div>`;
+    pvHint(main, '该文件类型不支持在线预览', path, entry.name);
+  }
+}
+
+// pvHint 提示 + 下载按钮（动态绑定事件，避免文件名注入 inline onclick）
+function pvHint(main, text, path, name) {
+  const hint = document.createElement('div');
+  hint.className = 'pv-hint';
+  hint.textContent = text;
+  main.appendChild(hint);
+  if (path) {
+    const btn = document.createElement('button');
+    btn.className = 'btn primary';
+    btn.textContent = '下载文件';
+    btn.addEventListener('click', () => triggerDownload(fileURL(path), name));
+    hint.appendChild(btn);
   }
 }
 

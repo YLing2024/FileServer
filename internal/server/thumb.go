@@ -31,11 +31,20 @@ const (
 
 // ThumbCache 缩略图磁盘缓存 + 内存 LRU
 type ThumbCache struct {
-	dir string
-	mu  sync.Mutex
-	mem map[string][]byte
-	ll  *list.List
-	max int // 内存缓存条目上限
+	dir   string
+	mu    sync.Mutex
+	mem   map[string][]byte
+	ll    *list.List
+	max   int
+	genMu sync.Mutex            // 保护 calls（singleflight 生成者判定）
+	calls map[string]*thumbCall // key -> 进行中的生成
+}
+
+// thumbCall singleflight 状态：等待者 wg.Wait，生成者完成后 Done
+type thumbCall struct {
+	wg   sync.WaitGroup
+	data []byte
+	ok   bool
 }
 
 func NewThumbCache() *ThumbCache {
@@ -67,6 +76,33 @@ func (c *ThumbCache) cleanup() {
 	}
 }
 
+// Do 以 singleflight 方式执行生成函数：同一 key 的并发请求只有一个生成者，
+// 其余等待结果后直接复用。不同 key 之间完全并发执行。
+func (c *ThumbCache) Do(key string, fn func() ([]byte, bool)) ([]byte, bool) {
+	c.genMu.Lock()
+	if c.calls == nil {
+		c.calls = make(map[string]*thumbCall)
+	}
+	if call, ok := c.calls[key]; ok {
+		c.genMu.Unlock()
+		call.wg.Wait() // 等待生成者完成（Done 前的写入对 Wait 返回后可见）
+		return call.data, call.ok
+	}
+	call := &thumbCall{}
+	call.wg.Add(1)
+	c.calls[key] = call
+	c.genMu.Unlock()
+
+	// 本 goroutine 是唯一生成者
+	call.data, call.ok = fn()
+	call.wg.Done()
+
+	c.genMu.Lock()
+	delete(c.calls, key)
+	c.genMu.Unlock()
+	return call.data, call.ok
+}
+
 func (c *ThumbCache) Get(key string) ([]byte, bool) {
 	c.mu.Lock()
 	if data, ok := c.mem[key]; ok {
@@ -84,11 +120,15 @@ func (c *ThumbCache) Get(key string) ([]byte, bool) {
 	return data, true
 }
 
+// Put 写缓存：先写临时文件再原子重命名，避免并发写同一文件时损坏
 func (c *ThumbCache) Put(key string, data []byte) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.putMem(key, data)
-	os.WriteFile(filepath.Join(c.dir, key+".jpg"), data, 0o644)
+	c.mu.Unlock()
+	tmp := filepath.Join(c.dir, key+".tmp")
+	if err := os.WriteFile(tmp, data, 0o644); err == nil {
+		os.Rename(tmp, filepath.Join(c.dir, key+".jpg"))
+	}
 }
 
 func (c *ThumbCache) putMem(key string, data []byte) {
@@ -220,20 +260,28 @@ func (s *Server) serveImageThumb(w http.ResponseWriter, r *http.Request, abs str
 		return
 	}
 
-	src, err := decodeImageFile(abs)
-	if err != nil {
+	// singleflight：同一缩略图的并发请求只生成一次，不同缩略图并发执行
+	data, ok := s.thumbs.Do(key, func() ([]byte, bool) {
+		if data, ok := s.thumbs.Get(key); ok { // 双检：等待期间可能已被其他请求生成
+			return data, true
+		}
+		src, err := decodeImageFile(abs)
+		if err != nil {
+			return nil, false
+		}
+		out := coverCrop(src, wq, hq)
+		var enc bytesBuffer
+		if err := jpeg.Encode(&enc, out, &jpeg.Options{Quality: 80}); err != nil {
+			return nil, false
+		}
+		data := enc.Bytes()
+		s.thumbs.Put(key, data)
+		return data, true
+	})
+	if !ok {
 		writeErr(w, http.StatusNotFound, "无法解码图片")
 		return
 	}
-	out := coverCrop(src, wq, hq)
-	// 编码到内存
-	var enc bytesBuffer
-	if err := jpeg.Encode(&enc, out, &jpeg.Options{Quality: 80}); err != nil {
-		writeErr(w, http.StatusInternalServerError, "编码缩略图失败")
-		return
-	}
-	data := enc.Bytes()
-	s.thumbs.Put(key, data)
 	serveCached(w, r, key, data, "image/jpeg")
 }
 
