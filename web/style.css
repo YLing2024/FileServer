@@ -552,8 +552,9 @@ tr:hover .row-act { opacity: 1; }
 @media (max-width: 820px) {
   .toolbar { flex-wrap: wrap; height: auto; padding: 10px 12px; row-gap: 8px; }
   .toolbar-main { order: 1; }
-  .toolbar-actions { order: 2; width: 100%; justify-content: flex-end; }
-  .searchbox { width: 100%; order: -1; }
+  .toolbar-actions { order: 2; width: 100%; justify-content: flex-end; flex-wrap: wrap; row-gap: 8px; }
+  /* 搜索框独占一行（100% 且禁止 flex 压缩），按钮组在下一行右对齐，避免挤压与溢出 */
+  .searchbox { width: 100%; order: -1; flex: 0 0 100%; }
   .searchbox:focus-within { width: 100%; }
   #main { padding: 14px 12px 50px; }
   .grid { grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 10px; }
