@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // handleZip GET /api/zip?path= 将目录流式打包为 zip 下载
@@ -15,6 +16,11 @@ func (s *Server) handleZip(w http.ResponseWriter, r *http.Request) {
 	dir, err := s.safePath(r.URL.Query().Get("path"))
 	if err != nil {
 		writeErr(w, errToStatus(err), err.Error())
+		return
+	}
+	// --hidden 未开启时，隐藏目录（含隐藏祖先）与列表/搜索一致地拒绝打包
+	if s.hiddenBlocked(dir) {
+		writeErr(w, http.StatusNotFound, "路径不存在")
 		return
 	}
 	fi, err := os.Stat(dir)
@@ -29,7 +35,7 @@ func (s *Server) handleZip(w http.ResponseWriter, r *http.Request) {
 
 	name := filepath.Base(dir)
 	w.Header().Set("Content-Type", "application/zip")
-	if cd := mime.FormatMediaType("attachment", map[string]string{"filename": name + ".zip"}); cd != "" {
+	if cd := mime.FormatMediaType("attachment", map[string]string{"filename": sanitizeFilename(name) + ".zip"}); cd != "" {
 		w.Header().Set("Content-Disposition", cd)
 	}
 	w.Header().Set("X-Accel-Buffering", "no")
@@ -43,6 +49,13 @@ func (s *Server) handleZip(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		if p == dir {
+			return nil
+		}
+		// 隐藏条目（.开头）不打包，与列表/搜索/直链下载语义一致
+		if !s.hidden && strings.HasPrefix(d.Name(), ".") {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		rel, rerr := filepath.Rel(dir, p)

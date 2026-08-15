@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 )
+
+// listMaxLimit 单次目录列表请求的条数上限（服务端分页保护）
+const listMaxLimit = 2000
 
 // Entry 目录列表中的单个条目
 type Entry struct {
@@ -22,8 +24,23 @@ type Entry struct {
 
 // ListResp 目录列表响应
 type ListResp struct {
-	Path    string  `json:"path"`
-	Entries []Entry `json:"entries"`
+	Path      string  `json:"path"`
+	Entries   []Entry `json:"entries"`
+	Total     int     `json:"total,omitempty"`
+	Truncated bool    `json:"truncated,omitempty"`
+}
+
+// kindExts 扩展名→类型映射的唯一来源：fileKind 与 /api/info 下发的 kinds 都出自此表，
+// 避免后端 fileKind / mediaMime 与前端 KIND_EXT_MAP 三处漂移。
+var kindExts = map[string][]string{
+	"image":   {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".svg", ".ico", ".avif", ".jfif"},
+	"video":   {".mp4", ".mkv", ".mov", ".webm", ".avi", ".wmv", ".flv", ".m4v", ".m2ts", ".3gp", ".rmvb", ".rm", ".mpg", ".mpeg", ".ogv"},
+	"audio":   {".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a", ".wma", ".opus", ".mid", ".midi", ".ape", ".amr"},
+	"pdf":     {".pdf"},
+	"archive": {".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".iso", ".zst"},
+	"text":    {".txt", ".md", ".log", ".json", ".xml", ".yaml", ".yml", ".ini", ".conf", ".cfg", ".csv", ".toml", ".srt", ".ass", ".vtt", ".nfo", ".rtf", ".url"},
+	"doc":     {".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".ods", ".odp", ".wps"},
+	"code":    {".c", ".cpp", ".h", ".hpp", ".go", ".rs", ".py", ".js", ".mjs", ".ts", ".tsx", ".jsx", ".html", ".htm", ".css", ".scss", ".java", ".kt", ".swift", ".sh", ".bat", ".cmd", ".ps1", ".sql", ".php", ".rb", ".lua", ".pl", ".vue", ".svelte", ".dockerfile", ".gradle", ".properties"},
 }
 
 // fileKind 按扩展名对文件分类，前端据此选择图标与缩略图策略
@@ -31,29 +48,29 @@ func fileKind(name string, isDir bool) string {
 	if isDir {
 		return "dir"
 	}
-	switch strings.ToLower(filepath.Ext(name)) {
-	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".svg", ".ico", ".avif", ".jfif":
-		return "image"
-	case ".mp4", ".mkv", ".mov", ".webm", ".avi", ".wmv", ".flv", ".m4v", ".m2ts", ".3gp", ".rmvb", ".rm", ".mpg", ".mpeg", ".ogv":
-		return "video"
-	case ".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a", ".wma", ".opus", ".mid", ".midi", ".ape", ".amr":
-		return "audio"
-	case ".pdf":
-		return "pdf"
-	case ".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".iso", ".zst":
-		return "archive"
-	case ".txt", ".md", ".log", ".json", ".xml", ".yaml", ".yml", ".ini", ".conf", ".cfg", ".csv", ".toml", ".srt", ".ass", ".vtt", ".nfo", ".rtf", ".url":
-		return "text"
-	case ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".ods", ".odp", ".wps":
-		return "doc"
-	case ".c", ".cpp", ".h", ".hpp", ".go", ".rs", ".py", ".js", ".mjs", ".ts", ".tsx", ".jsx", ".html", ".htm", ".css", ".scss", ".java", ".kt", ".swift", ".sh", ".bat", ".cmd", ".ps1", ".sql", ".php", ".rb", ".lua", ".pl", ".vue", ".svelte", ".dockerfile", ".gradle", ".properties":
-		return "code"
-	default:
-		return "other"
+	ext := strings.ToLower(filepath.Ext(name))
+	for kind, exts := range kindExts {
+		for _, e := range exts {
+			if ext == e {
+				return kind
+			}
+		}
 	}
+	return "other"
 }
 
-// handleList GET /api/list?path=&sort=&order=
+// kindExtMap 返回 ext→kind 全量映射，供 /api/info 下发，前端不再各自维护
+func kindExtMap() map[string]string {
+	m := make(map[string]string)
+	for kind, exts := range kindExts {
+		for _, e := range exts {
+			m[e] = kind
+		}
+	}
+	return m
+}
+
+// handleList GET /api/list?path=&sort=&order=&limit=&offset= 目录列表
 func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	dir, err := s.safePath(r.URL.Query().Get("path"))
 	if err != nil {
@@ -82,7 +99,12 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 		if !s.hidden && strings.HasPrefix(name, ".") {
 			continue
 		}
-		isDir := de.IsDir() // Lstat 语义：符号链接不视为目录，避免跟随循环
+		// stat 语义的 IsDir：指向目录的符号链接按目录显示/操作（前端可正常进入），
+		// 不会循环跟随——列表只展示名字，点击后再由 safePath 解析校验
+		isDir := de.IsDir()
+		if info, ierr := de.Info(); ierr == nil {
+			isDir = info.IsDir()
+		}
 		e := Entry{Name: name, IsDir: isDir, Ext: strings.ToLower(strings.TrimPrefix(filepath.Ext(name), "."))}
 		if !isDir {
 			e.Kind = fileKind(name, false)
@@ -98,8 +120,30 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 
 	sortEntries(entries, r.URL.Query().Get("sort"), r.URL.Query().Get("order"))
 
+	// 服务端分页：避免大目录一次性全量传输（前端按 offset/limit 逐页加载）
+	total := len(entries)
+	limit := parseIntSafe(r.URL.Query().Get("limit"), 0, listMaxLimit)
+	offset := parseIntSafe(r.URL.Query().Get("offset"), 0, 1<<30)
+	if offset > total {
+		offset = total
+	}
+	if limit > 0 {
+		end := offset + limit
+		if end > total {
+			end = total
+		}
+		entries = entries[offset:end]
+	} else if offset > 0 {
+		entries = entries[offset:]
+	}
+
 	rel := relOf(s.root, dir)
-	writeJSON(w, http.StatusOK, ListResp{Path: rel, Entries: entries})
+	writeJSON(w, http.StatusOK, ListResp{
+		Path:      rel,
+		Entries:   entries,
+		Total:     total,
+		Truncated: offset+len(entries) < total,
+	})
 }
 
 // relOf 返回 root 下的相对路径（正斜杠形式，根为 "/"）
@@ -166,5 +210,3 @@ func errToStatus(err error) int {
 	}
 	return http.StatusInternalServerError
 }
-
-var _ = time.Now // 保留 time 导入（后续扩展用）

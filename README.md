@@ -32,8 +32,8 @@
 | `--port 9000` | 指定端口（默认 8080，被占用自动递增） |
 | `--dir D:\共享` | 指定服务目录（默认 exe 所在目录） |
 | `--no-browser` | 不自动打开浏览器 |
-| `--hidden` | 显示隐藏文件（点开头） |
-| `--auth user:pass` | 启用简单访问口令（Basic Auth） |
+| `--hidden` | 显示隐藏文件（点开头）。默认关闭：隐藏文件在列表、搜索、直链下载、缩略图、zip 打包中均不可见/不可访问 |
+| `--auth user:pass` | 启用简单访问口令（Basic Auth）。口令以明文走 HTTP，仅限可信局域网使用 |
 | `-v` | 显示访问日志 |
 
 ## 视频缩略图：可选 ffmpeg 增强
@@ -99,7 +99,8 @@ python scripts\nav_test.py
 │   │   ├── path.go        路径安全（防穿越/符号链接逃逸）
 │   │   ├── list.go        目录列表与排序
 │   │   ├── thumb.go       图片缩略图 + 磁盘/内存缓存
-│   │   ├── ffmpeg.go      视频抽帧（可选增强）
+│   │   ├── ffmpeg.go      视频抽帧 + MP4 faststart 检测/重封装（可选增强）
+│   │   ├── faststart.go   非 faststart MP4 重封装缓存（统一 Range 服务）
 │   │   ├── zip.go         目录打包下载
 │   │   ├── search.go      递归搜索
 │   │   ├── lanip.go       局域网 IP 检测

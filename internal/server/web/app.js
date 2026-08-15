@@ -22,7 +22,7 @@ const pathParam = (p) => enc(p);
 const fileURL = (p) => '/api/file?path=' + pathParam(p);
 const thumbURL = (p, w, h) => `/api/thumb?path=${pathParam(p)}&w=${w || 256}&h=${h || 256}`;
 const zipURL = (p) => '/api/zip?path=' + pathParam(p);
-const listURL = (p, sort, order) => `/api/list?path=${pathParam(p)}&sort=${sort}&order=${order}`;
+const listURL = (p, sort, order, limit, offset) => `/api/list?path=${pathParam(p)}&sort=${sort}&order=${order}&limit=${limit || ''}&offset=${offset || 0}`;
 const searchURL = (q, p, limit) => `/api/search?q=${pathParam(q)}&path=${pathParam(p)}&limit=${limit}`;
 
 function fmtSize(n) {
@@ -83,14 +83,16 @@ const state = {
   view: localStorage.getItem('fs.view') || 'grid',
   sort: localStorage.getItem('fs.sort') || 'name',
   order: localStorage.getItem('fs.order') || 'asc',
-  page: 0,
-  pageSize: 300,
   searching: false,
   query: '',
-  scrollMap: {},   // path -> 离开该目录时的滚动位置（返回时恢复）
+  scrollMap: {},   // path -> 离开该目录时的滚动位置（返回时恢复，有上限）
   serverThumb: false, // 服务端是否有 ffmpeg（full 版 true → 视频缩略图走服务端）
+  kinds: null,        // 服务端下发的扩展名→类型映射（4.1，前端不再各自维护）
+  searchLimit: 1000,  // 搜索条数上限（4.5，从 /api/info 取服务端值）
+  hasMore: false,     // 目录列表是否还有更多页（服务端分页 3.1）
 };
 
+// 单次目录列表页大小（唯一来源，取代旧的分页常量）
 const PAGE = 300;
 
 /* ---------- 主题 ---------- */
@@ -141,7 +143,17 @@ const KIND_EXT_MAP = [
   [/\.(txt|md|log|json|xml|yaml|yml|ini|conf|cfg|csv|toml|srt|ass|vtt|nfo|rtf|url)$/i, 'text'],
   [/\.(c|cpp|h|hpp|go|rs|py|js|mjs|ts|tsx|jsx|html|htm|css|scss|java|kt|swift|sh|bat|cmd|ps1|sql|php|rb|lua|pl|vue|svelte|dockerfile|gradle|properties)$/i, 'code'],
 ];
+// kindByExt 根据扩展名推断文件类型（刷新恢复预览时 entry 缺 kind 字段，据此兜底）。
+// 优先使用服务端 /api/info 下发的统一映射（4.1）；未加载前用本地表兜底。
 function kindByExt(name) {
+  if (state.kinds) {
+    const dot = name.lastIndexOf('.');
+    if (dot > 0) {
+      const ext = '.' + name.slice(dot + 1).toLowerCase();
+      if (state.kinds[ext]) return state.kinds[ext];
+    }
+    return 'other';
+  }
   for (const [re, k] of KIND_EXT_MAP) if (re.test(name)) return k;
   return 'other';
 }
@@ -191,14 +203,14 @@ function renderCrumbs() {
 
 async function loadList(path) {
   state.path = path || '/';
-  state.page = 0;
   state.searching = false;
   $('searchInput').value = '';
   $('searchClear').classList.add('hidden');
   showSkeleton(true);
   try {
-    const data = await api(listURL(state.path, state.sort, state.order));
+    const data = await api(listURL(state.path, state.sort, state.order, PAGE, 0));
     state.entries = data.entries;
+    state.hasMore = !!data.truncated;
     showSkeleton(false);
     render();
     // 返回本目录时恢复之前记住的滚动位置
@@ -220,7 +232,7 @@ function showSkeleton(on) {
 
 function render() {
   renderCrumbs();
-  const shown = state.entries.slice(0, (state.page + 1) * PAGE);
+  const shown = state.entries; // 服务端分页：entries 即当前已加载全部
   const isGrid = state.view === 'grid';
   $('grid').classList.toggle('hidden', !isGrid);
   $('listView').classList.toggle('hidden', isGrid);
@@ -231,10 +243,11 @@ function render() {
     $('empty').classList.add('hidden');
   }
   if (isGrid) renderGrid(shown); else renderList(shown);
-  // 加载更多
-  const more = state.entries.length > shown.length;
-  $('loadMore').classList.toggle('hidden', !more);
-  $('loadMoreInfo').textContent = `已显示 ${shown.length} / ${state.entries.length} 项`;
+  // 加载更多（服务端分页：还有未加载的页）
+  $('loadMore').classList.toggle('hidden', !state.hasMore || state.searching);
+  $('loadMoreInfo').textContent = state.hasMore
+    ? `已加载 ${shown.length} 项，还有更多`
+    : (shown.length ? `共 ${shown.length} 项` : '');
 }
 
 // 条目真实路径：搜索模式下用服务端返回的完整路径，浏览模式下拼接当前目录
@@ -303,7 +316,7 @@ function renderGrid(entries) {
 
     card.appendChild(thumb);
     card.appendChild(info);
-    card.addEventListener('click', () => openEntry(e));
+    card.addEventListener('click', () => onEntryClick(e));
     grid.appendChild(card);
   }
 }
@@ -362,7 +375,7 @@ function renderList(entries) {
     tr.appendChild(sizeCell);
     tr.appendChild(timeCell);
     tr.appendChild(actCell);
-    tr.addEventListener('click', () => openEntry(e));
+    tr.addEventListener('click', () => onEntryClick(e));
     body.appendChild(tr);
   }
 }
@@ -375,6 +388,9 @@ function joinPath(dir, name) {
 // navigateOrBack 统一离开前的滚动记录：应用内跳转（navigate/后退/前进）都会调用
 function rememberScroll() {
   state.scrollMap[state.path] = window.scrollY;
+  // 会话级上限：浏览大量目录后丢弃最早记录，防内存膨胀（3.5）
+  const keys = Object.keys(state.scrollMap);
+  if (keys.length > 100) delete state.scrollMap[keys[0]];
 }
 
 // navigate 统一目录跳转：写入浏览器历史（URL 变为 /?path=xxx），
@@ -409,6 +425,16 @@ function openEntry(e) {
   triggerDownload(fileURL(p), e.name);
 }
 
+// 搜索模式下点击条目：目录进入其所在目录（写入历史），文件直接预览/下载
+function openSearchEntry(e) {
+  if (e.is_dir) { navigate(e._searchDir); return; }
+  const p = e._searchPath;
+  const kind = fileKind(e);
+  if (kind === 'image') openLightbox(p, state.entries.filter((x) => !x.is_dir && fileKind(x) === 'image'));
+  else if (kind === 'video' || kind === 'audio' || kind === 'pdf' || kind === 'text' || kind === 'code') openPreview(p, e);
+  else triggerDownload(fileURL(p), e.name);
+}
+
 function triggerDownload(url, filename) {
   const a = document.createElement('a');
   a.href = url;
@@ -420,7 +446,19 @@ function triggerDownload(url, filename) {
 
 /* ---------- 视频前端抽帧 ---------- */
 
-const thumbCache = new Map(); // path -> dataURL（会话级）
+const thumbCache = new Map(); // path -> dataURL（会话级，带容量上限防无限膨胀）
+const THUMB_CACHE_MAX = 200;
+
+// thumbCacheSet 写入并淘汰最旧条目，避免浏览大量视频后内存膨胀（3.5）
+function thumbCacheSet(key, val) {
+  if (thumbCache.has(key)) thumbCache.delete(key);
+  thumbCache.set(key, val);
+  while (thumbCache.size > THUMB_CACHE_MAX) {
+    const oldest = thumbCache.keys().next().value;
+    if (oldest === undefined) break;
+    thumbCache.delete(oldest);
+  }
+}
 
 // 观察者：卡片进入视口（含 400px 预加载区）后，把对应任务推入待处理队列。
 // 注意：回调是批量异步的，不能在这里直接消费队列（否则未标记的卡片会被误删）。
@@ -455,7 +493,7 @@ function observeVideoThumb(e, img, holder, thumbEl, p) {
     const probe = new Image();
     probe.onload = () => {
       img.src = thumbURL(key, 300, 300);
-      thumbCache.set(key, thumbURL(key, 300, 300));
+      thumbCacheSet(key, thumbURL(key, 300, 300));
       img.classList.remove('hidden');
       holder.classList.add('hidden');
     };
@@ -513,7 +551,7 @@ function grabVideoFrame(job) {
         const dw = vw * scale, dh = vh * scale;
         ctx.drawImage(video, (300 - dw) / 2, (300 - dh) / 2, dw, dh);
         const dataURL = canvas.toDataURL('image/jpeg', 0.72);
-        thumbCache.set(job.key, dataURL);
+        thumbCacheSet(job.key, dataURL);
         job.img.src = dataURL;
         job.img.classList.remove('hidden');
         job.holder.classList.add('hidden');
@@ -696,15 +734,21 @@ function renderPreview(path, entry) {
   } else if (kind === 'pdf') {
     main.innerHTML = `<embed class="pv-embed" src="${esc(fileURL(path))}" type="application/pdf">`;
   } else if (kind === 'text' || kind === 'code') {
-    if (entry.size > 2 * 1024 * 1024) {
-      pvHint(main, '文件较大（超过 2MB），不进行在线预览', path, entry.name);
-    } else {
-      main.innerHTML = '<pre class="pv-text">加载中…</pre>';
-      fetch(fileURL(path))
-        .then((r) => r.text())
-        .then((t) => { main.querySelector('.pv-text').textContent = t; })
-        .catch(() => { main.innerHTML = '<div class="pv-hint">文本加载失败</div>'; });
-    }
+    // 深链/刷新时 entry.size 为 0（未知），先经 /api/list 取真实 size 再决定，
+    // 避免 >2MB 的大文本被绕过防护全量拉取（2.11）
+    const doPreview = (size) => {
+      if (size > 2 * 1024 * 1024) {
+        pvHint(main, '文件较大（超过 2MB），不进行在线预览', path, entry.name);
+      } else {
+        main.innerHTML = '<pre class="pv-text">加载中…</pre>';
+        fetch(fileURL(path))
+          .then((r) => r.text())
+          .then((t) => { main.querySelector('.pv-text').textContent = t; })
+          .catch(() => { main.innerHTML = '<div class="pv-hint">文本加载失败</div>'; });
+      }
+    };
+    if (entry.size > 0) doPreview(entry.size);
+    else getEntrySize(path).then(doPreview);
   } else {
     pvHint(main, '该文件类型不支持在线预览', path, entry.name);
   }
@@ -722,6 +766,19 @@ function pvHint(main, text, path, name) {
     btn.textContent = '下载文件';
     btn.addEventListener('click', () => triggerDownload(fileURL(path), name));
     hint.appendChild(btn);
+  }
+}
+
+// getEntrySize 深链/刷新时经 /api/list 获取文件真实大小（2.11）
+async function getEntrySize(path) {
+  const dir = path.replace(/\/[^/]*$/, '') || '/';
+  const name = path.split('/').pop();
+  try {
+    const data = await api(listURL(dir, 'name', 'asc', 2000, 0));
+    const e = data.entries.find((x) => x.name === name);
+    return e ? e.size : -1;
+  } catch (_) {
+    return -1;
   }
 }
 
@@ -906,17 +963,17 @@ $('searchInput').addEventListener('keydown', (e) => {
 async function doSearch(q) {
   state.searching = true;
   state.query = q;
-  state.page = 0;
+  state.hasMore = false;
   showSkeleton(true);
   try {
-    const data = await api(searchURL(q, state.path, 1000));
+    const data = await api(searchURL(q, state.path, state.searchLimit));
     state.entries = data.results.map((r) => ({
       name: r.name, is_dir: r.is_dir, size: r.size, mtime: r.mtime, kind: r.kind,
       _searchPath: r.path, _searchDir: r.path.replace(/\/[^/]*$/, '') || '/',
     }));
     showSkeleton(false);
     render();
-    if (data.truncated) toast('结果过多，仅显示前 1000 项');
+    if (data.truncated) toast(`结果过多，仅显示前 ${state.searchLimit} 项`);
   } catch (e) {
     showSkeleton(false);
     toast(e.message, true);
@@ -931,20 +988,11 @@ function exitSearch() {
   loadList(state.path);
 }
 
-// 搜索模式下点击条目：目录进入其所在目录（写入历史），文件直接预览/下载
-const _openEntry = openEntry;
-openEntry = function (e) {
-  if (state.searching) {
-    if (e.is_dir) { navigate(e._searchDir); return; }
-    const p = e._searchPath;
-    const kind = fileKind(e);
-    if (kind === 'image') openLightbox(p, state.entries.filter((x) => !x.is_dir && fileKind(x) === 'image'));
-    else if (kind === 'video' || kind === 'audio' || kind === 'pdf' || kind === 'text' || kind === 'code') openPreview(p, e);
-    else triggerDownload(fileURL(p), e.name);
-    return;
-  }
-  _openEntry(e);
-};
+// 条目点击统一入口：搜索模式走搜索路径，浏览模式走普通逻辑（4.7 单一函数，无重赋值）
+function onEntryClick(e) {
+  if (state.searching) { openSearchEntry(e); return; }
+  openEntry(e);
+}
 
 /* ---------- 工具栏 ---------- */
 
@@ -980,9 +1028,17 @@ function reloadWithSort() {
   else loadList(state.path);
 }
 
-$('btnLoadMore').addEventListener('click', () => {
-  state.page++;
-  render();
+$('btnLoadMore').addEventListener('click', async () => {
+  if (state.searching) return;
+  const offset = state.entries.length;
+  try {
+    const data = await api(listURL(state.path, state.sort, state.order, PAGE, offset));
+    state.entries = state.entries.concat(data.entries);
+    state.hasMore = !!data.truncated;
+    render();
+  } catch (e) {
+    toast(e.message, true);
+  }
 });
 
 /* ---------- 快捷键 ---------- */
@@ -1048,10 +1104,14 @@ window.addEventListener('popstate', () => {
   document.documentElement.dataset.order = state.order;
   $('sortSelect').value = state.sort;
   setView(state.view);
-  // 探测服务端能力（是否有 ffmpeg），决定视频缩略图走服务端还是前端
+  // 探测服务端能力（ffmpeg、扩展名映射、搜索上限），视频缩略图据此走服务端
   fetch('/api/info')
     .then((r) => r.json())
-    .then((info) => { state.serverThumb = !!info.ffmpeg; })
+    .then((info) => {
+      state.serverThumb = !!info.ffmpeg;
+      if (info.kinds) state.kinds = info.kinds; // 统一扩展名映射（4.1）
+      if (info.search_limit) state.searchLimit = info.search_limit; // 搜索上限（4.5）
+    })
     .catch(() => { state.serverThumb = false; });
   // 支持直接打开深层链接（刷新后也能恢复所在目录）
   const params = new URL(location.href).searchParams;

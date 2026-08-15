@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -58,7 +59,9 @@ func FindFfmpeg() *Ffmpeg {
 		return nil
 	}
 	if fp == "" {
-		fp = ff // 部分构建只有 ffmpeg：ffmpeg 也可读时长（-i 输出探测信息）
+		// 仅安装 ffmpeg、未装 ffprobe：缩略图时长探测回退到
+		// `ffmpeg -i <file>` 并解析 stderr 的 Duration 字段（见 probeDuration）。
+		fp = ff
 	}
 	return &Ffmpeg{ffmpegPath: ff, ffprobePath: fp, sem: make(chan struct{}, ffmpegMaxConc)}
 }
@@ -108,15 +111,32 @@ func (s *Server) serveVideoThumb(w http.ResponseWriter, r *http.Request, abs str
 	serveCached(w, r, key, data, "image/jpeg")
 }
 
-// probeDuration 用 ffprobe 探测视频时长（秒）
+// probeDuration 探测视频时长（秒）。优先 ffprobe（JSON 输出）；
+// 当 ffprobe 缺失（ffprobePath==ffmpegPath）或 ffprobe 失败时，
+// 回退到 `ffmpeg -i <file>` 并解析 stderr 中的 Duration 字段。
 func (f *Ffmpeg) probeDuration(ctx context.Context, path string) (float64, error) {
-	args := []string{"-v", "error", "-show_entries", "format=duration", "-of", "json", path}
 	ctx, cancel := context.WithTimeout(ctx, ffmpegProbeTO)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, f.ffprobePath, args...).Output()
-	if err != nil {
-		return 0, err
+	if f.ffprobePath != f.ffmpegPath {
+		out, err := exec.CommandContext(ctx, f.ffprobePath,
+			"-v", "error", "-show_entries", "format=duration", "-of", "json", path).Output()
+		if err == nil {
+			if dur, derr := parseDurationJSON(out); derr == nil {
+				return dur, nil
+			}
+		}
 	}
+	// 回退路径：ffmpeg -i 无 -show_entries 等 ffprobe 专有参数；
+	// ffmpeg 对不存在的输入会以非零退出并打印 Duration 到 stderr。
+	out, err := exec.CommandContext(ctx, f.ffmpegPath, "-hide_banner", "-i", path).CombinedOutput()
+	if err == nil {
+		return 0, fmt.Errorf("无时长信息")
+	}
+	return parseDurationFromStderr(out)
+}
+
+// parseDurationJSON 解析 ffprobe JSON 输出中的 format.duration
+func parseDurationJSON(out []byte) (float64, error) {
 	var v struct {
 		Format struct {
 			Duration string `json:"duration"`
@@ -126,6 +146,30 @@ func (f *Ffmpeg) probeDuration(ctx context.Context, path string) (float64, error
 		return 0, fmt.Errorf("无法解析时长")
 	}
 	return strconv.ParseFloat(v.Format.Duration, 64)
+}
+
+// parseDurationFromStderr 从 ffmpeg -i 的 stderr 输出解析 Duration: HH:MM:SS.ff
+func parseDurationFromStderr(b []byte) (float64, error) {
+	idx := bytes.Index(b, []byte("Duration:"))
+	if idx < 0 {
+		return 0, fmt.Errorf("未找到 Duration")
+	}
+	rest := b[idx+len("Duration:"):]
+	rest = bytes.TrimLeft(rest, " ")
+	if comma := bytes.IndexByte(rest, ','); comma >= 0 {
+		rest = rest[:comma]
+	}
+	parts := bytes.Split(rest, []byte(":"))
+	if len(parts) != 3 {
+		return 0, fmt.Errorf("无法解析时长")
+	}
+	h, err1 := strconv.Atoi(string(parts[0]))
+	m, err2 := strconv.Atoi(string(parts[1]))
+	s, err3 := strconv.ParseFloat(string(parts[2]), 64)
+	if err1 != nil || err2 != nil || err3 != nil {
+		return 0, fmt.Errorf("无法解析时长")
+	}
+	return float64(h)*3600 + float64(m)*60 + s, nil
 }
 
 // Thumb 抽一帧生成 w×h 方形缩略图写入 outPath（JPEG）
@@ -153,16 +197,17 @@ func (f *Ffmpeg) Thumb(ctx context.Context, videoPath, outPath string, w, h int)
 		}
 	}
 
-	// 关键：-ss 必须放在 -i 之后做「输入关键帧 seek」。
-	// 之前的写法把 -ss 放在 -i 之前（输出 seek），ffmpeg 会从文件头开始逐帧解码
-	// 到目标时间点，大视频/Range 文件解码整段流，极慢；放到 -i 之后则直接跳到
-	// 最近的关键帧瞬时定位，配合 -frames:v 1 只解码 1 帧。
-	// -noaccurate_seek 进一步跳过关键帧之间的精细定位，加速取帧。
+	// 关键：-ss 与 -noaccurate_seek 必须放在 -i 之前（输入选项）。
+	// 放 -i 之后会被 ffmpeg 当作「输出选项」应用到输出文件，报
+	// "cannot be applied to output url ... input option to an output file"，
+	// 且 seek 语义也会退化为逐帧解码整段流，大视频/Range 文件极慢。
+	// -ss 在前 + -noaccurate_seek 直接跳到最近关键帧瞬时定位，
+	// 配合 -frames:v 1 只解码 1 帧。
 	args := []string{
 		"-hide_banner", "-loglevel", "error", "-y",
-		"-i", videoPath,
 		"-ss", strconv.FormatFloat(seek, 'f', 3, 64),
 		"-noaccurate_seek",
+		"-i", videoPath,
 		"-map", "0:v:0",
 		"-frames:v", "1",
 		"-vf", fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d", w, h, w, h),
@@ -198,10 +243,8 @@ func mp4MoovOffset(f *os.File, size int64) int64 {
 			// mdat 延伸到文件末尾，其后不再有顶层 moov（moov 缺失或位于 mdat 前）
 			return -1
 		}
-		if boxSize < 8 {
-			return -1
-		}
-		// 64 位扩展 box 尺寸（size==1）
+		// 64 位扩展 box 尺寸（size==1）：必须在 boxSize<8 判定之前处理，
+		// 否则 size==1 会被误判为畸形而提前返回 -1
 		if boxSize == 1 {
 			var ext [8]byte
 			if _, err := f.ReadAt(ext[:], pos+8); err != nil {
@@ -209,6 +252,9 @@ func mp4MoovOffset(f *os.File, size int64) int64 {
 			}
 			boxSize = int64(ext[0])<<56 | int64(ext[1])<<48 | int64(ext[2])<<40 | int64(ext[3])<<32 |
 				int64(ext[4])<<24 | int64(ext[5])<<16 | int64(ext[6])<<8 | int64(ext[7])
+		}
+		if boxSize < 8 {
+			return -1
 		}
 		pos += boxSize
 	}
@@ -236,14 +282,47 @@ func mp4NeedsFastStart(abs string) bool {
 	return off > 256*1024
 }
 
-// RemuxFastStart 用 ffmpeg 将输入视频以 faststart（moov 前移）+ 分片 MP4 方式
-// 重封装（-c copy 不重编码，GPU/CPU 都几乎零开销）写入 w，使浏览器可边下载边播放。
+// progressWriter 跟踪写入进度，供停滞检测使用
+type progressWriter struct {
+	w    io.Writer
+	mu   sync.Mutex
+	last time.Time
+}
+
+func (pw *progressWriter) Write(p []byte) (int, error) {
+	n, err := pw.w.Write(p)
+	if n > 0 {
+		pw.mu.Lock()
+		pw.last = time.Now()
+		pw.mu.Unlock()
+	}
+	return n, err
+}
+
+func (pw *progressWriter) stalled(since time.Duration) bool {
+	pw.mu.Lock()
+	defer pw.mu.Unlock()
+	return time.Since(pw.last) > since
+}
+
+// RemuxFastStart 用 ffmpeg 将输入视频以分片 MP4（moov 前置）方式重封装
+// （-c copy 不重编码，GPU/CPU 都几乎零开销）写入 w，使浏览器可边下载边播放。
 // 返回实际 MIME 类型与错误。
+//
+// 超时语义：这是「全文件边重封装边传输」的流式操作，耗时取决于文件大小与
+// 客户端带宽，因此不做固定总时长限制（固定 15s 会让大视频/慢客户端在传输中途
+// 被截断）。只在「长时间无任何产出」时兜底终止：进度看门狗检测到超过
+// ffmpegTimeout 无写入，说明 ffmpeg 卡死或客户端停止读取（TCP 背压），
+// 此时取消 context 杀掉进程。其余时间完全依赖 ctx（客户端断开时由上层传入的
+// r.Context() 触发）终止。
 func (f *Ffmpeg) RemuxFastStart(ctx context.Context, videoPath string, w io.Writer) error {
 	f.sem <- struct{}{}
 	defer func() { <-f.sem }()
 
-	ctx, cancel := context.WithTimeout(ctx, ffmpegTimeout)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	// -movflags frag_keyframe+empty_moov+default_base_moof：输出分片 MP4，
@@ -259,12 +338,35 @@ func (f *Ffmpeg) RemuxFastStart(ctx context.Context, videoPath string, w io.Writ
 		"pipe:1",
 	}
 	cmd := exec.CommandContext(ctx, f.ffmpegPath, args...)
-	cmd.Stdout = w
+	pw := &progressWriter{w: w, last: time.Now()}
+	cmd.Stdout = pw
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
+
+	// 停滞看门狗：无产出超过 ffmpegTimeout 则取消（进程被杀）。
+	// 有产出时持续重置，不设总时长上限。
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if pw.stalled(ffmpegTimeout) {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+
 	if err := cmd.Run(); err != nil {
+		if pw.stalled(ffmpegTimeout) {
+			return fmt.Errorf("转码停滞（长时间无产出），已终止")
+		}
 		if ctx.Err() != nil {
-			return fmt.Errorf("转码超时")
+			return fmt.Errorf("转码中断")
 		}
 		return fmt.Errorf("faststart 失败: %s", strings.TrimSpace(stderr.String()))
 	}

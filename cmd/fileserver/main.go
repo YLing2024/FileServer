@@ -98,5 +98,5 @@ func listenLoop(startPort int) (net.Listener, int, error) {
 			return ln, startPort + i, nil
 		}
 	}
-	return nil, 0, errors.New("8080-8099 端口均被占用")
+	return nil, 0, fmt.Errorf("%d-%d 端口均被占用", startPort, startPort+19)
 }

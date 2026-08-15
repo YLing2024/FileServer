@@ -3,6 +3,7 @@ package server
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -102,6 +103,10 @@ func TestSafePathSymlink(t *testing.T) {
 }
 
 func TestPathWithin(t *testing.T) {
+	// 该用例使用 Windows 盘符路径，仅 Windows 语义有效
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows 盘符路径用例仅在 Windows 上有效")
+	}
 	cases := []struct {
 		root, p string
 		want    bool
@@ -119,6 +124,50 @@ func TestPathWithin(t *testing.T) {
 		if got := pathWithin(c.root, c.p); got != c.want {
 			t.Errorf("pathWithin(%q, %q) = %v, want %v", c.root, c.p, got, c.want)
 		}
+	}
+}
+
+// TestPathWithinPlatform 按当前平台验证大小写语义：Windows 不敏感、POSIX 敏感
+func TestPathWithinPlatform(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		if !pathWithin(`C:\SRV`, `c:\srv\a.txt`) {
+			t.Error("Windows 应大小写不敏感（EqualFold）")
+		}
+		if pathWithin(`C:\srv`, `C:\srv2\a`) {
+			t.Error("Windows 下不同前缀应拒绝")
+		}
+		return
+	}
+	// POSIX：大小写变体目录必须视为根外（防符号链接逃逸）
+	if pathWithin("/srv", "/SRV/secret") {
+		t.Error("POSIX 应大小写敏感：/SRV 不是 /srv 内")
+	}
+	if !pathWithin("/srv", "/srv/secret.txt") {
+		t.Error("POSIX 正常子路径应通过")
+	}
+	if !pathWithin("/srv", "/srv/sub/x") {
+		t.Error("POSIX 深层路径应通过")
+	}
+	if pathWithin("/srv", "/srv2/x") {
+		t.Error("POSIX 前缀/兄弟目录应拒绝")
+	}
+	if pathWithin("/srv", "/srvatic/x") {
+		t.Error("POSIX 前缀子串（无分隔符边界）应拒绝")
+	}
+}
+
+// TestSafePathPosixColon POSIX 上 : 为合法文件名字符（2.5）
+func TestSafePathPosixColon(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 文件系统禁止文件名含 :，无需此用例")
+	}
+	srv, root := newTestServer(t)
+	p := filepath.Join(root, "report:2024.txt")
+	if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.safePath("report:2024.txt"); err != nil {
+		t.Errorf("POSIX 含 : 文件名应可访问, 得到 %v", err)
 	}
 }
 

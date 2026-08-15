@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -148,7 +149,7 @@ func TestThumbConcurrent(t *testing.T) {
 			img.Set(x, y, color.RGBA{R: uint8(x % 256), G: uint8(y % 256), B: 128, A: 255})
 		}
 	}
-	var enc bytesBuffer
+	var enc bytes.Buffer
 	if err := png.Encode(&enc, img); err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +202,7 @@ func TestThumbConcurrentDifferent(t *testing.T) {
 				img.Set(x, y, color.RGBA{R: uint8(i * 40), G: uint8(x % 256), B: uint8(y % 256), A: 255})
 			}
 		}
-		var enc bytesBuffer
+		var enc bytes.Buffer
 		png.Encode(&enc, img)
 		os.WriteFile(filepath.Join(srv.root, fmt.Sprintf("pic%d.png", i)), enc.Bytes(), 0o644)
 	}
