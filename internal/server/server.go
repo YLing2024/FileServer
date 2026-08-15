@@ -56,6 +56,7 @@ func New(root string, opts Options) *Server {
 // Handler 返回完整 HTTP 处理器
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/info", s.handleInfo)
 	mux.HandleFunc("GET /api/list", s.handleList)
 	mux.HandleFunc("GET /api/thumb", s.handleThumb)
 	mux.HandleFunc("GET /api/file", s.handleFile)
@@ -71,6 +72,15 @@ func (s *Server) Handler() http.Handler {
 		h = s.accessLog(h)
 	}
 	return h
+}
+
+// handleInfo 返回服务端能力信息（前端据此决定视频缩略图策略）
+func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"name":    "FileServer",
+		"ffmpeg":  s.ff.Available(),
+		"version": "1.0.0",
+	})
 }
 
 // frontendHandler 服务嵌入的前端（/、/style.css、/app.js）
@@ -120,13 +130,7 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 	name := fi.Name()
 	// 设置正确的 MIME 与 inline/attachment 策略
 	kind := fileKind(name, false)
-	mimeType := mime.TypeByExtension(filepath.Ext(name))
-	if mimeType == "" {
-		buf := make([]byte, 512)
-		n, _ := f.Read(buf)
-		mimeType = http.DetectContentType(buf[:n])
-		f.Seek(0, 0)
-	}
+	mimeType := fileMimeType(name, f)
 	disposition := "attachment"
 	switch kind {
 	case "image", "video", "audio", "pdf", "text":
@@ -137,7 +141,84 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", mimeType)
 	w.Header().Set("Accept-Ranges", "bytes")
+
+	// MP4 非 faststart（moov 在文件尾部或缺失）时，浏览器必须抓取整个索引才能起播，
+	// 大视频表现为「点开后长时间黑屏」。有 ffmpeg 时改用 -c copy 分片重封装（几乎零开销），
+	// 浏览器即可边下载边播放。仅对「初始请求」（无 Range，或从 0 开始的开区间 Range，
+	// 即浏览器 <video> 的首次拉取）做流式转封装；精确 Range 断点续传仍走原始文件。
+	rangeHeader := r.Header.Get("Range")
+	isInitial := rangeHeader == "" || strings.HasPrefix(rangeHeader, "bytes=0-")
+	if kind == "video" && strings.HasPrefix(mimeType, "video/mp4") &&
+		s.ff != nil && isInitial && mp4NeedsFastStart(abs) {
+		w.Header().Del("Content-Length")
+		w.Header().Set("Transfer-Encoding", "chunked")
+		w.WriteHeader(http.StatusOK)
+		if err := s.ff.RemuxFastStart(r.Context(), abs, w); err != nil {
+			// 转封装中途失败：响应头已发出，无法再回退，记录日志即可
+			log.Printf("视频流式转封装失败: %v", err)
+		}
+		return
+	}
 	http.ServeContent(w, r, name, fi.ModTime(), f)
+}
+
+// fileMimeType 返回文件正确的 MIME 类型。
+// 关键: 视频/音频扩展名必须返回浏览器能识别的媒体类型，否则浏览器会把视频当
+// octet-stream 整段下载，不做流式/Range seek，导致点开后长时间黑屏等待。
+func fileMimeType(name string, f *os.File) string {
+	ext := strings.ToLower(filepath.Ext(name))
+	if mt := mediaMime(ext); mt != "" {
+		return mt
+	}
+	if mt := mime.TypeByExtension(ext); mt != "" {
+		return mt
+	}
+	buf := make([]byte, 512)
+	n, _ := f.Read(buf)
+	f.Seek(0, 0)
+	return http.DetectContentType(buf[:n])
+}
+
+// mediaMime 常见音视频扩展名 → 标准 MIME（浏览器必须识别为媒体类型才能流式播放）
+func mediaMime(ext string) string {
+	switch ext {
+	case ".mp4", ".m4v", ".mp4v", ".mov":
+		return "video/mp4"
+	case ".mkv":
+		return "video/x-matroska"
+	case ".webm":
+		return "video/webm"
+	case ".avi":
+		return "video/x-msvideo"
+	case ".mpg", ".mpeg":
+		return "video/mpeg"
+	case ".ts", ".m2ts":
+		return "video/mp2t"
+	case ".wmv", ".asf":
+		return "video/x-ms-wmv"
+	case ".flv":
+		return "video/x-flv"
+	case ".3gp":
+		return "video/3gpp"
+	case ".mp3":
+		return "audio/mpeg"
+	case ".wav":
+		return "audio/wav"
+	case ".flac":
+		return "audio/flac"
+	case ".ogg", ".oga":
+		return "audio/ogg"
+	case ".aac":
+		return "audio/aac"
+	case ".m4a":
+		return "audio/mp4"
+	case ".opus":
+		return "audio/ogg"
+	case ".wma":
+		return "audio/x-ms-wma"
+	default:
+		return ""
+	}
 }
 
 // basicAuth 简单口令保护

@@ -87,7 +87,8 @@ const state = {
   pageSize: 300,
   searching: false,
   query: '',
-  scrollMap: {}, // path -> 离开该目录时的滚动位置（返回时恢复）
+  scrollMap: {},   // path -> 离开该目录时的滚动位置（返回时恢复）
+  serverThumb: false, // 服务端是否有 ffmpeg（full 版 true → 视频缩略图走服务端）
 };
 
 const PAGE = 300;
@@ -287,8 +288,7 @@ function renderGrid(entries) {
       img.className = 'hidden';
       thumb.appendChild(img);
       thumb.appendChild(downloadBtn(e, p));
-      observeVideoThumb(e, img, holder, thumb, p);
-    } else {
+      observeVideoThumb(e, img, holder, thumb, p);    } else {
       const holder = document.createElement('div');
       holder.className = 'centered-icon';
       holder.innerHTML = kindIcon(kind);
@@ -450,6 +450,24 @@ function observeVideoThumb(e, img, holder, thumbEl, p) {
     holder.classList.add('hidden');
     return;
   }
+  // 优先服务端缩略图（full 包含 ffmpeg 时用 ffmpeg 抽帧，快且不加载整个视频）。
+  if (state.serverThumb) {
+    const probe = new Image();
+    probe.onload = () => {
+      img.src = thumbURL(key, 300, 300);
+      thumbCache.set(key, thumbURL(key, 300, 300));
+      img.classList.remove('hidden');
+      holder.classList.add('hidden');
+    };
+    probe.onerror = () => enqueueFrontThumb(e, img, holder, thumbEl, p); // 服务端 404，降级前端抽帧
+    probe.src = thumbURL(key, 300, 300);
+    return;
+  }
+  enqueueFrontThumb(e, img, holder, thumbEl, p);
+}
+
+function enqueueFrontThumb(e, img, holder, thumbEl, p) {
+  const key = p;
   const job = { key, img, holder, thumbEl, tries: 0, started: false };
   thumbEl.__videoJob = job;
   videoObserver.observe(thumbEl);
@@ -713,7 +731,7 @@ function buildPlayer(container, path, entry, kind) {
   const isAudio = kind === 'audio';
   container.innerHTML = `
     <div class="player ${isAudio ? 'audio' : ''}" id="player">
-      <video src="${esc(fileURL(path))}" ${isAudio ? '' : 'poster=""'}></video>
+      <video src="${esc(fileURL(path))}" preload="metadata" playsinline ${isAudio ? '' : 'poster=""'}></video>
       <button class="big-play" id="bigPlay"><svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg></button>
       <div class="player-bar" id="playerBar">
         <button class="pb-btn" id="pbPlay" title="播放/暂停 (空格)"><svg viewBox="0 0 24 24" class="filled"><path d="M7 5v14l12-7z"/></svg></button>
@@ -1030,6 +1048,11 @@ window.addEventListener('popstate', () => {
   document.documentElement.dataset.order = state.order;
   $('sortSelect').value = state.sort;
   setView(state.view);
+  // 探测服务端能力（是否有 ffmpeg），决定视频缩略图走服务端还是前端
+  fetch('/api/info')
+    .then((r) => r.json())
+    .then((info) => { state.serverThumb = !!info.ffmpeg; })
+    .catch(() => { state.serverThumb = false; });
   // 支持直接打开深层链接（刷新后也能恢复所在目录）
   const params = new URL(location.href).searchParams;
   const view = params.get('view');
