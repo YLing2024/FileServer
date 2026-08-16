@@ -1,20 +1,29 @@
 # FileServer —— 局域网文件服务器（单 exe，双击即用）
 
-一个轻量的 Windows 局域网文件服务器：双击 `FileServer.exe`，控制台自动显示局域网地址并打开浏览器，同一 WiFi 下的手机/电脑访问该地址即可**只读**浏览、预览、下载 exe 所在文件夹的全部文件。
+一个轻量的 Windows 局域网文件服务器：双击 `FileServer.exe`，控制台自动显示局域网地址（含二维码）并打开浏览器，同一 WiFi 下的手机/电脑访问该地址即可**只读**浏览、预览、下载 exe 所在文件夹的全部文件。
+
+**核心卖点：视频在线播放** —— 点开即播、可拖进度条，MKV/HEVC/AVI 等浏览器原生播不了的格式也能流畅观看（GPU 加速转码/无损重封装）。
 
 ## 特性
 
-- 🚀 **单文件**：约 10MB 的单 exe，零安装、零依赖、双击即用
+- 🚀 **单文件**：约 8MB 的单 exe，零安装、零依赖、双击即用；发布包可捆绑 ffmpeg 组件（可选）
 - 🌐 **自动出地址**：启动自动检测局域网 IP 并打印访问地址，自动打开浏览器
-- 🖼️ **图片缩略图**：jpg/png/gif/webp/bmp/tiff/svg 服务端生成缩略图（带缓存）
-- 🎬 **视频首帧缩略图**：浏览器端抽帧，零额外体积；放入 ffmpeg 后自动升级为服务端全格式抽帧
-- 🎞️ **自绘播放器**：进度拖动、倍速、音量、全屏、快捷键
-- 🖼️ **相册级灯箱**：缩放/旋转/键盘/触屏切换、预加载
+- 📱 **终端二维码**：启动即在控制台渲染每个地址的二维码，手机扫屏直达（`--no-qr` 关闭）
+- 📺 **视频在线播放（核心）**：
+  - 智能决策：faststart MP4/WebM 直链秒开；其余走 HLS 流化（hls.js 播放，Safari 原生）
+  - **无损重封装**：H.264 源 `-c copy` 重封装为分片流，零画质损失、接近秒开
+  - **GPU 转码**：HEVC/MKV/AVI/WMV 等实时转 H.264，启动时实测优选 **NVENC → AMF → QSV → CPU(libx264)**，硬件解码（cuda/d3d11va/qsv）加速；10bit/HDR 自动色调映射
+  - **起播优化**：机械硬盘上的「怪封装」大文件（巨 moov + 数千 mdat 块）通过 **moov 预读预热** + 跳过 ffmpeg 探测，冷启动从十几秒降到 1~3 秒；转码结果缓存 3 天，二次点开秒开
+  - **seek 收敛**：转码进行中超前拖进度条不会卡死，自动落到当前已生成位置
+- 🖼️ **视频缩略图（纯浏览器抽帧）**：不依赖 ffmpeg、不占用服务端任何资源——服务端只提供一个**截短的抽帧源**（`/api/thumb-src`：moov + 开头样本区，≤16MB 的合法 MP4），浏览器 3 路并发抽帧：元数据秒读、seek 命中、**绝不整段下载**；点开视频的瞬间前端中止所有在途抽帧（播放绝对优先）
+- 🎞️ **自绘播放器**：进度拖动、倍速、音量、全屏、快捷键（空格/方向键/M/F）
+- 🖼️ **相册级灯箱**：缩放/旋转/键盘/触屏滑动切换
 - 📄 **在线预览**：视频 / 音频 / PDF / 文本 / 代码
-- 📦 **目录打包下载**：任意文件夹一键 zip
-- 🔍 **文件搜索**：递归搜索当前目录
-- 🎨 **现代界面**：暗色为主（可切亮色），网格/列表视图，手机响应式
-- 🛡️ **只读 + 路径安全**：无任何写接口，防目录穿越、防符号链接逃逸；可选口令保护
+- 📦 **目录打包下载**：任意文件夹一键 zip（流式打包）
+- 🔍 **文件搜索**：递归搜索当前目录（带深度/数量上限）
+- 🎨 **现代界面**：暗色为主（可切亮色）、网格/列表视图、手机响应式（触屏布局单独优化）
+- 🧹 **缓存不污染系统目录**：所有缓存（缩略图/HLS/重封装）都在服务目录内的隐藏文件夹 `.FileServer\`，删除即恢复干净
+- 🛡️ **只读 + 路径安全**：无任何写接口，防目录穿越、防符号链接逃逸；可选口令保护；退出时终止全部转码子进程（关窗不留孤儿 ffmpeg）
 
 ## 快速开始
 
@@ -23,7 +32,7 @@
 3. 首次运行如弹出 **Windows 防火墙提示，请勾选"专用网络"并允许**（局域网访问必需）
 4. 手机/其他电脑连接同一 WiFi，在浏览器打开控制台显示的 `http://192.168.x.x:8080` 地址
 
-停止服务：关闭控制台窗口，或按 `Ctrl+C`。
+停止服务：关闭控制台窗口，或按 `Ctrl+C`（优雅退出，自动终止转码进程）。
 
 ## 命令行参数
 
@@ -34,31 +43,65 @@
 | `--no-browser` | 不自动打开浏览器 |
 | `--hidden` | 显示隐藏文件（点开头）。默认关闭：隐藏文件在列表、搜索、直链下载、缩略图、zip 打包中均不可见/不可访问 |
 | `--auth user:pass` | 启用简单访问口令（Basic Auth）。口令以明文走 HTTP，仅限可信局域网使用 |
+| `--no-qr` | 不在终端显示地址二维码 |
 | `-v` | 显示访问日志 |
 
-## 视频缩略图：可选 ffmpeg 增强
+## 视频在线播放（核心功能）
 
-默认视频缩略图由**浏览器端**生成（零体积）。若需要 hevc/mkv/avi 等全格式覆盖，把 `ffmpeg.exe` 和 `ffprobe.exe` 放入以下任一位置（程序启动时自动检测）：
+点开视频后前端询问 `/api/video-info`，服务端按文件结构**毫秒级决策**：
 
-1. exe 同目录的 `ffmpeg\` 子文件夹
-2. `%LOCALAPPDATA%\FileServer\ffmpeg\`（推荐：不污染共享目录）
+1. **直链播放**：`.webm`，或 faststart（moov 在头部 256KB 内）且封装正常的 MP4 —— 浏览器原生 Range 边下边播。
+2. **无损流化（HLS copy）**：非 faststart / 「怪封装」（moov > 4MB 或 mdat 块 > 4）的 H.264 MP4，以及可无损封装的 MKV 等 —— ffmpeg `-c copy` 重封装为 fMP4 分片流，**零画质损失**，机械硬盘上首片 0.2~3 秒产出。
+3. **实时转码（HLS transcode）**：HEVC/AVI/WMV/RMVB 等 —— 服务端实时转 H.264（GPU 优先），边转边播。
+
+共性机制：
+
+- **编码器实测优选**：启动时依次实测 h264_nvenc / h264_amf / h264_qsv，全部不可用回退 libx264 CPU；无显卡/驱动缺失也能播。
+- **起播加速**：
+  - MP4 的流信息全在 moov 里，copy/抽帧/重封装跳过 ffmpeg 默认 5MB 探测（`-probesize 32`），怪封装文件首片从十几秒降到亚秒级；
+  - 目录页浏览时后台把可见视频的 moov 区域**预读进系统缓存**（单路、限速、播放/抽帧进行时让路），点开即命中。
+- **转码会话管理**：分片 3 秒一片；copy 4 路并发、转码 2 路并发（互不阻塞）；首片等待上限 60s；分片请求阻塞等待上限 28s（与前端 hls.js 超时对齐）；停滞 60s / 空闲 10 分钟自动终止；离开播放页立即通知服务端终止（`abandon`），不浪费磁盘与 GPU。
+- **VOD 快照**：服务端把 EVENT 播放列表改写成 VOD 快照（附加 ENDLIST），hls.js 拿到首片立即起播；前端每 8s 重载一次 manifest 感知新分片，转码完成后全片可拖。
+- **seek 收敛**：拖到尚未生成的位置时，前端自动收敛到当前已生成范围并提示，绝不卡死；转码赶上来后可继续往后拖。
+- **缓存复用**：完整转码结果缓存 3 天，同一视频再次点开直接读缓存秒开。
+
+## 视频缩略图
+
+> **说明**：由于 ffmpeg 生成缩略图在机械硬盘上的性能目前无法优化（怪封装文件的
+> moov 索引建表需要大量碎片化随机读，机械盘上 5~15 秒/张且多路并发直接打爆磁盘），
+> 本项目已放弃服务端 ffmpeg 抽帧，**缩略图统一采用浏览器抽帧**；
+> ffmpeg 目前仅用于支持 HLS 在线播放（HEVC/MKV 转码）。
+
+**纯浏览器抽帧（服务端不生成视频缩略图，不依赖 ffmpeg）**：
+
+浏览器用隐藏 `<video>`（`preload=metadata`）加载 `/api/thumb-src` 返回的**截短抽帧源**，seek 后 canvas 截帧。关键点：
+
+- **为什么不能直接给原文件**：Chromium 对 video 源发出开区间 Range（`bytes=0-`），整段回源会把 1.4GB 视频全传一遍——磁盘/网络/内存全被打爆。
+- **抽帧源（`/api/thumb-src`）**：服务端只返回一个"截短的合法 MP4"——头部样本区 + moov（≤16MB）：
+  - moov 在头部的怪封装片：直接截取头部 16MB（moov + 开头 1~2s 样本都在其中）；
+  - moov 在尾部的正常片：头部 16MB 样本区 + 尾部 moov 拼接（样本偏移不变，仍是合法 MP4）；
+  - 浏览器把它当完整文件解析：**元数据秒读、seek 1s 命中样本，抽帧毫秒级完成**。
+- **3 路并发懒加载**：卡片进入视口才抽（IntersectionObserver），20 秒超时；解码不支持（HEVC 等）/损坏文件保持图标，绝不硬拉。
+- **播放绝对优先**：点开视频的瞬间前端**中止所有在途抽帧**（释放连接与磁盘 IO）并暂停新任务；返回列表自动恢复。
+
+实测（146 个视频的大目录，有头浏览器）：首张缩略图约 1 秒、2 秒 15 张、首屏 12 张几秒铺满；抽帧正忙时点开视频起播 1 秒出头、播放全程零抽帧任务。
+
+> ffmpeg 仅用于**在线播放**（HEVC/MKV 的 HLS 转码），与缩略图无关。
+
+## 缓存目录
+
+所有缓存都在服务目录内的隐藏文件夹：
 
 ```
-# 方式一：exe 同目录
-你的文件夹\
-├── FileServer.exe
-└── ffmpeg\
-    ├── ffmpeg.exe
-    └── ffprobe.exe
-
-# 方式二：系统用户目录（推荐）
-%LOCALAPPDATA%\FileServer\ffmpeg\
-    ├── ffmpeg.exe
-    └── ffprobe.exe
+服务目录\.FileServer\
+├── thumb\      图片缩略图（jpg；视频缩略图为浏览器抽帧，不落盘）
+├── hls\        视频转码/重封装会话（index.m3u8 + seg_*.m4s，3 天清理）
+└── faststart\  小文件 moov 前置重封装缓存（7 天清理）
 ```
 
-启用后视频缩略图由服务端生成，支持所有常见格式。
-ffmpeg 官方构建下载：<https://www.gyan.dev/ffmpeg/builds/>（选 release-essentials）
+- 不写入系统目录（服务目录不可写时才回退系统临时目录）；
+- 删除 `.FileServer` 文件夹即可清空全部缓存，不影响任何功能；
+- 已在 `.gitignore` 中排除，不会污染仓库。
 
 ## 从源码构建
 
@@ -74,44 +117,51 @@ build.bat
 .tools\go\bin\go build -trimpath -ldflags "-s -w" -o dist\FileServer.exe ./cmd/fileserver
 ```
 
+发布包（捆绑 ffmpeg）：`release.ps1`（输出 `release\` 目录）。
+
 ## 测试
 
 ```
-# 后端单元/集成测试
+# 后端单元/集成测试（无需 ffmpeg）
 .tools\go\bin\go test ./...
 
-# 前端 Playwright 测试（桌面/移动端/回归/导航）
-# 需要 Python + playwright，且先启动服务：dist\FileServer.exe --dir .\testdata --port 8099 --no-browser
-python scripts\smoke_test.py
-python scripts\mobile_test.py
-python scripts\regression_test.py
-python scripts\nav_test.py
+# 前端 Playwright 测试（需要 Python + playwright）
+# 先启动服务：dist\FileServer.exe --dir .\testdata --port 8099 --no-browser --no-qr
+python scripts\smoke_test.py        # 冒烟
+python scripts\regression_test.py   # 回归（面包屑/缩略图/播放器释放）
+python scripts\mobile_test.py       # 移动端 + 灯箱 + zip
+python scripts\nav_test.py          # 导航/历史
+python scripts\special_e2e_test.py  # 特殊文件端到端
+python scripts\hls_e2e_test.py      # HLS 端到端（生成 HEVC/MKV 实测转码播放）
+python scripts\frontthumb_test.py   # 前端抽帧模式（无 ffmpeg 时）
+python scripts\mobile_ui_check.py   # 移动端 UI 全面检查（多视口/溢出/控制条）
 ```
 
 ## 项目结构
 
 ```
-├── cmd/
-│   └── fileserver/       入口：参数解析、启动、控制台输出、自动开浏览器
+├── cmd/fileserver/      入口：参数解析、优雅退出、控制台输出、二维码
 ├── internal/
-│   ├── server/           核心服务（HTTP 路由、路径安全、缩略图、zip、搜索）
-│   │   ├── server.go      Server 与路由、认证、日志
-│   │   ├── path.go        路径安全（防穿越/符号链接逃逸）
-│   │   ├── list.go        目录列表与排序
-│   │   ├── thumb.go       图片缩略图 + 磁盘/内存缓存
-│   │   ├── ffmpeg.go      视频抽帧 + MP4 faststart 检测/重封装（可选增强）
-│   │   ├── faststart.go   非 faststart MP4 重封装缓存（统一 Range 服务）
-│   │   ├── zip.go         目录打包下载
-│   │   ├── search.go      递归搜索
-│   │   ├── lanip.go       局域网 IP 检测
-│   │   └── web/           前端资源（嵌入 exe）
-│   └── platform/          平台适配（控制台 UTF-8、打开浏览器）
-├── scripts/               Playwright 测试脚本
-├── testdata/              测试数据
-├── build.bat              一键构建（输出 dist\FileServer.exe）
-├── fetch-tools.ps1        下载 Go 工具链（免安装）
-├── dl.py                  工具链下载器（断点续传）
-├── release.ps1            发布包打包
+│   ├── server/          核心服务
+│   │   ├── server.go    Server、路由、认证、文件直链
+│   │   ├── path.go      路径安全（防穿越/符号链接逃逸）
+│   │   ├── list.go      目录列表、排序、分页
+│   │   ├── thumb.go     图片缩略图缓存
+│   │   ├── ffmpeg.go    ffmpeg 集成：查找、GPU 探测、抽帧、faststart、媒体探测
+│   │   ├── hls.go       HLS 会话管理（转码/重封装/分片服务/VOD 快照）
+│   │   ├── prewarm.go   moov 预读预热（机械硬盘起播加速）
+│   │   ├── zip.go       目录打包下载
+│   │   ├── search.go    递归搜索
+│   │   ├── lanip.go     局域网 IP 检测
+│   │   └── web/         前端资源（嵌入 exe：index.html/style.css/app.js/hls.min.js）
+│   ├── qrcode/          二维码生成（终端渲染，零依赖）
+│   └── platform/        平台适配（UTF-8 控制台、打开浏览器、子进程回收）
+├── scripts/             Playwright 测试脚本
+├── testdata/            测试数据（gitignore 中不含 mp4 样例，测试自行生成）
+├── doc/                 项目文档
+├── build.bat            一键构建
+├── fetch-tools.ps1      下载 Go 工具链
+├── release.ps1          发布包打包
 └── README.md
 ```
 
@@ -125,4 +175,6 @@ python scripts\nav_test.py
 
 **Q: 想换个端口/目录？** 创建快捷方式，在目标后加参数，如：`"D:\FileServer.exe" --port 9000 --dir "D:\共享"`。
 
-**Q: hevc/mkv 视频没有缩略图？** 浏览器不支持解码这些格式，无法前端抽帧；放入 ffmpeg 组件后即可（见上文）。
+**Q: 大视频第一次点开还要等几秒？** 机械硬盘上 moov 区域碎片化的文件冷读一次需要几秒到十几秒（物理寻道）。服务已尽力：浏览时后台预热 moov、跳过探测、分片缓存 3 天——第一次完整播完后，之后点开都是秒开。固态硬盘上无此问题。
+
+**Q: hevc/mkv 视频没有缩略图？** 浏览器无法解码 HEVC/MKV（Chromium 无 HEVC 解码器），抽帧源加载会失败而保持图标——这是浏览器能力的限制，与 ffmpeg 无关（服务端已不再生成视频缩略图）。在线播放不受影响（HLS 转码）。

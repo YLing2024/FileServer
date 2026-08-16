@@ -395,6 +395,17 @@ tr:hover .row-act { opacity: 1; }
 .big-play:hover { background: rgba(255, 255, 255, .26); transform: scale(1.06); }
 .big-play svg { width: 30px; height: 30px; fill: #fff; margin-left: 4px; }
 .big-play.hide { opacity: 0; pointer-events: none; transform: scale(.8); }
+/* 缓冲中强制显示转圈（覆盖 .hide）：播放中停顿时大播放按钮原本是隐藏的，
+   不强制显示则用户看不到任何加载反馈 */
+.big-play.buffering { opacity: 1 !important; pointer-events: auto; transform: none; }
+.big-play.buffering svg { animation: spin 1s linear infinite; }
+.big-play.buffering::after {
+  content: '加载中…';
+  position: absolute; bottom: -26px; left: 50%; transform: translateX(-50%);
+  font-size: 12px; color: #fff; white-space: nowrap;
+  background: rgba(0,0,0,.5); padding: 2px 8px; border-radius: 8px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 
 .player-bar {
   position: absolute; left: 0; right: 0; bottom: 0;
@@ -457,6 +468,13 @@ tr:hover .row-act { opacity: 1; }
   accent-color: var(--accent); height: 4px;
 }
 .pb-vol:hover .pb-vol-slider { width: 72px; opacity: 1; margin-left: 2px; }
+/* 触屏设备没有 hover：保留静音按钮，隐藏音量滑杆——
+   4px 高的滑杆在手机上几乎无法触控，还会把进度条挤到 70px 宽；
+   手机音量请用实体按键（YouTube 等主流 App 同款做法） */
+@media (hover: none) {
+  .pb-vol-slider { display: none; }
+  .player-bar { gap: 8px; }
+}
 
 /* 图片预览（预览页大图） */
 .pv-image { text-align: center; }

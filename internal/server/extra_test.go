@@ -111,7 +111,7 @@ func TestHiddenEnabled(t *testing.T) {
 
 // TestThumbCacheDoPanic 生成函数 panic 时等待者必须被唤醒而非永久阻塞（2.4、5.3）
 func TestThumbCacheDoPanic(t *testing.T) {
-	c := NewThumbCache()
+	c := NewThumbCache(t.TempDir())
 	key := "panic-key"
 	const waiters = 4
 
@@ -182,7 +182,7 @@ func TestThumbCacheDoPanic(t *testing.T) {
 
 // TestThumbCacheLRU 内存缓存按最近使用淘汰（2.10、5.5）
 func TestThumbCacheLRU(t *testing.T) {
-	c := NewThumbCache()
+	c := NewThumbCache(t.TempDir())
 	c.max = 3
 	c.Put("a", []byte("a"))
 	c.Put("b", []byte("b"))
@@ -217,7 +217,7 @@ func TestThumbCacheLRU(t *testing.T) {
 
 // TestThumbCacheCleanupTmp 清理 .tmp 残留与过期缓存（2.8、5.5）
 func TestThumbCacheCleanupTmp(t *testing.T) {
-	c := NewThumbCache()
+	c := NewThumbCache(t.TempDir())
 	old := time.Now().Add(-10 * 24 * time.Hour) // 超过 7 天清理阈值
 	fresh := time.Now()
 

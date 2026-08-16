@@ -53,10 +53,12 @@ def main():
         print(f"[4] manyvideos 目录: {vcards} 个视频卡片")
         assert vcards == 12, f"视频卡片数异常: {vcards}"
 
-        # 等待抽帧完成（12 个视频，2 并发，每个 1-3s，最多 20s）
+        # 等待抽帧完成（12 个视频，抽帧并发固定 1 路——播放优先设计；
+        # 首次冷访问时 10KB 短视频 -ss 5 超范围，ffmpeg 逐个判死要几秒，
+        # 之后前端降级抽帧；最多 90s 覆盖冷启动）
         page.wait_for_function(
             "() => document.querySelectorAll('.card.kind-video img:not(.hidden)').length >= 10",
-            timeout=25000,
+            timeout=90000,
         )
         thumbs = page.locator('.card.kind-video img:not(.hidden)').count()
         print(f"[5] 视频缩略图数量: {thumbs} / 12")

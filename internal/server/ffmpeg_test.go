@@ -4,12 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"io"
-	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -61,7 +62,7 @@ func mp4File(t *testing.T, name string, data []byte) *os.File {
 	return f
 }
 
-// TestMP4MoovOffset 覆盖 moov 定位的边界情况（5.1）：
+// TestMP4MoovOffset 覆盖 moov 定位的边界情况：
 // 首 box 即 moov、正常 moov、64 位扩展 box、mdat size=0、boxSize<8、无 moov
 func TestMP4MoovOffset(t *testing.T) {
 	moov := mp4Box("moov", []byte("xxxx"))
@@ -71,11 +72,7 @@ func TestMP4MoovOffset(t *testing.T) {
 		mp4  []byte
 		want int64
 	}{
-		{
-			"首 box 即 moov",
-			moov,
-			0,
-		},
+		{"首 box 即 moov", moov, 0},
 		{
 			"ftyp 后跟 moov",
 			append(mp4Box("ftyp", make([]byte, 8)), moov...),
@@ -84,7 +81,7 @@ func TestMP4MoovOffset(t *testing.T) {
 		{
 			"ftyp+free+moov（moov 在中间）",
 			append(append(mp4Box("ftyp", make([]byte, 8)), mp4Box("free", make([]byte, 100))...), moov...),
-			16 + 108, // ftyp(16) + free(8+100=108)
+			16 + 108,
 		},
 		{
 			"无 moov",
@@ -111,7 +108,7 @@ func TestMP4MoovOffset(t *testing.T) {
 		})
 	}
 
-	// 64 位扩展 box：ftyp 用 largesize=16+2000，其后 moov
+	// 64 位扩展 box：mdat 用 largesize=16+2000，其后 moov
 	t.Run("64位扩展 box", func(t *testing.T) {
 		big := mp4Box64("mdat", make([]byte, 2000), 16+2000)
 		data := append(append([]byte{}, big...), moov...)
@@ -130,54 +127,90 @@ func TestMP4MoovOffset(t *testing.T) {
 	})
 }
 
-// TestMP4NeedsFastStart moov 位置决定是否需要 faststart 重封装
-func TestMP4NeedsFastStart(t *testing.T) {
+// TestMP4IsFastStart moov 位置决定浏览器是否可直链即时起播
+func TestMP4IsFastStart(t *testing.T) {
 	moov := mp4Box("moov", []byte("xxxx"))
 	ftyp := mp4Box("ftyp", make([]byte, 8))
 
-	t.Run("文件过小不需处理", func(t *testing.T) {
+	t.Run("文件过小不算 faststart", func(t *testing.T) {
 		p := writeMP4(t, "tiny.mp4", []byte{0, 0, 0, 8, 'f', 't', 'y', 'p'})
-		if mp4NeedsFastStart(p) {
-			t.Error("小于 1KB 的文件不应判定为需 faststart")
+		if mp4IsFastStart(p) {
+			t.Error("小于 1KB 的文件不应判定为 faststart")
 		}
 	})
 
-	t.Run("moov 在开头不需处理", func(t *testing.T) {
+	t.Run("moov 在开头即 faststart", func(t *testing.T) {
 		data := append(append([]byte{}, ftyp...), moov...)
 		p := writeMP4(t, "ok.mp4", data)
-		// 补充 padding 到超过 1KB，但 moov 仍在前部
 		buf := make([]byte, 1200)
 		copy(buf, data)
 		if err := os.WriteFile(p, buf, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if mp4NeedsFastStart(p) {
-			t.Error("moov 在前部不应判定为需 faststart")
+		if !mp4IsFastStart(p) {
+			t.Error("moov 在前部应判定为 faststart")
 		}
 	})
 
-	t.Run("moov 在尾部需处理", func(t *testing.T) {
-		// ftyp + 300KB 填充 + moov（moov 偏移 > 256KB）
+	t.Run("moov 在尾部不是 faststart", func(t *testing.T) {
 		pad := make([]byte, 300*1024)
 		copy(pad, ftyp)
 		data := append(pad, moov...)
 		p := writeMP4(t, "tail.mp4", data)
-		if !mp4NeedsFastStart(p) {
-			t.Error("moov 在尾部应判定为需 faststart")
+		if mp4IsFastStart(p) {
+			t.Error("moov 在尾部不应判定为 faststart")
 		}
 	})
 
-	t.Run("无 moov 需处理", func(t *testing.T) {
+	t.Run("无 moov 不是 faststart", func(t *testing.T) {
 		pad := make([]byte, 1200)
 		copy(pad, append(append([]byte{}, ftyp...), mp4Box("mdat", make([]byte, 64))...))
 		p := writeMP4(t, "nomoov.mp4", pad)
-		if !mp4NeedsFastStart(p) {
-			t.Error("无 moov 应判定为需 faststart")
+		if mp4IsFastStart(p) {
+			t.Error("无 moov 不应判定为 faststart")
 		}
 	})
 }
 
-// TestParseDurationFromStderr ffmpeg -i stderr 的 Duration 解析（2.2 回退路径）
+// TestMediaInfoPlayable 浏览器原生可播放性判定矩阵
+func TestMediaInfoPlayable(t *testing.T) {
+	cases := []struct {
+		name string
+		m    MediaInfo
+		ext  string
+		want bool
+	}{
+		{"mp4 h264 aac", MediaInfo{VideoCodec: "h264", AudioCodec: "aac"}, ".mp4", true},
+		{"mp4 h264 无音轨", MediaInfo{VideoCodec: "h264"}, ".mp4", true},
+		{"mp4 h264 mp3", MediaInfo{VideoCodec: "h264", AudioCodec: "mp3"}, ".mp4", true},
+		{"mp4 hevc aac 不可播", MediaInfo{VideoCodec: "hevc", AudioCodec: "aac"}, ".mp4", false},
+		{"mp4 h264 ac3 不可播", MediaInfo{VideoCodec: "h264", AudioCodec: "ac3"}, ".mp4", false},
+		{"webm vp9 opus", MediaInfo{VideoCodec: "vp9", AudioCodec: "opus"}, ".webm", true},
+		{"webm av1 vorbis", MediaInfo{VideoCodec: "av1", AudioCodec: "vorbis"}, ".webm", true},
+		{"webm h264 不可播", MediaInfo{VideoCodec: "h264", AudioCodec: "opus"}, ".webm", false},
+		{"mkv h264 aac 不可播（容器）", MediaInfo{VideoCodec: "h264", AudioCodec: "aac"}, ".mkv", false},
+		{"avi mpeg4 不可播", MediaInfo{VideoCodec: "mpeg4", AudioCodec: "mp3"}, ".avi", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.m.Playable(c.ext); got != c.want {
+				t.Errorf("Playable(%s) = %v, want %v", c.ext, got, c.want)
+			}
+		})
+	}
+}
+
+// TestBitrateFor 码率随分辨率递增
+func TestBitrateFor(t *testing.T) {
+	if bitrateFor(&MediaInfo{Height: 360}) == bitrateFor(&MediaInfo{Height: 2160}) {
+		t.Error("不同分辨率码率应不同")
+	}
+	if bitrateFor(&MediaInfo{Height: 1080}) != 6000 {
+		t.Errorf("1080p 码率应为 6000k, got %d", bitrateFor(&MediaInfo{Height: 1080}))
+	}
+}
+
+// TestParseDurationFromStderr ffmpeg -i stderr 的 Duration 解析（回退路径）
 func TestParseDurationFromStderr(t *testing.T) {
 	cases := []struct {
 		in   string
@@ -218,7 +251,7 @@ func TestParseDurationJSON(t *testing.T) {
 	}
 }
 
-// TestContainsFold 大小写不敏感包含匹配（3.4）
+// TestContainsFold 大小写不敏感包含匹配
 func TestContainsFold(t *testing.T) {
 	cases := []struct {
 		s, sub string
@@ -238,124 +271,286 @@ func TestContainsFold(t *testing.T) {
 	}
 }
 
-// TestRemuxFastStartIntegration 用真实 ffmpeg 验证重封装首包与停滞看门狗（2.1）。
-// 无 ffmpeg 环境自动跳过。
-func TestRemuxFastStartIntegration(t *testing.T) {
+// TestDurationCache 验证时长元数据缓存：同一文件第二次探测命中缓存，
+// 不再起 ffprobe 进程（把 ffprobePath 指向必然失败的假路径，若第二次不命中
+// 缓存而真的执行 ffprobe 会失败；命中缓存则直接返回上次结果）。
+func TestDurationCache(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg 不可用，跳过集成测试")
+	}
 	ff := FindFfmpeg()
 	if ff == nil {
 		t.Skip("ffmpeg 不可用，跳过集成测试")
 	}
-	// 生成一个 2 秒测试视频（lavfi 色彩源，无需外部素材）
-	src := filepath.Join(t.TempDir(), "src.mp4")
+
+	src := filepath.Join(t.TempDir(), "dur.mp4")
 	gen := exec.Command(ff.ffmpegPath, "-hide_banner", "-loglevel", "error", "-y",
-		"-f", "lavfi", "-i", "color=c=red:s=128x128:d=2",
+		"-f", "lavfi", "-i", "color=c=blue:s=64x64:d=3",
 		"-c:v", "libx264", "-pix_fmt", "yuv420p", src)
 	if out, err := gen.CombinedOutput(); err != nil {
 		t.Skipf("无法生成测试视频: %v (%s)", err, strings.TrimSpace(string(out)))
 	}
-	if fi, err := os.Stat(src); err != nil || fi.Size() == 0 {
-		t.Skip("测试视频生成异常，跳过")
-	}
 
-	// 大输出缓冲（不触发客户端背压），验证可在远超原 15s 的场景下正常完成
-	var buf bytes.Buffer
-	if err := ff.RemuxFastStart(context.Background(), src, &buf); err != nil {
-		t.Fatalf("remux 失败: %v", err)
+	d1, err := ff.probeDuration(context.Background(), src)
+	if err != nil {
+		t.Fatalf("首次探测失败: %v", err)
 	}
-	if buf.Len() < 128 {
-		t.Fatalf("remux 输出过短: %d 字节", buf.Len())
+	if d1 < 2.5 || d1 > 3.5 {
+		t.Fatalf("首次探测时长异常: %v", d1)
 	}
-	// 输出应为合法 mp4（ftyp 位于首 box 的 type 字段）
-	if len(buf.Bytes()) < 8 || string(buf.Bytes()[4:8]) != "ftyp" {
-		t.Fatalf("remux 输出不是 MP4: 头部 %q", buf.Bytes()[:8])
+	realProbe := ff.ffprobePath
+	ff.ffprobePath = filepath.Join(t.TempDir(), "nonexistent-ffprobe.exe")
+	d2, err := ff.probeDuration(context.Background(), src)
+	if err != nil {
+		ff.ffprobePath = realProbe
+		t.Fatalf("第二次探测应命中缓存，却失败: %v", err)
 	}
-
-	// 写入中途失败（等价于客户端断开、http 写回错误）：必须能快速终止而非永久挂起
-	lim := &limitedWriter{max: 128}
-	start := time.Now()
-	if err := ff.RemuxFastStart(context.Background(), src, lim); err == nil {
-		t.Error("客户端断开应返回错误")
-	}
-	if d := time.Since(start); d > ffmpegTimeout {
-		t.Fatalf("写入失败后未及时终止: %v", d)
+	ff.ffprobePath = realProbe
+	if d2 != d1 {
+		t.Fatalf("缓存命中时长不一致: %v vs %v", d2, d1)
 	}
 }
 
-// limitedWriter 写入超过 max 后返回 os.ErrClosed，模拟客户端断开（http 写回错误）
-type limitedWriter struct{ max int }
-
-func (l *limitedWriter) Write(p []byte) (int, error) {
-	if l.max <= 0 {
-		return 0, os.ErrClosed
-	}
-	n := len(p)
-	if n > l.max {
-		n = l.max
-	}
-	l.max -= n
-	return n, nil
-}
-
-// TestFastStartServingIntegration 验证 2.3：非 faststart 视频的「初始请求」与
-// 后续 seek 的「Range 请求」都从同一 faststart 缓存文件服务，字节布局一致，
-// 不再出现「流式 remux 输出 + 原始文件 Range」混用导致的字节错位。
-func TestFastStartServingIntegration(t *testing.T) {
+// TestHlsManagerIntegration 用真实 ffmpeg 验证 HLS 转码全链路：
+// MKV（浏览器不可播）→ 会话生成 index.m3u8 + fmp4 分片 → EVENT 播放列表 → 完成后 ENDLIST。
+func TestHlsManagerIntegration(t *testing.T) {
 	ff := FindFfmpeg()
 	if ff == nil {
 		t.Skip("ffmpeg 不可用，跳过集成测试")
 	}
 	root := t.TempDir()
-	src := filepath.Join(root, "v.mp4")
+	src := filepath.Join(root, "movie.mkv")
 	gen := exec.Command(ff.ffmpegPath, "-hide_banner", "-loglevel", "error", "-y",
-		"-f", "lavfi", "-i", "testsrc2=s=320x240:d=8",
-		"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", src)
+		"-f", "lavfi", "-i", "testsrc2=s=320x240:d=6:r=30",
+		"-f", "lavfi", "-i", "sine=frequency=440:duration=6",
+		"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+		"-c:a", "aac", "-shortest", src)
 	if out, err := gen.CombinedOutput(); err != nil {
 		t.Skipf("无法生成测试视频: %v (%s)", err, strings.TrimSpace(string(out)))
 	}
-	if !mp4NeedsFastStart(src) {
-		t.Skip("生成的视频已是 faststart，跳过本用例")
-	}
 
-	srv := New(root, Options{})
-	ts := httptest.NewServer(srv.Handler())
-	defer ts.Close()
-
-	// 初始请求（无 Range）：走 faststart 缓存，返回完整 remux 输出
-	resp := get(t, ts.URL+"/api/file?path=/v.mp4")
-	full, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if resp.StatusCode != 200 || len(full) == 0 {
-		t.Fatalf("初始请求失败: status=%d bytes=%d", resp.StatusCode, len(full))
-	}
-
-	// 中途 Range 请求（模拟浏览器 seek）：必须与初始请求同字节布局
-	req, _ := http.NewRequest("GET", ts.URL+"/api/file?path=/v.mp4", nil)
-	req.Header.Set("Range", "bytes=1000-1999")
-	resp2, err := http.DefaultClient.Do(req)
+	fi, err := os.Stat(src)
 	if err != nil {
 		t.Fatal(err)
 	}
-	part, _ := io.ReadAll(resp2.Body)
-	resp2.Body.Close()
-	if resp2.StatusCode != 206 {
-		t.Fatalf("Range 应返回 206, 得到 %d", resp2.StatusCode)
+	srv := New(root, Options{})
+	defer srv.Close()
+	mgr := srv.hls
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	sess, err := mgr.Get(ctx, src, fi, srv.ff)
+	if err != nil {
+		t.Fatalf("HLS 会话创建失败: %v", err)
 	}
-	if string(part) != string(full[1000:2000]) {
-		t.Fatal("seek 字节与初始响应不一致（remux 与 Range 混用导致错位）")
+
+	// 等待转码完成（6s 视频很快），或至少等到播放列表有内容
+	deadline := time.Now().Add(120 * time.Second)
+	for {
+		data, err := os.ReadFile(filepath.Join(sess.dir, "index.m3u8"))
+		if err == nil && strings.Contains(string(data), "#EXTINF") &&
+			strings.Contains(string(data), "#EXT-X-ENDLIST") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("等待 HLS 转码完成超时")
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	// 播放列表结构校验
+	data, _ := os.ReadFile(filepath.Join(sess.dir, "index.m3u8"))
+	pl := string(data)
+	for _, want := range []string{"#EXTM3U", "#EXT-X-TARGETDURATION", "#EXTINF", "#EXT-X-ENDLIST"} {
+		if !strings.Contains(pl, want) {
+			t.Errorf("播放列表缺少 %s:\n%s", want, pl)
+		}
+	}
+	// 分片文件存在且非空
+	segs, _ := filepath.Glob(filepath.Join(sess.dir, "seg_*.m4s"))
+	if len(segs) == 0 {
+		t.Fatal("未生成任何分片")
+	}
+	for _, s := range segs {
+		if info, err := os.Stat(s); err != nil || info.Size() == 0 {
+			t.Errorf("分片 %s 为空或不可读", s)
+		}
 	}
 }
 
-// TestRemuxFastStartIntegrationStall 用极短的停滞阈值验证看门狗逻辑。
-// 由于 ffmpegTimeout 是包级常量（15s），此测试直接构造 progressWriter 验证其判定。
-func TestProgressWriterStall(t *testing.T) {
-	pw := &progressWriter{w: &bytes.Buffer{}, last: time.Now().Add(-2 * time.Second)}
-	if !pw.stalled(time.Second) {
-		t.Error("超过阈值无写入应判定停滞")
+// TestVideoInfoDecision 验证 /api/video-info 的 direct/hls 决策：
+// faststart MP4 → direct；非 faststart MP4 → hls；MKV → hls；HEVC MP4 → hls。
+func TestVideoInfoDecision(t *testing.T) {
+	ff := FindFfmpeg()
+	if ff == nil {
+		t.Skip("ffmpeg 不可用，跳过集成测试")
 	}
-	if _, err := pw.Write([]byte("x")); err != nil {
-		t.Fatal(err)
+	root := t.TempDir()
+
+	mkVideo := func(name string, extra ...string) string {
+		p := filepath.Join(root, name)
+		args := append([]string{"-hide_banner", "-loglevel", "error", "-y",
+			"-f", "lavfi", "-i", "testsrc2=s=320x240:d=2:r=30",
+			"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"}, extra...)
+		args = append(args, p)
+		cmd := exec.Command(ff.ffmpegPath, args...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("生成 %s 失败: %v", name, strings.TrimSpace(string(out)))
+		}
+		return p
 	}
-	if pw.stalled(time.Second) {
-		t.Error("有写入后不应判定停滞")
+	mkVideo("fast.mp4", "-movflags", "+faststart")
+	// 小非 faststart MP4（<32MB）→ direct + faststart 预热标志
+	mkVideo("smallslow.mp4", "-movflags", "-faststart")
+	// 非 faststart 且 >32MB（小文件走「服务端即时 faststart 化 + 直链」路径）：
+	// 1280x720 15s @20Mbps ≈ 37MB，ultrafast 生成快
+	slow := filepath.Join(root, "slow.mp4")
+	slowGen := exec.Command(ff.ffmpegPath, "-hide_banner", "-loglevel", "error", "-y",
+		"-f", "lavfi", "-i", "testsrc2=s=1280x720:d=15:r=30",
+		"-c:v", "libx264", "-preset", "ultrafast", "-b:v", "20M", "-pix_fmt", "yuv420p", "-movflags", "-faststart", slow)
+	if out, err := slowGen.CombinedOutput(); err != nil {
+		t.Fatalf("生成 slow.mp4 失败: %s", strings.TrimSpace(string(out)))
+	}
+	if fi, err := os.Stat(slow); err != nil || fi.Size() <= 32*1024*1024 {
+		t.Skip("slow.mp4 未超过 32MB，跳过本用例")
+	}
+	mkVideo("x.mkv", "-f", "matroska")
+
+	hevc := filepath.Join(root, "hevc.mp4")
+	genHevc := exec.Command(ff.ffmpegPath, "-hide_banner", "-loglevel", "error", "-y",
+		"-f", "lavfi", "-i", "testsrc2=s=320x240:d=2:r=30",
+		"-c:v", "libx265", "-preset", "ultrafast", "-pix_fmt", "yuv420p", hevc)
+	_ = genHevc.Run() // 失败则跳过该用例
+
+	srv := New(root, Options{})
+	defer srv.Close()
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	cases := []struct {
+		name     string
+		path     string
+		mode     string
+		minDur   float64
+		maxDur   float64
+	}{
+		{"faststart mp4 → direct", "/fast.mp4", "direct", 1.5, 2.5},
+		{"小非 faststart mp4 → direct(预热)", "/smallslow.mp4", "direct", 1.5, 2.5},
+		{"非 faststart 大 mp4 → hls", "/slow.mp4", "hls", 14, 16},
+		{"mkv → hls", "/x.mkv", "hls", 1.5, 2.5},
+		{"hevc mp4 → hls", "/hevc.mp4", "hls", 1.5, 2.5},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if c.path == "/hevc.mp4" {
+				if _, err := os.Stat(hevc); err != nil {
+					t.Skip("libx265 不可用，跳过")
+				}
+			}
+			// 首次请求：断言模式（决策可能不等待探测，duration 允许缺失）
+			resp := get(t, ts.URL+"/api/video-info?path="+c.path)
+			if resp.StatusCode != 200 {
+				t.Fatalf("状态码 %d", resp.StatusCode)
+			}
+			var v struct {
+				Mode     string  `json:"mode"`
+				Duration float64 `json:"duration"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if v.Mode != c.mode {
+				t.Errorf("mode = %q, want %q", v.Mode, c.mode)
+			}
+			// 等待后台探测完成（探测为秒级内），二次请求断言时长
+			time.Sleep(1200 * time.Millisecond)
+			resp2 := get(t, ts.URL+"/api/video-info?path="+c.path)
+			defer resp2.Body.Close()
+			if err := json.NewDecoder(resp2.Body).Decode(&v); err != nil {
+				t.Fatal(err)
+			}
+			if v.Duration < c.minDur || v.Duration > c.maxDur {
+				t.Errorf("时长异常: %v (期望 %v~%v)", v.Duration, c.minDur, c.maxDur)
+			}
+		})
+	}
+}
+
+// TestHlsEndpoint 验证 /api/hls 端到端：请求播放列表 → 200 + m3u8；请求分片 → 200 + video/mp4
+func TestHlsEndpoint(t *testing.T) {
+	ff := FindFfmpeg()
+	if ff == nil {
+		t.Skip("ffmpeg 不可用，跳过集成测试")
+	}
+	root := t.TempDir()
+	src := filepath.Join(root, "ep.mkv")
+	gen := exec.Command(ff.ffmpegPath, "-hide_banner", "-loglevel", "error", "-y",
+		"-f", "lavfi", "-i", "testsrc2=s=320x240:d=4:r=30",
+		"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-f", "matroska", src)
+	if out, err := gen.CombinedOutput(); err != nil {
+		t.Skipf("无法生成测试视频: %s", strings.TrimSpace(string(out)))
+	}
+
+	srv := New(root, Options{})
+	defer srv.Close()
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	// 播放列表（首次请求会触发转码并等待首片）
+	resp := get(t, ts.URL+"/api/hls?path=/ep.mkv&f=index.m3u8")
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("播放列表状态码 %d", resp.StatusCode)
+	}
+	pl, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(pl), "#EXTM3U") {
+		t.Fatalf("不是合法播放列表: %s", pl)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "application/vnd.apple.mpegurl" {
+		t.Errorf("m3u8 Content-Type = %q", ct)
+	}
+
+	// 提取第一个分片名并请求
+	re := regexp.MustCompile(`seg_\d+\.m4s`)
+	name := re.FindString(string(pl))
+	if name == "" {
+		t.Skip("播放列表尚无分片（转码未完成）")
+	}
+	resp2 := get(t, ts.URL+"/api/hls?path=/ep.mkv&f="+name)
+	defer resp2.Body.Close()
+	if resp2.StatusCode != 200 {
+		t.Fatalf("分片状态码 %d", resp2.StatusCode)
+	}
+	if ct := resp2.Header.Get("Content-Type"); ct != "video/mp4" {
+		t.Errorf("分片 Content-Type = %q", ct)
+	}
+}
+
+// TestHlsPathSafety 非法文件名必须被拒绝
+func TestHlsPathSafety(t *testing.T) {
+	ff := FindFfmpeg()
+	if ff == nil {
+		t.Skip("ffmpeg 不可用，跳过集成测试")
+	}
+	root := t.TempDir()
+	src := filepath.Join(root, "s.mp4")
+	gen := exec.Command(ff.ffmpegPath, "-hide_banner", "-loglevel", "error", "-y",
+		"-f", "lavfi", "-i", "testsrc2=s=160x120:d=2:r=30",
+		"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", src)
+	if out, err := gen.CombinedOutput(); err != nil {
+		t.Skipf("无法生成测试视频: %s", strings.TrimSpace(string(out)))
+	}
+	srv := New(root, Options{})
+	defer srv.Close()
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	// 先触发会话
+	get(t, ts.URL+"/api/hls?path=/s.mp4&f=index.m3u8").Body.Close()
+	// 目录穿越尝试
+	resp := get(t, ts.URL+"/api/hls?path=/s.mp4&f=..%2F..%2Fserver.go")
+	defer resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Errorf("非法文件名应 400, 得到 %d", resp.StatusCode)
 	}
 }

@@ -2,11 +2,14 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // listMaxLimit 单次目录列表请求的条数上限（服务端分页保护）
@@ -20,6 +23,8 @@ type Entry struct {
 	ModTime int64  `json:"mtime"` // Unix 秒
 	Ext     string `json:"ext"`
 	Kind    string `json:"kind"`
+
+	de os.DirEntry // 懒加载 size/mtime 用（不序列化）
 }
 
 // ListResp 目录列表响应
@@ -29,6 +34,18 @@ type ListResp struct {
 	Total     int     `json:"total,omitempty"`
 	Truncated bool    `json:"truncated,omitempty"`
 }
+
+// listCacheEntry 目录列表服务端缓存（按 目录路径|排序 键控）
+type listCacheEntry struct {
+	dirMod  time.Time // 目录修改时间（变化即失效）
+	fetched time.Time
+	entries []Entry // 已过滤隐藏、已排序（懒 stat：仅分页到的条目填 Size/ModTime）
+}
+
+const (
+	listCacheTTL = 3 * time.Second // 短 TTL：返回/加载更多秒开，且 3 秒内目录变化即反映
+	listCacheMax = 64              // 缓存目录数上限
+)
 
 // kindExts 扩展名→类型映射的唯一来源：fileKind 与 /api/info 下发的 kinds 都出自此表，
 // 避免后端 fileKind / mediaMime 与前端 KIND_EXT_MAP 三处漂移。
@@ -71,6 +88,11 @@ func kindExtMap() map[string]string {
 }
 
 // handleList GET /api/list?path=&sort=&order=&limit=&offset= 目录列表
+//
+// 性能要点（慢磁盘/网络盘上的大目录尤其关键）：
+// 1) 默认 name 排序不 stat 全量条目——先按名称排序，只对当前页条目懒取
+//    size/mtime（2000 文件从 2000 次 stat 降到 300 次）；
+// 2) 结果短缓存 3 秒：返回上级目录、加载更多分页均秒开。
 func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	dir, err := s.safePath(r.URL.Query().Get("path"))
 	if err != nil {
@@ -87,6 +109,30 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	sortKey := r.URL.Query().Get("sort")
+	order := r.URL.Query().Get("order")
+	limit := parseIntSafe(r.URL.Query().Get("limit"), 0, listMaxLimit)
+	offset := parseIntSafe(r.URL.Query().Get("offset"), 0, 1<<30)
+
+	rel := relOf(s.root, dir)
+	cacheKey := fmt.Sprintf("%s|%s|%s", rel, sortKey, order)
+
+	// 命中缓存（目录未变且 TTL 内）：直接分页返回
+	if ce := s.listCacheGet(cacheKey); ce != nil && ce.dirMod.Equal(fi.ModTime()) &&
+		time.Since(ce.fetched) < listCacheTTL {
+		total := len(ce.entries)
+		// 复制本页条目再懒填充（缓存切片可能被并发请求共享，不能原地改）
+		page := append([]Entry(nil), slicePage(ce.entries, offset, limit)...)
+		s.fillStats(page)
+		writeJSON(w, http.StatusOK, ListResp{
+			Path:      rel,
+			Entries:   page,
+			Total:     total,
+			Truncated: offset+len(page) < total,
+		})
+		return
+	}
+
 	des, err := os.ReadDir(dir)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "读取目录失败")
@@ -100,50 +146,96 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		// stat 语义的 IsDir：指向目录的符号链接按目录显示/操作（前端可正常进入），
-		// 不会循环跟随——列表只展示名字，点击后再由 safePath 解析校验
+		// 不会循环跟随——列表只展示名字，点击后再由 safePath 解析校验。
+		// 常规条目用 de.IsDir()（ReadDir 已带类型，零系统调用）；仅符号链接需要 Info 解析。
 		isDir := de.IsDir()
-		if info, ierr := de.Info(); ierr == nil {
-			isDir = info.IsDir()
+		if de.Type()&fs.ModeSymlink != 0 {
+			if info, ierr := de.Info(); ierr == nil {
+				isDir = info.IsDir()
+			}
 		}
-		e := Entry{Name: name, IsDir: isDir, Ext: strings.ToLower(strings.TrimPrefix(filepath.Ext(name), "."))}
-		if !isDir {
-			e.Kind = fileKind(name, false)
-		} else {
+		e := Entry{Name: name, IsDir: isDir, Ext: strings.ToLower(strings.TrimPrefix(filepath.Ext(name), ".")), de: de}
+		if isDir {
 			e.Kind = "dir"
-		}
-		if info, ierr := de.Info(); ierr == nil {
-			e.Size = info.Size()
-			e.ModTime = info.ModTime().Unix()
+		} else {
+			e.Kind = fileKind(name, false)
 		}
 		entries = append(entries, e)
 	}
 
-	sortEntries(entries, r.URL.Query().Get("sort"), r.URL.Query().Get("order"))
+	// size/time 排序需要全量 stat（懒 stat 只适用于 name 排序）
+	if sortKey == "size" || sortKey == "time" {
+		s.fillStats(entries)
+	}
+	sortEntries(entries, sortKey, order)
+
+	// 缓存排序结果（3 秒内返回/翻页复用）
+	s.listCachePut(cacheKey, fi.ModTime(), entries)
 
 	// 服务端分页：避免大目录一次性全量传输（前端按 offset/limit 逐页加载）
 	total := len(entries)
-	limit := parseIntSafe(r.URL.Query().Get("limit"), 0, listMaxLimit)
-	offset := parseIntSafe(r.URL.Query().Get("offset"), 0, 1<<30)
-	if offset > total {
-		offset = total
+	page := slicePage(entries, offset, limit)
+	s.fillStats(page)
+	writeJSON(w, http.StatusOK, ListResp{
+		Path:      rel,
+		Entries:   page,
+		Total:     total,
+		Truncated: offset+len(page) < total,
+	})
+}
+
+// fillStats 为条目懒填充 Size/ModTime（只对传入的切片，避免全目录 stat）
+func (s *Server) fillStats(entries []Entry) {
+	for i := range entries {
+		if entries[i].de == nil {
+			continue // 已填充过（缓存复用）
+		}
+		if info, err := entries[i].de.Info(); err == nil {
+			entries[i].Size = info.Size()
+			entries[i].ModTime = info.ModTime().Unix()
+		}
+		entries[i].de = nil
+	}
+}
+
+// slicePage 按 offset/limit 切片
+func slicePage(entries []Entry, offset, limit int) []Entry {
+	if offset > len(entries) {
+		offset = len(entries)
 	}
 	if limit > 0 {
 		end := offset + limit
-		if end > total {
-			end = total
+		if end > len(entries) {
+			end = len(entries)
 		}
-		entries = entries[offset:end]
-	} else if offset > 0 {
-		entries = entries[offset:]
+		return entries[offset:end]
 	}
+	if offset > 0 {
+		return entries[offset:]
+	}
+	return entries
+}
 
-	rel := relOf(s.root, dir)
-	writeJSON(w, http.StatusOK, ListResp{
-		Path:      rel,
-		Entries:   entries,
-		Total:     total,
-		Truncated: offset+len(entries) < total,
-	})
+// listCacheGet 读列表缓存
+func (s *Server) listCacheGet(key string) *listCacheEntry {
+	s.listMu.Lock()
+	defer s.listMu.Unlock()
+	return s.listCache[key]
+}
+
+// listCachePut 写列表缓存（超限整体清空重建，防无界增长）
+func (s *Server) listCachePut(key string, dirMod time.Time, entries []Entry) {
+	s.listMu.Lock()
+	defer s.listMu.Unlock()
+	if s.listCache == nil {
+		s.listCache = make(map[string]*listCacheEntry)
+	}
+	if len(s.listCache) >= listCacheMax {
+		s.listCache = make(map[string]*listCacheEntry, listCacheMax)
+	}
+	// 深拷贝一份避免共享底层数组被后续 fillStats 修改
+	cp := append([]Entry(nil), entries...)
+	s.listCache[key] = &listCacheEntry{dirMod: dirMod, fetched: time.Now(), entries: cp}
 }
 
 // relOf 返回 root 下的相对路径（正斜杠形式，根为 "/"）

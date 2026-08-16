@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,14 +26,14 @@ import (
 )
 
 const (
-	thumbMaxDim  = 1024 // 客户端可请求的最大缩略图边长
+	thumbMaxDim               = 1024 // 客户端可请求的最大缩略图边长
 	thumbDirectServeThreshold = 6000 // 超过此尺寸的原图不做解码缩放，直接返回原图
-	thumbMaxAge  = 7 * 24 * time.Hour
-	thumbImgMaxConc = 2        // 图片解码/整读并发上限（与 ffmpeg 对称）
-	thumbTmpMaxAge = time.Hour // .tmp 残留清理阈值
+	thumbMaxAge               = 7 * 24 * time.Hour
+	thumbImgMaxConc           = 4      // 图片解码/整读并发上限（多客户端批量缩略图提速）
+	thumbTmpMaxAge            = time.Hour // .tmp 残留清理阈值
 )
 
-// ThumbCache 缩略图磁盘缓存 + 内存 LRU
+// ThumbCache 缩略图磁盘缓存 + 内存 LRU（图片缩略图专用；视频缩略图已 100% 浏览器抽帧）
 type ThumbCache struct {
 	dir   string
 	mu    sync.Mutex
@@ -51,13 +52,16 @@ type thumbCall struct {
 	ok   bool
 }
 
-func NewThumbCache() *ThumbCache {
-	dir := os.Getenv("LOCALAPPDATA")
-	if dir == "" {
-		dir = os.TempDir()
+// NewThumbCache 创建缩略图缓存（磁盘缓存 + 内存 LRU）。
+// 缓存目录：共享根目录下的隐藏文件夹 .FileServer\thumb（不污染系统目录、
+// 不在其他位置留文件；--hidden 未开启时该隐藏目录对列表/直链/搜索均不可见）。
+// 共享根目录不可写（只读介质/无权限）时回退系统临时目录。
+func NewThumbCache(root string) *ThumbCache {
+	dir := filepath.Join(root, ".FileServer", "thumb")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		dir = filepath.Join(os.TempDir(), "FileServer", "thumb")
+		os.MkdirAll(dir, 0o755)
 	}
-	dir = filepath.Join(dir, "FileServer", "thumb")
-	os.MkdirAll(dir, 0o755)
 	c := &ThumbCache{dir: dir, mem: make(map[string][]byte), elem: make(map[string]*list.Element), ll: list.New(), max: 512}
 	go c.cleanupLoop()
 	return c
@@ -220,10 +224,154 @@ func (s *Server) handleThumb(w http.ResponseWriter, r *http.Request) {
 	case "image":
 		s.serveImageThumb(w, r, abs, fi, wq, hq)
 	case "video":
-		s.serveVideoThumb(w, r, abs, fi, wq, hq)
+		// 视频缩略图已 100% 改为浏览器抽帧（服务端 ffmpeg 抽帧已废弃）：
+		// 返回 404 让旧版前端/直接请求降级为图标。
+		writeErr(w, http.StatusNotFound, "视频缩略图由浏览器抽帧生成")
 	default:
 		writeErr(w, http.StatusNotFound, "该类型不支持缩略图")
 	}
+}
+
+// ============================================================
+// /api/thumb-src：浏览器抽帧专用源。
+//
+// 背景：Chromium 的 <video preload=metadata> 对源发出开区间 Range
+// （bytes=0-），服务端若整段回源，抽一帧缩略图会把整个 500MB~1.4GB 文件
+// 传一遍——磁盘/网络/内存全被打爆（用户核心痛点）。
+//
+// 方案：只返回一个「截短的合法 MP4」：
+//   - moov 在头部（含怪封装巨 moov）：返回 [0, 16MB)——moov + 开头 1~2s
+//     样本都在其中，浏览器元数据秒读、seek 1s 命中样本，抽帧毫秒级完成；
+//   - moov 在尾部（正常录制片）：返回 [0, 16MB) + [moov] 拼接——头部样本区
+//     的字节与原文件逐字节一致，moov 内部 stco 偏移表依然有效，拼接后仍是
+//     合法 MP4；
+//   - 非 MP4 容器/解析失败/小文件：整段返回（带 Range 支持，行为同原文件）。
+//
+// 无论哪种情况，单次抽帧的传输量上限 16MB，且只读文件头尾（顺序读，快）。
+// ============================================================
+const thumbSrcLimit = 16 << 20 // 抽帧源头部截取上限 16MB
+
+// layoutEntry MP4 顶层布局缓存条目（moov 尾部扫描要遍历全部 mdat 头，
+// 在碎片盘上就是几百上千次寻道，必须缓存）
+type layoutEntry struct {
+	l   mp4Layout
+	t   time.Time
+}
+
+// serveThumbSrc GET /api/thumb-src?path=
+func (s *Server) serveThumbSrc(w http.ResponseWriter, r *http.Request) {
+	abs, err := s.safePath(r.URL.Query().Get("path"))
+	if err != nil {
+		writeErr(w, errToStatus(err), err.Error())
+		return
+	}
+	if s.hiddenBlocked(abs) {
+		writeErr(w, http.StatusNotFound, "路径不存在")
+		return
+	}
+	fi, err := os.Stat(abs)
+	if err != nil || fi.IsDir() {
+		writeErr(w, http.StatusNotFound, "无法访问该文件")
+		return
+	}
+	if fileKind(fi.Name(), false) != "video" {
+		writeErr(w, http.StatusNotFound, "该类型不支持抽帧源")
+		return
+	}
+	ext := strings.ToLower(filepath.Ext(fi.Name()))
+
+	// 优先 faststart 缓存文件（moov 前置、无碎片，顺序读最快）；无缓存用原文件
+	src := abs
+	if fp := s.faststartCachePath(abs, fi); fp != "" {
+		src = fp
+	}
+	f, err := os.Open(src)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "打开文件失败")
+		return
+	}
+	defer f.Close()
+	size := fi.Size()
+	if st, err := f.Stat(); err == nil {
+		size = st.Size()
+	}
+
+	// 非 MP4 容器（MKV/AVI/…）无法截取（顶层结构不同）：整段返回
+	if ext != ".mp4" && ext != ".m4v" && ext != ".mov" {
+		http.ServeContent(w, r, fi.Name(), fi.ModTime(), f)
+		return
+	}
+	if size <= thumbSrcLimit {
+		http.ServeContent(w, r, fi.Name(), fi.ModTime(), f) // 小文件整段
+		return
+	}
+
+	layout := s.mp4LayoutCached(src, size)
+	switch {
+	case layout.moovOffset < 0 || layout.moovSize < 8:
+		http.ServeContent(w, r, fi.Name(), fi.ModTime(), f) // 解析失败：整段兜底
+	case layout.moovOffset+layout.moovSize <= thumbSrcLimit:
+		// moov 完全在截取区内（moov 前置片/怪封装片）：头部即 moov + 样本
+		serveThumbSrcParts(w, r, f, []part{{0, thumbSrcLimit}})
+	case layout.moovOffset >= thumbSrcLimit:
+		// moov 在截取区之后（moov 后置片）：头部样本区 + 尾部 moov 拼接
+		serveThumbSrcParts(w, r, f, []part{{0, thumbSrcLimit}, {layout.moovOffset, layout.moovSize}})
+	default:
+		// moov 跨截取边界（超 16MB 的巨 moov）：整段兜底
+		http.ServeContent(w, r, fi.Name(), fi.ModTime(), f)
+	}
+}
+
+type part struct{ off, length int64 }
+
+// serveThumbSrcParts 流式输出若干文件区段拼接成的「虚拟文件」（200 整段响应，
+// 不处理 Range——浏览器抽帧元素会缓冲全部 16MB，seek 在缓冲内完成）。
+func serveThumbSrcParts(w http.ResponseWriter, r *http.Request, f *os.File, parts []part) {
+	var total int64
+	for _, p := range parts {
+		total += p.length
+	}
+	w.Header().Set("Content-Type", "video/mp4")
+	w.Header().Set("Content-Length", strconv.FormatInt(total, 10))
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.WriteHeader(http.StatusOK)
+	buf := make([]byte, 256<<10)
+	for _, p := range parts {
+		remaining := p.length
+		off := p.off
+		for remaining > 0 {
+			n := int64(len(buf))
+			if remaining < n {
+				n = remaining
+			}
+			rn, err := f.ReadAt(buf[:n], off)
+			if rn > 0 {
+				w.Write(buf[:rn])
+				off += int64(rn)
+				remaining -= int64(rn)
+			}
+			if err != nil {
+				return
+			}
+		}
+	}
+}
+
+// mp4LayoutCached MP4 顶层布局（带 1 小时缓存：moov 尾部扫描遍历全部 mdat 头，
+// 在碎片盘上代价高，同一文件多次抽帧不应重复扫描）
+func (s *Server) mp4LayoutCached(src string, size int64) mp4Layout {
+	key := fmt.Sprintf("%s|%d", src, size)
+	s.layoutMu.Lock()
+	defer s.layoutMu.Unlock()
+	if e, ok := s.layouts[key]; ok && time.Since(e.t) < time.Hour {
+		return e.l
+	}
+	l := mp4LayoutOf(src)
+	if len(s.layouts) >= 256 {
+		s.layouts = make(map[string]layoutEntry)
+	}
+	s.layouts[key] = layoutEntry{l, time.Now()}
+	return l
 }
 
 // thumbKey 缓存键：真实路径|大小|修改时间|尺寸 的 SHA1

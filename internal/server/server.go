@@ -2,6 +2,8 @@
 package server
 
 import (
+	"bytes"
+	"context"
 	"crypto/subtle"
 	"embed"
 	"errors"
@@ -12,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -25,15 +28,28 @@ var (
 
 // Server 文件服务器
 type Server struct {
-	root       string // 服务根目录（绝对路径）
-	hidden     bool   // 是否显示隐藏文件
-	auth       string // 可选口令 "user:pass"
-	verbose    bool
-	thumbs     *ThumbCache
-	ff         *Ffmpeg
-	fastStart  *FastStartCache
-	imgSem     chan struct{} // 图片缩略图解码/整读并发上限
-	started    time.Time
+	root    string // 服务根目录（绝对路径）
+	hidden  bool   // 是否显示隐藏文件
+	auth    string // 可选口令 "user:pass"
+	verbose bool
+	thumbs  *ThumbCache
+	ff      *Ffmpeg
+	hls     *HlsManager
+	imgSem  chan struct{} // 图片缩略图解码/整读并发上限
+	started time.Time
+
+	listMu    sync.Mutex
+	listCache map[string]*listCacheEntry // 目录列表短缓存（返回/翻页秒开）
+
+	fsDir string // 小文件 faststart 重封装缓存目录
+	fsMu  sync.Mutex
+	fsBusy map[string]bool // faststart 重封装进行中（防重复）
+
+	pw *prewarmState // moov 预读预热（机械硬盘冷读提速）
+	pb *playbackState // 直链播放活动跟踪（预热/重封装据此让路）
+
+	layoutMu sync.Mutex
+	layouts  map[string]layoutEntry // MP4 顶层布局缓存（thumb-src 抽帧源用）
 }
 
 // Options 服务器选项
@@ -45,16 +61,59 @@ type Options struct {
 
 // New 创建文件服务器
 func New(root string, opts Options) *Server {
+	root = filepath.Clean(root)
+
+	// 缓存基目录：共享根目录下的隐藏文件夹 .FileServer（不往系统目录写文件）。
+	// 根目录不可写（只读介质）时回退系统临时目录。
+	base := filepath.Join(root, ".FileServer")
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		base = filepath.Join(os.TempDir(), "FileServer")
+		os.MkdirAll(base, 0o755)
+	}
+	fsDir := filepath.Join(base, "faststart")
+	os.MkdirAll(fsDir, 0o755)
+	go cleanupOldFiles(fsDir, 7*24*time.Hour) // 清理 7 天前的重封装缓存
+
 	return &Server{
-		root:      filepath.Clean(root),
-		hidden:    opts.Hidden,
-		auth:      opts.Auth,
-		verbose:   opts.Verbose,
-		thumbs:    NewThumbCache(),
-		ff:        FindFfmpeg(),
-		fastStart: NewFastStartCache(),
-		imgSem:    make(chan struct{}, thumbImgMaxConc),
-		started:   time.Now(),
+		root:    root,
+		hidden:  opts.Hidden,
+		auth:    opts.Auth,
+		verbose: opts.Verbose,
+		thumbs:  NewThumbCache(root),
+		ff:      FindFfmpeg(),
+		hls:     NewHlsManager(root),
+		imgSem:  make(chan struct{}, thumbImgMaxConc),
+		started: time.Now(),
+		fsDir:   fsDir,
+		fsBusy:  make(map[string]bool),
+		pw:      &prewarmState{warmed: make(map[string]time.Time)},
+		pb:      &playbackState{},
+		layouts: make(map[string]layoutEntry),
+	}
+}
+
+// cleanupOldFiles 删除 dir 下超过 maxAge 的文件（启动时调用一次）
+func cleanupOldFiles(dir string, maxAge time.Duration) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-maxAge)
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
+		if info, err := e.Info(); err == nil && info.ModTime().Before(cutoff) {
+			os.Remove(p)
+		}
+	}
+}
+
+// Close 释放资源（终止 HLS 转码进程）
+func (s *Server) Close() {
+	if s.hls != nil {
+		s.hls.Close()
 	}
 }
 
@@ -64,7 +123,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/info", s.handleInfo)
 	mux.HandleFunc("GET /api/list", s.handleList)
 	mux.HandleFunc("GET /api/thumb", s.handleThumb)
+	mux.HandleFunc("GET /api/thumb-src", s.serveThumbSrc)
 	mux.HandleFunc("GET /api/file", s.handleFile)
+	mux.HandleFunc("GET /api/video-info", s.handleVideoInfo)
+	mux.HandleFunc("GET /api/hls", s.handleHls)
+	mux.HandleFunc("GET /api/prewarm", s.handlePrewarm)
 	mux.HandleFunc("GET /api/zip", s.handleZip)
 	mux.HandleFunc("GET /api/search", s.handleSearch)
 	mux.Handle("GET /", s.frontendHandler())
@@ -90,6 +153,7 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"name":         "FileServer",
 		"ffmpeg":       s.ff.Available(),
+		"hls":          s.ff.Available(), // HLS 转码与 ffmpeg 同开关
 		"version":      "1.0.0",
 		"kinds":        kindExtMap(), // 统一扩展名→类型映射（前端不再自维护）
 		"search_limit": searchMaxLimit,
@@ -118,7 +182,9 @@ func (s *Server) frontendHandler() http.Handler {
 	})
 }
 
-// handleFile GET /api/file?path= 下载/预览文件（支持 Range 断点续传）
+// handleFile GET /api/file?path= 下载/预览文件（支持 Range 断点续传）。
+// 直链播放（faststart MP4 / WebM 等浏览器原生格式）也走这里；
+// 需要转码的格式由前端经 /api/video-info 判定后走 /api/hls。
 func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 	abs, err := s.safePath(r.URL.Query().Get("path"))
 	if err != nil {
@@ -149,11 +215,22 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 	name := fi.Name()
 	// 设置正确的 MIME 与 inline/attachment 策略
 	kind := fileKind(name, false)
+	// 直链播放跟踪：视频/音频的 Range 请求（浏览器流式播放）标记播放活动，
+	// moov 预热/缩略图抽帧/faststart 重封装据此让路——机械硬盘上并行读者
+	// 会把播放拖死（用户核心痛点：目录浏览后点开视频加载不出来）。
+	if (kind == "video" || kind == "audio") && r.Header.Get("Range") != "" {
+		s.markVideoRead()
+	}
 	mimeType := fileMimeType(name, f)
 	disposition := "attachment"
 	switch kind {
 	case "image", "video", "audio", "pdf", "text":
 		disposition = "inline"
+	}
+	// ?dl=1 强制附件下载（下载按钮使用）：即使视频/图片也要原始文件字节，
+	// 不能给浏览器 inline 预览语义（部分浏览器会忽略 download 属性）。
+	if r.URL.Query().Get("dl") == "1" {
+		disposition = "attachment"
 	}
 	// HTML/SVG/JS 等可执行内容强制 attachment：即使攻击者能写入共享目录，
 	// 直链打开也只是下载，不会在 FileServer 源内以 text/html 渲染执行脚本。
@@ -167,29 +244,228 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", mimeType)
 	w.Header().Set("Accept-Ranges", "bytes")
 
-	// MP4 非 faststart（moov 在文件尾部或缺失）时，浏览器必须抓取整个索引才能起播，
-	// 大视频表现为「点开后长时间黑屏」。有 ffmpeg 时先重封装为分片 MP4 缓存文件
-	// （-c copy 几乎零开销），然后统一按缓存文件服务——初始请求与后续 seek 的
-	// Range 请求共用同一份字节布局，不再出现「流式 remux + 原始文件 Range」
-	// 两种表示混用导致的 seek 错位。
-	if kind == "video" && strings.HasPrefix(mimeType, "video/mp4") &&
-		s.ff != nil && mp4NeedsFastStart(abs) {
-		if fp, cerr := s.fastStartVideo(abs, fi); cerr == nil {
-			if ff, oerr := os.Open(fp); oerr == nil {
-				f.Close() // 走缓存文件，原始句柄不再需要（避免整段流式期间持续占用）
-				defer ff.Close()
-				http.ServeContent(w, r, name, fi.ModTime(), ff)
+	// ?fs=1：小文件 faststart 化后的直链播放（video-info 已预热重封装缓存；
+	// 缓存未就绪时回退原文件——小文件 moov 在尾部也只是几百毫秒内起播）
+	if r.URL.Query().Get("fs") == "1" && s.ff != nil {
+		if fp := s.faststartCachePath(abs, fi); fp != "" {
+			if ffs, oerr := os.Open(fp); oerr == nil {
+				f.Close()
+				defer ffs.Close()
+				http.ServeContent(w, r, name, fi.ModTime(), ffs)
 				return
-			} else {
-				log.Printf("faststart 缓存打开失败，回退原始文件: %v", oerr)
 			}
-		} else {
-			// 重封装失败（如 ffmpeg 被移除）：回退原始文件，仍可下载，
-			// 仅浏览器需整段缓冲才能起播
-			log.Printf("faststart 重封装失败，回退原始文件: %v", cerr)
 		}
 	}
 	http.ServeContent(w, r, name, fi.ModTime(), f)
+}
+
+// faststartCachePath 返回 faststart 重封装缓存的路径；不存在/不适用返回 ""
+// （不限文件大小：大文件首次播放后后台重封装，之后直链缓存秒开）
+func (s *Server) faststartCachePath(abs string, fi os.FileInfo) string {
+	if s.fsDir == "" {
+		return ""
+	}
+	p := filepath.Join(s.fsDir, mediaKey(abs, fi)+".mp4")
+	if info, err := os.Stat(p); err == nil && info.Size() > 0 {
+		return p
+	}
+	return ""
+}
+
+// warmFaststart 后台把 MP4 重封装为 faststart 缓存（单飞防重复）。
+// 大文件是磁盘速长任务：低于正常优先级运行，不抢正在播放的直链链路。
+func (s *Server) warmFaststart(abs string, fi os.FileInfo) {
+	if s.ff == nil || s.faststartCachePath(abs, fi) != "" {
+		return
+	}
+	key := mediaKey(abs, fi)
+	s.fsMu.Lock()
+	if s.fsBusy[key] {
+		s.fsMu.Unlock()
+		return
+	}
+	s.fsBusy[key] = true
+	s.fsMu.Unlock()
+	defer func() {
+		s.fsMu.Lock()
+		delete(s.fsBusy, key)
+		s.fsMu.Unlock()
+	}()
+
+	// 播放进行中让路：重封装是整文件顺序读（大文件要跑几分钟），
+	// 机械硬盘上与播放并行会互相拖慢。等播放结束再推进，
+	// 缓存只影响「下次打开」的速度，本次播放优先。
+	for s.hls.Active() || s.directPlaying() {
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	dst := filepath.Join(s.fsDir, key+".mp4")
+	if err := s.ff.Faststart(context.Background(), abs, dst, fi.Size()); err != nil {
+		os.Remove(dst + ".tmp")
+	}
+}
+
+// handleVideoInfo GET /api/video-info?path=
+// 返回播放决策：direct（浏览器原生直链）/ hls（需服务端转码流化），
+// 以及时长、分辨率等元数据（前端播放器进度条/信息展示）。
+//
+// 性能要点：决策本身毫秒级返回，绝不等待 ffprobe（部分源探测一次要十几秒，
+// 会饿死播放链路）——决策仅依赖文件扩展名与 MP4 box 头部（本地读取）；
+// 元数据探测转入后台缓存，前端 2 秒后二次查询可拿到时长。
+func (s *Server) handleVideoInfo(w http.ResponseWriter, r *http.Request) {
+	abs, err := s.safePath(r.URL.Query().Get("path"))
+	if err != nil {
+		writeErr(w, errToStatus(err), err.Error())
+		return
+	}
+	if s.hiddenBlocked(abs) {
+		writeErr(w, http.StatusNotFound, "路径不存在")
+		return
+	}
+	fi, err := os.Stat(abs)
+	if err != nil || fi.IsDir() {
+		writeErr(w, http.StatusNotFound, "无法访问该文件")
+		return
+	}
+
+	kind := fileKind(fi.Name(), false)
+	if kind != "video" {
+		writeErr(w, http.StatusBadRequest, "该文件不是视频")
+		return
+	}
+
+	ext := strings.ToLower(filepath.Ext(fi.Name()))
+	resp := map[string]any{
+		"mode": "direct",
+		"mime": mediaMime(ext),
+	}
+
+	// 快速决策（完全不依赖 ffprobe，毫秒级）：
+	// - WebM：浏览器原生可播 → direct
+	// - MP4 家族：读文件头/尾 256KB 字节判断 HEVC（hvc1/hev1 标志）——
+	//   HEVC → hls；小文件（≤32MB，完整下载毫秒级）或 moov 在头部
+	//   （≤256KB，含怪封装巨 moov：Chrome 顺序下载 moov 即可解析起播，
+	//   ffmpeg 对碎片化 moov 构建索引反而要十几秒）→ direct；
+	//   moov 在中/尾部的大文件 → hls（Chrome 直链要下整个文件，
+	//   ffmpeg 读尾部 moov 快，秒级出片）
+	// - 其余容器（MKV/AVI/...）：hls
+	switch ext {
+	case ".webm":
+		// direct
+	case ".mp4", ".m4v", ".mov":
+		if mp4HasHEVC(abs) {
+			resp["mode"] = "hls"
+		} else if fi.Size() <= 32*1024*1024 || mp4IsFastStart(abs) {
+			// 直链即点即播。首次播放时后台 faststart 化
+			// （copy 重封装，大文件磁盘速任务低于正常优先级），
+			// 完成后走缓存直链，二次打开秒开。
+			if s.ff != nil && s.faststartCachePath(abs, fi) == "" {
+				go s.warmFaststart(abs, fi)
+			}
+			if s.faststartCachePath(abs, fi) != "" {
+				resp["faststart"] = true // 直链缓存已就绪（起播最快）
+			}
+		} else {
+			// moov 中/尾的大文件：直链要下整个文件才能解析，走 HLS copy 重封装
+			resp["mode"] = "hls"
+		}
+	default:
+		if s.ff != nil {
+			resp["mode"] = "hls"
+		}
+	}
+
+	// 元数据：优先内存缓存（命中即返回完整信息）；
+	// 未命中则后台探测（不阻塞本次响应），前端稍后二次查询获得 duration 等。
+	if s.ff != nil {
+		if info, ierr := s.ff.ProbeMediaCached(abs, fi); ierr == nil {
+			resp["duration"] = info.Duration
+			resp["width"] = info.Width
+			resp["height"] = info.Height
+		} else {
+			go s.ff.ProbeMedia(context.Background(), abs, fi)
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// mp4HasHEVC 判断 MP4 视频编码是否为 HEVC：读文件头/尾各 256KB，
+// 查找 HEVC sample entry 标志（hvc1/hev1）。faststart 文件 moov 在头部、
+// 非 faststart 在尾部，两侧都查即可毫秒级判定，无需 ffprobe
+// （部分源 ffprobe 一次要十几秒，绝不能放决策主链路上）。
+func mp4HasHEVC(abs string) bool {
+	f, err := os.Open(abs)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || st.Size() < 1024 {
+		return false
+	}
+	chunk := int64(256 * 1024)
+	buf := make([]byte, chunk)
+	// 头部
+	n, _ := f.ReadAt(buf, 0)
+	if n > 0 && bytes.Contains(buf[:n], []byte("hvc1")) {
+		return true
+	}
+	if n > 0 && bytes.Contains(buf[:n], []byte("hev1")) {
+		return true
+	}
+	// 尾部（moov 在末尾的文件）
+	off := st.Size() - chunk
+	if off < 0 {
+		off = 0
+	}
+	n2, _ := f.ReadAt(buf, off)
+	if n2 > 0 && bytes.Contains(buf[:n2], []byte("hvc1")) {
+		return true
+	}
+	if n2 > 0 && bytes.Contains(buf[:n2], []byte("hev1")) {
+		return true
+	}
+	return false
+}
+
+// handleHls GET /api/hls?path=&f=index.m3u8|seg_000001.m4s
+// 提供 HLS 播放列表与分片。首次请求触发（或复用）转码会话并等待首片产出。
+// abandon=1：前端关闭播放器时通知服务端终止该文件的转码会话——
+// 用户已经离开这个视频，机械硬盘上持续读写会拖慢下一个视频的首片。
+func (s *Server) handleHls(w http.ResponseWriter, r *http.Request) {
+	if s.ff == nil {
+		writeErr(w, http.StatusNotFound, "服务端未启用视频转码")
+		return
+	}
+	abs, err := s.safePath(r.URL.Query().Get("path"))
+	if err != nil {
+		writeErr(w, errToStatus(err), err.Error())
+		return
+	}
+	if s.hiddenBlocked(abs) {
+		writeErr(w, http.StatusNotFound, "路径不存在")
+		return
+	}
+	fi, err := os.Stat(abs)
+	if err != nil || fi.IsDir() {
+		writeErr(w, http.StatusNotFound, "无法访问该文件")
+		return
+	}
+	if r.URL.Query().Get("abandon") == "1" {
+		s.hls.Abandon(mediaKey(abs, fi))
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	fname := r.URL.Query().Get("f")
+	if fname == "" {
+		fname = "index.m3u8"
+	}
+	session, err := s.hls.Get(r.Context(), abs, fi, s.ff)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.serveHlsFile(w, r, session, fname)
 }
 
 // fileMimeType 返回文件正确的 MIME 类型。
