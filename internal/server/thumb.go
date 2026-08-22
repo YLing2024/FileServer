@@ -57,7 +57,7 @@ type thumbCall struct {
 // 不在其他位置留文件；--hidden 未开启时该隐藏目录对列表/直链/搜索均不可见）。
 // 共享根目录不可写（只读介质/无权限）时回退系统临时目录。
 func NewThumbCache(root string) *ThumbCache {
-	dir := filepath.Join(root, ".FileServer", "thumb")
+	dir := filepath.Join(root, cacheDirName, "thumb")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		dir = filepath.Join(os.TempDir(), "FileServer", "thumb")
 		os.MkdirAll(dir, 0o755)

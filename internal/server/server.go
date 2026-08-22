@@ -26,6 +26,17 @@ var (
 	errNotFound  = errors.New("路径不存在")
 )
 
+// cacheDirName 服务内部缓存目录名（位于服务根目录下）。
+// 该名字为保留名：无论是否开启 --hidden，列表/搜索/zip/直链等所有
+// HTTP 访问都不可见、不可访问——否则开启 --hidden 后，缩略图/HLS 转码
+// 缓存（含转码副本）会被当作普通点开头文件暴露成可下载资源。
+const cacheDirName = ".FileServer"
+
+// isCacheEntry 条目名是否为保留缓存目录名（大小写不敏感：
+// Windows 文件系统大小写不敏感，需兜住 .fileserver 等大小写变体；
+// POSIX 上同名不同大小写的目录极罕见，误伤面可忽略）。
+func isCacheEntry(name string) bool { return strings.EqualFold(name, cacheDirName) }
+
 // Server 文件服务器
 type Server struct {
 	root    string // 服务根目录（绝对路径）
@@ -65,7 +76,7 @@ func New(root string, opts Options) *Server {
 
 	// 缓存基目录：共享根目录下的隐藏文件夹 .FileServer（不往系统目录写文件）。
 	// 根目录不可写（只读介质）时回退系统临时目录。
-	base := filepath.Join(root, ".FileServer")
+	base := filepath.Join(root, cacheDirName)
 	if err := os.MkdirAll(base, 0o755); err != nil {
 		base = filepath.Join(os.TempDir(), "FileServer")
 		os.MkdirAll(base, 0o755)
@@ -566,13 +577,11 @@ func sanitizeFilename(name string) string {
 	}, name)
 }
 
-// hiddenBlocked 判断 abs 相对根目录的任一路径分量是否以 . 开头（隐藏）。
-// --hidden 未开启时，隐藏文件/目录（含隐藏祖先目录）在 file/thumb/zip 上
-// 与列表、搜索保持一致的拒绝语义，防止直链或打包绕过 UI 隐藏设置。
+// hiddenBlocked 判断 abs 是否不可通过 HTTP 访问：
+//  1. 任一路径分量为保留缓存目录名 .FileServer —— 无论 --hidden 与否一律拒绝；
+//  2. 未开启 --hidden 时，任一分量以 . 开头（隐藏）拒绝——与列表/搜索/zip
+//     的过滤语义一致，防止直链或打包绕过 UI 隐藏设置。
 func (s *Server) hiddenBlocked(abs string) bool {
-	if s.hidden {
-		return false
-	}
 	rel, err := filepath.Rel(s.root, abs)
 	if err != nil {
 		return false
@@ -581,7 +590,10 @@ func (s *Server) hiddenBlocked(abs string) bool {
 		return false // 根目录本身永不视为隐藏
 	}
 	for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
-		if strings.HasPrefix(part, ".") {
+		if isCacheEntry(part) {
+			return true
+		}
+		if !s.hidden && strings.HasPrefix(part, ".") {
 			return true
 		}
 	}

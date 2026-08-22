@@ -99,6 +99,12 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, errToStatus(err), err.Error())
 		return
 	}
+	// 隐藏路径（--hidden 未开启）与保留缓存目录（.FileServer，任何情况）
+	// 与直链/zip 语义一致地拒绝列出
+	if s.hiddenBlocked(dir) {
+		writeErr(w, http.StatusNotFound, "路径不存在")
+		return
+	}
 	fi, err := os.Stat(dir)
 	if err != nil {
 		writeErr(w, errToStatus(err), "无法访问该路径")
@@ -142,7 +148,8 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	entries := make([]Entry, 0, len(des))
 	for _, de := range des {
 		name := de.Name()
-		if !s.hidden && strings.HasPrefix(name, ".") {
+		// 保留缓存目录（.FileServer）任何情况下不出现；其余点开头条目仅 --hidden 时可见
+		if isCacheEntry(name) || (!s.hidden && strings.HasPrefix(name, ".")) {
 			continue
 		}
 		// stat 语义的 IsDir：指向目录的符号链接按目录显示/操作（前端可正常进入），

@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -157,6 +158,91 @@ func TestHiddenBlockedRoot(t *testing.T) {
 	}
 	if !srv.hiddenBlocked(filepath.Join(srv.root, ".git", "config")) {
 		t.Error("隐藏祖先目录内的文件应被识别")
+	}
+}
+
+// TestCacheDirNeverExposed 保留缓存目录 .FileServer 在任何配置下都不可见/不可访问。
+// 回归背景：开启 --hidden 后用户点开头文件全部可见，但服务缓存目录（含 HLS
+// 转码副本、缩略图缓存）曾被当作普通点开头目录暴露在列表/搜索/zip/直链中。
+func TestCacheDirNeverExposed(t *testing.T) {
+	for _, hidden := range []bool{false, true} {
+		srv := New(t.TempDir(), Options{Hidden: hidden})
+		root := srv.root
+		cache := filepath.Join(root, cacheDirName)
+		// 模拟真实缓存布局
+		os.MkdirAll(filepath.Join(cache, "hls"), 0o755)
+		os.WriteFile(filepath.Join(cache, "hls", "index.m3u8"), []byte("#EXTM3U"), 0o644)
+		os.WriteFile(filepath.Join(cache, "leak.txt"), []byte("cache-secret"), 0o644)
+		// 用户自己的普通文件与隐藏目录（--hidden 开启时应正常可见）
+		os.WriteFile(filepath.Join(root, "movie.mp4"), []byte("v"), 0o644)
+		os.MkdirAll(filepath.Join(root, ".userdir"), 0o755)
+		os.WriteFile(filepath.Join(root, ".userdir", "u.txt"), []byte("u"), 0o644)
+
+		ts := httptest.NewServer(srv.Handler())
+		t.Cleanup(ts.Close)
+		base := ts.URL
+		status := func(u string) int {
+			r := get(t, u)
+			io.Copy(io.Discard, r.Body)
+			r.Body.Close()
+			return r.StatusCode
+		}
+
+		// 根列表：不含缓存目录；普通文件恒在；用户隐藏目录按 --hidden 语义
+		var lr ListResp
+		resp := get(t, base+"/api/list?path=/")
+		json.NewDecoder(resp.Body).Decode(&lr)
+		resp.Body.Close()
+		names := map[string]bool{}
+		for _, e := range lr.Entries {
+			names[e.Name] = true
+		}
+		if names[cacheDirName] {
+			t.Errorf("hidden=%v: 根列表不应包含缓存目录 %s", hidden, cacheDirName)
+		}
+		if !names["movie.mp4"] {
+			t.Errorf("hidden=%v: 普通文件应在列表中", hidden)
+		}
+		if names[".userdir"] == !hidden {
+			t.Errorf("hidden=%v: 用户隐藏目录可见性错误（出现=%v）", hidden, names[".userdir"])
+		}
+
+		// 直接列缓存目录（含大小写变体）：404
+		for _, p := range []string{"/" + cacheDirName, "/.fileserver", "/" + cacheDirName + "/hls"} {
+			if code := status(base+"/api/list?path="+url.QueryEscape(p)); code != http.StatusNotFound {
+				t.Errorf("hidden=%v: 列表缓存目录 %s 应 404, 得到 %d", hidden, p, code)
+			}
+		}
+
+		// 直链/缩略图/抽帧源/播放决策/打包/搜索起点：全部拒绝
+		// （prewarm 是 fire-and-forget 接口，被拦时按设计返回 204 且不做任何预热，
+		// 拦截逻辑已由上方 hiddenBlocked 单元断言覆盖，不在此重复）
+		checks := map[string]string{
+			"/api/file?path=/.FileServer/leak.txt":       "直链",
+			"/api/thumb?path=/.FileServer/leak.txt":      "缩略图",
+			"/api/thumb-src?path=/.FileServer/leak.txt":  "抽帧源",
+			"/api/video-info?path=/.FileServer/leak.txt": "播放决策",
+			"/api/zip?path=/.FileServer":                 "打包",
+			"/api/search?q=index&path=/.fileserver":      "搜索起点",
+		}
+		for u, what := range checks {
+			if code := status(base + u); code != http.StatusNotFound {
+				t.Errorf("hidden=%v: %s 访问缓存目录应 404, 得到 %d (%s)", hidden, what, code, u)
+			}
+		}
+
+		// 全局搜索不泄漏缓存内容
+		resp2 := get(t, base+"/api/search?q=index&path=/")
+		var out struct {
+			Results []SearchResult `json:"results"`
+		}
+		json.NewDecoder(resp2.Body).Decode(&out)
+		resp2.Body.Close()
+		for _, r := range out.Results {
+			if isCacheEntry(filepath.Base(r.Path)) {
+				t.Errorf("hidden=%v: 搜索结果不应包含缓存路径: %+v", hidden, r)
+			}
+		}
 	}
 }
 

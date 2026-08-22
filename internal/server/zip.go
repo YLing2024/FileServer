@@ -51,8 +51,9 @@ func (s *Server) handleZip(w http.ResponseWriter, r *http.Request) {
 		if p == dir {
 			return nil
 		}
-		// 隐藏条目（.开头）不打包，与列表/搜索/直链下载语义一致
-		if !s.hidden && strings.HasPrefix(d.Name(), ".") {
+		// 保留缓存目录（.FileServer）任何情况不打包；其余点开头条目仅 --hidden
+		// 时打包，与列表/搜索/直链下载语义一致
+		if isCacheEntry(d.Name()) || (!s.hidden && strings.HasPrefix(d.Name(), ".")) {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}

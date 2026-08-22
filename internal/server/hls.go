@@ -103,7 +103,7 @@ func (s *hlsSession) idleFor() time.Duration {
 // 缓存目录：共享根目录下的隐藏文件夹 .FileServer\hls（不污染系统目录）。
 // 共享根目录不可写时回退系统临时目录。
 func NewHlsManager(root string) *HlsManager {
-	dir := filepath.Join(root, ".FileServer", "hls")
+	dir := filepath.Join(root, cacheDirName, "hls")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		dir = filepath.Join(os.TempDir(), "FileServer", "hls")
 		os.MkdirAll(dir, 0o755)

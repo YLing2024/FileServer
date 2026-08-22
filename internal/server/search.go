@@ -40,6 +40,12 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "搜索起点不是目录")
 		return
 	}
+	// 隐藏路径（--hidden 未开启）与保留缓存目录（.FileServer，任何情况）
+	// 不可作为搜索起点
+	if s.hiddenBlocked(root) {
+		writeErr(w, http.StatusNotFound, "路径不存在")
+		return
+	}
 
 	limit := parseIntSafe(r.URL.Query().Get("limit"), 500, searchMaxLimit)
 
@@ -58,7 +64,8 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		if depth := strings.Count(filepath.ToSlash(rel), "/"); depth > searchMaxDepth {
 			return fs.SkipDir
 		}
-		if !s.hidden && strings.HasPrefix(d.Name(), ".") {
+		// 保留缓存目录（.FileServer）任何情况下跳过；其余点开头条目仅 --hidden 时可见
+		if isCacheEntry(d.Name()) || (!s.hidden && strings.HasPrefix(d.Name(), ".")) {
 			if d.IsDir() {
 				return fs.SkipDir
 			}
