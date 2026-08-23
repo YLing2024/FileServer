@@ -25,8 +25,9 @@ import (
 func main() {
 	port := flag.Int("port", 0, "监听端口（默认 8080，被占用自动递增）")
 	dir := flag.String("dir", "", "服务目录（默认 exe 所在目录）")
-	noBrowser := flag.Bool("no-browser", false, "不自动打开浏览器")
+	browser := flag.Bool("browser", false, "启动后自动打开默认浏览器（默认关闭）")
 	hidden := flag.Bool("hidden", false, "显示隐藏文件（点开头）")
+	ffmpeg := flag.Bool("ffmpeg", false, "开启冷门格式（MKV/RMVB/HEVC 等）在线转码播放与服务端缩略图（需 exe 旁 ffmpeg；有性能代价）")
 	auth := flag.String("auth", "", "可选访问口令 user:pass")
 	verbose := flag.Bool("v", false, "详细访问日志")
 	noQR := flag.Bool("no-qr", false, "不在终端显示地址二维码")
@@ -61,7 +62,7 @@ func main() {
 		log.Fatalf("无法监听端口: %v", err)
 	}
 
-	srv := server.New(rootAbs, server.Options{Hidden: *hidden, Auth: *auth, Verbose: *verbose})
+	srv := server.New(rootAbs, server.Options{Hidden: *hidden, Auth: *auth, Verbose: *verbose, FFmpeg: *ffmpeg})
 	handler := srv.Handler()
 
 	// ---- 控制台输出 ----
@@ -90,7 +91,7 @@ func main() {
 		printQRs(actualPort, ips)
 	}
 
-	if !*noBrowser {
+	if *browser {
 		go platform.OpenBrowser(fmt.Sprintf("http://127.0.0.1:%d", actualPort))
 	}
 

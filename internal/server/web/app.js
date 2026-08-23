@@ -27,6 +27,11 @@ const listURL = (p, sort, order, limit, offset) => `/api/list?path=${pathParam(p
 const searchURL = (q, p, limit) => `/api/search?q=${pathParam(q)}&path=${pathParam(p)}&limit=${limit}`;
 const videoInfoURL = (p) => '/api/video-info?path=' + pathParam(p);
 const hlsURL = (p) => '/api/hls?path=' + pathParam(p) + '&f=index.m3u8';
+const normalizeURL = (p) => '/api/normalize?path=' + pathParam(p);
+const normalizeStatusURL = '/api/normalize/status';
+const backupsURL = '/api/normalize/backups';
+const restoreURL = (p) => '/api/normalize/restore?path=' + pathParam(p);
+const deleteBackupURL = (p) => '/api/normalize/delete-backup?path=' + pathParam(p);
 
 function fmtSize(n) {
   if (n == null) return '';
@@ -95,6 +100,7 @@ const state = {
   searchLimit: 1000,  // 搜索条数上限（4.5，从 /api/info 取服务端值）
   hasMore: false,     // 目录列表是否还有更多页（服务端分页 3.1）
   listSeq: 0,         // 列表加载序列号（竞态保护）
+  weirdPaths: null,   // 当前目录怪封装视频的路径集合（Set，异步加载）
 };
 
 // 单次目录列表页大小（唯一来源，取代旧的分页常量）
@@ -209,6 +215,10 @@ function renderCrumbs() {
 async function loadList(path) {
   state.path = path || '/';
   state.searching = false;
+  // 列表重新加载：旧网格的抽帧 video 元素随 DOM 销毁，但并发集合可能残留
+  // （幽灵任务占满并发槽、导致新缩略图全部不生成）——清空自愈。
+  activeGrabsSet.clear();
+  window.__thumbGrabs = 0;
   $('searchInput').value = '';
   $('searchClear').classList.add('hidden');
   showSkeleton(true);
@@ -219,15 +229,70 @@ async function loadList(path) {
     if (seq !== state.listSeq) return; // 已有更新的导航
     state.entries = data.entries;
     state.hasMore = !!data.truncated;
+    state.weirdPaths = new Set(); // 先置空，避免旧的误标
     showSkeleton(false);
     render();
     // 返回本目录时恢复之前记住的滚动位置
     const saved = state.scrollMap[state.path];
     if (saved != null) requestAnimationFrame(() => window.scrollTo(0, saved));
+    // 异步补怪封装标记（列表不阻塞判定）：完成后再渲染一次加 badge
+    loadWeirdFlag(seq);
   } catch (e) {
     if (seq !== state.listSeq) return;
     showSkeleton(false);
     toast(e.message, true);
+  }
+}
+
+// loadWeirdFlag 异步获取当前目录的怪封装路径集合（带缓存，服务端已优化顺序读）。
+// 注意：不能全量 render()——会重建网格销毁在途抽帧 video 元素，
+// 而 activeGrabs 计数不同步清零，导致并发槽永久占满、后续缩略图全部不生成。
+// 改为就地给已有卡片补 badge，不打断抽帧。
+async function loadWeirdFlag(seq) {
+  try {
+    const d = await api('/api/weird?path=' + pathParam(state.path));
+    if (seq !== state.listSeq) return; // 已导航离开
+    state.weirdPaths = new Set(d.weird || []);
+    patchWeirdBadges();
+  } catch (_) { /* 服务端不可用时静默，列表仍可用 */ }
+}
+
+// patchWeirdBadges 就地给已渲染的怪封装视频卡片/列表行补 badge + 规整按钮
+function patchWeirdBadges() {
+  // 补一个 badge+规整按钮到容器
+  const addRow = (container, p) => {
+    if (container.querySelector('.card-actions')) return; // 已有 badge
+    const row = document.createElement('div');
+    row.className = 'card-actions';
+    const badge = document.createElement('span');
+    badge.className = 'weird-badge';
+    badge.textContent = '怪封装';
+    badge.title = '该视频 moov 过大或 mdat 碎片化，起播较慢；可规整化使其秒开';
+    const btn = document.createElement('button');
+    btn.className = 'mini-btn normalize-btn';
+    btn.textContent = '规整化';
+    btn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      startNormalize(p, btn);
+    });
+    row.appendChild(badge);
+    row.appendChild(btn);
+    container.appendChild(row);
+  };
+  if (state.view === 'grid') {
+    document.querySelectorAll('.card.kind-video').forEach((card) => {
+      const p = card.dataset.path ? joinPath(state.path, card.dataset.path) : null;
+      if (!p || !state.weirdPaths.has(p)) return;
+      const info = card.querySelector('.card-info');
+      if (info) addRow(info, p);
+    });
+  } else if (state.view === 'list') {
+    document.querySelectorAll('#listBody tr').forEach((tr) => {
+      const p = tr.dataset.path ? joinPath(state.path, tr.dataset.path) : null;
+      if (!p || !state.weirdPaths.has(p)) return;
+      const act = tr.querySelector('.row-act');
+      if (act) addRow(act, p);
+    });
   }
 }
 
@@ -265,7 +330,6 @@ function entryPath(e) {
 }
 
 function renderGrid(entries) {
-  pwSent = 0; // 每次列表渲染重置预热预算（滚动进入视口的卡片仍可继续预热）
   const grid = $('grid');
   grid.innerHTML = '';
   for (const e of entries) {
@@ -318,9 +382,6 @@ function renderGrid(entries) {
       thumb.appendChild(img);
       thumb.appendChild(downloadBtn(e, p));
       observeVideoThumb(e, img, holder, thumb, p);
-      // 卡片进入视口后预热 moov（见 prewarmObserver）
-      card.__pwJob = { e, p };
-      prewarmObserver.observe(card);
     } else {
       const holder = document.createElement('div');
       holder.className = 'centered-icon';
@@ -333,12 +394,57 @@ function renderGrid(entries) {
     info.className = 'card-info';
     info.innerHTML = `<div class="card-name" title="${esc(e.name)}">${esc(e.name)}</div>
       <div class="card-meta">${kind === 'dir' ? '文件夹' : fmtSize(e.size)}${e.mtime ? ' · ' + fmtTime(e.mtime) : ''}</div>`;
+    // 怪封装视频：加 badge + 规整按钮（仅 video 且服务端标注 weird）
+    if (state.weirdPaths && state.weirdPaths.has(p) && kind === 'video') {
+      const row = document.createElement('div');
+      row.className = 'card-actions';
+      const badge = document.createElement('span');
+      badge.className = 'weird-badge';
+      badge.textContent = '怪封装';
+      badge.title = '该视频 moov 过大或 mdat 碎片化，起播较慢；可规整化使其秒开';
+      const btn = document.createElement('button');
+      btn.className = 'mini-btn normalize-btn';
+      btn.textContent = '规整化';
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        startNormalize(p, btn);
+      });
+      row.appendChild(badge);
+      row.appendChild(btn);
+      info.appendChild(row);
+    }
 
     card.appendChild(thumb);
     card.appendChild(info);
     card.addEventListener('click', () => onEntryClick(e));
     grid.appendChild(card);
   }
+}
+
+// startNormalize 触发对某个视频的规整化，并反馈到按钮
+function startNormalize(p, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '已加入队列…'; }
+  fetch(normalizeURL(p), { method: 'POST' })
+    .then(async (r) => {
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        // 409 已入队/进行中：打开面板看进度（不弹错误，按钮保持"规整中"由列表刷新接管）
+        if (r.status === 409) {
+          if (btn) { btn.textContent = '规整中…'; }
+          showNormalizePanel();
+          refreshNormalizeStatus();
+          return;
+        }
+        throw new Error(j.error || ('请求失败 ' + r.status));
+      }
+      if (btn) { btn.textContent = '规整中…'; }
+      showNormalizePanel(); // 打开面板看进度
+      refreshNormalizeStatus();
+    })
+    .catch((e) => {
+      if (btn) { btn.disabled = false; btn.textContent = '规整化'; }
+      toast(e.message, true);
+    });
 }
 
 function downloadBtn(e, p) {
@@ -483,10 +589,16 @@ function thumbCacheSet(key, val) {
   }
 }
 
-// 观察者：卡片进入视口（含 400px 预加载区）后，把前端抽帧任务推入待处理队列。
+// 观察者：卡片进入视口（含 200px 预加载区）后，把前端抽帧任务推入待处理队列。
 // 注意：回调是批量异步的，不能在这里直接消费队列（否则未标记的卡片会被误删）。
 const videoObserver = new IntersectionObserver((items) => {
   for (const it of items) {
+    // 目标已脱离 DOM（某个 render 重建了 grid）：解除观察，防止 observer 强引用
+    // 旧 DOM 节点导致会话级内存泄漏（每次导航积累视频卡片个数的节点+闭包链）。
+    if (!it.target.isConnected) {
+      videoObserver.unobserve(it.target);
+      continue;
+    }
     if (it.isIntersecting) {
       videoObserver.unobserve(it.target);
       const job = it.target.__videoJob;
@@ -497,41 +609,17 @@ const videoObserver = new IntersectionObserver((items) => {
     }
   }
   pumpVideoThumbs();
-}, { rootMargin: '400px' });
+}, { rootMargin: '200px' });
 
 const videoQueue = [];
-let activeGrabs = 0;
-// 前端抽帧并发：3 路在保证内存可控的前提下让大目录首屏缩略图更快铺满
+// 前端抽帧并发：3 路在保证内存可控的前提下让大目录首屏缩略图更快铺满。
+// 并发控制用 activeGrabsSet.size（真实运行中的 promise 数），而非单独计数器——
+// 计数器在异常路径（元素回收/事件纠缠）下会残留，把并发槽占死导致后续缩略图
+// 全部饿死（曾因此出现「滚动到后部的视频完全没有缩略图」）。
 const MAX_ACTIVE = 3;
 
-/* ---------- moov 预读预热 ---------- */
-// 卡片进入视口后通知服务端把该 MP4 的 moov 区域读进 OS 缓存。
-// 怪封装文件（巨 moov + 数千 mdat）在机械硬盘上冷读十几秒，
-// 预热后用户点开时 ffmpeg 解析 moov 命中缓存，首片秒出。
-const pwDone = new Set();
-let pwSent = 0; // 每次页面渲染最多发 40 个预热请求（错开 400ms），覆盖首屏及其后两屏
-const PW_MAX = 40;
-const prewarmObserver = new IntersectionObserver((items) => {
-  for (const it of items) {
-    if (it.isIntersecting) {
-      prewarmObserver.unobserve(it.target);
-      const job = it.target.__pwJob;
-      if (job) maybePrewarm(job.e, job.p);
-    }
-  }
-}, { rootMargin: '400px' });
-
-function maybePrewarm(e, p) {
-  if (!/\.(mp4|m4v|mov)$/i.test(e.name)) return;
-  if (!(e.size > 8 * 1024 * 1024)) return;
-  if (pwDone.has(p) || pwSent >= PW_MAX) return;
-  // 预览页打开（播放中）不预热：不与播放抢磁盘 IO
-  if (!$('preview').classList.contains('hidden')) return;
-  pwDone.add(p);
-  pwSent++;
-  // 逐个错开发送：不排队挤占浏览器连接池（避免拖慢 video-info/hls 请求）
-  setTimeout(() => fetch('/api/prewarm?path=' + pathParam(p)).catch(() => {}), pwSent * 400);
-}
+/* moov 预读预热已移除：按用户要求，服务端不做任何自动后台任务（不预热/不常驻）。
+   怪封装文件的起播优化改为用户手动「规整化」（卡片上的规整按钮 / 规整化面板）。 */
 
 function observeVideoThumb(e, img, holder, thumbEl, p) {
   const key = p;
@@ -545,7 +633,29 @@ function observeVideoThumb(e, img, holder, thumbEl, p) {
     // cached == null：本会话内已知该视频缩略图生成失败，保持图标，不再重试
     return;
   }
-  // 视频缩略图 100% 浏览器抽帧（服务端已不再生成视频缩略图）：
+  // 冷门格式（MKV/RMVB/HEVC 等）：
+  // - ffmpeg 开启：缩略图由服务端生成（/api/thumb 返回 JPEG），用 <img> 加载；
+  // - ffmpeg 关闭：浏览器无法解码这些容器，且服务端不生成——保持图标，绝不触发
+  //   浏览器抽帧（否则 <video> 请求 /api/thumb-src 会被服务端整段回源，几百 MB 流量
+  //   且浏览器深解只进不出）。注意判断必须在 state.hls 可用时才有服务端缩略图。
+  const name = e.name || '';
+  if (!/\.(mp4|m4v|mov|webm)$/i.test(name)) {
+    if (state.hls) {
+      const im = new Image();
+      im.onload = () => {
+        img.src = im.src;
+        img.classList.remove('hidden');
+        holder.classList.add('hidden');
+        thumbCacheSet(key, im.src);
+      };
+      im.onerror = () => { thumbCacheSet(key, null); }; // 失败记忆，不重试
+      im.src = thumbURL(p, 300, 300);
+    } else {
+      thumbCacheSet(key, null); // 不生成缩略图，保持图标且本会话不重试
+    }
+    return;
+  }
+  // 常规视频（MP4/WebM）：浏览器抽帧。
   // preload=metadata + seek 只做 Range 小读（moov + 目标帧附近），不整段下载，
   // 不占服务端任何资源。懒加载：卡片进入视口才入队（3 路并发）。
   enqueueFrontThumb(e, img, holder, thumbEl, p);
@@ -574,16 +684,30 @@ function enqueueFrontThumb(e, img, holder, thumbEl, p) {
   videoObserver.observe(thumbEl);
 }
 
-// 队列中的任务已全部可见，按 2 并发消费（播放中不启动新任务）
+// 队列中的任务已全部可见，按 MAX_ACTIVE 并发消费（播放中不启动新任务）。
+// 消费前检查卡片是否仍在视口附近（±3000px）：滚动经过的卡片若已远离视口，
+// 直接跳过（保持图标，滚回时 observer 重新触发）。否则 146 个视频全部排队、
+// 每个 16MB 抽帧源在机械盘上很慢，排在队首的几十个会饿死视口内最后入队的卡片。
 function pumpVideoThumbs() {
   if (thumbPaused) return;
-  while (activeGrabs < MAX_ACTIVE && videoQueue.length > 0) {
+  while (activeGrabsSet.size < MAX_ACTIVE && videoQueue.length > 0) {
     const job = videoQueue.shift();
-    activeGrabs++;
-    grabVideoFrame(job).finally(() => {
-      activeGrabs--;
-      pumpVideoThumbs();
-    });
+    // 卡片已被移除（重新渲染/离开列表）：放弃
+    if (job.thumbEl && !job.thumbEl.isConnected) continue;
+    // 卡片已滚出视口较远：跳过本次抽帧并重置观察——重新 observe 后
+    // 不会立即触发（元素在视口外），用户滚回进入 200px 预加载区时才重新
+    // 入队。避免「滚过的卡片排队占满、视口内卡片饿在队尾」。
+    if (job.thumbEl) {
+      const r = job.thumbEl.getBoundingClientRect();
+      const vh = window.innerHeight || 800;
+      if (r.bottom < -500 || r.top > vh + 500) {
+        job.started = false;
+        videoObserver.observe(job.thumbEl);
+        continue;
+      }
+    }
+    const p = grabVideoFrame(job);
+    p.finally(() => pumpVideoThumbs());
   }
 }
 
@@ -610,8 +734,15 @@ function grabVideoFrame(job) {
       if (activeGrabsSet.delete(video) && window.__thumbGrabs > 0) {
         window.__thumbGrabs--;
       }
-      try { video.src = ''; } catch (_) { /* ignore */ }
+      // 安全中止后台下载：pause + removeAttribute('src') 不会像 src='' 那样触发
+      // error 事件（避免与 error 处理器纠缠）；仅执行一次（died 防重复）。
+      if (!video.__died) {
+        video.__died = true;
+        try { video.pause(); } catch (_) { /* ignore */ }
+        try { video.removeAttribute('src'); video.load(); } catch (_) { /* ignore */ }
+      }
     };
+    // 卡死兜底：任务在 20s 内必须结束（任何状态），并立刻补位消费队列。
     const timeout = setTimeout(() => { done(); resolve(); }, 20000);
 
     video.addEventListener('loadedmetadata', () => {
@@ -640,14 +771,11 @@ function grabVideoFrame(job) {
       done();
       resolve();
     });
+    // 加载失败：不重试（避免雪球）。done() 内部对已结束的元素幂等。
     video.addEventListener('error', () => {
+      if (video.__died) return; // 已被 done() 清理（removeAttribute 触发的二次 error）
       clearTimeout(timeout);
       done();
-      // 网络抖动等偶发失败：重试一次
-      if (job.tries < 1) {
-        job.tries++;
-        videoQueue.push(job);
-      }
       resolve();
     });
   });
@@ -810,26 +938,32 @@ function openPreview(path, entry) {
   renderPreview(path, entry);
 }
 
+// exitPreviewOrBack 退出预览：有历史则 back（popstate 统一处理），
+// 无历史（直接打开 ?view= 深链）则原地返回根目录列表。供 btnBack 与 Escape 复用。
+function exitPreviewOrBack() {
+  if (history.length > 1) {
+    history.back(); // 由 popstate 统一处理
+  } else {
+    const url = new URL(location.href);
+    url.search = '';
+    history.replaceState({}, '', url);
+    showBrowse();
+    loadList('/');
+  }
+}
+
+let pvSeq = 0; // 预览序号：renderPreview 每次递增，迟到的 fetch 据此丢弃（防覆盖竞态）
+
 function renderPreview(path, entry) {
   stopPreview(); // 清理上一个预览的播放资源
+  pvSeq++; // 新预览：使上一个预览的迟到 fetch 失效
   $('browse').classList.add('hidden');
   $('preview').classList.remove('hidden');
   $('pvName').textContent = entry.name;
   document.title = entry.name + ' - FileServer'; // 浏览器标签页显示文件名
   $('pvMeta').textContent = fmtSize(entry.size) + (entry.mtime ? ' · ' + fmtTime(entry.mtime) : '');
   $('btnPvDownload').onclick = () => triggerDownload(fileURL(path, true), entry.name);
-  $('btnBack').onclick = () => {
-    if (history.length > 1) {
-      history.back(); // 由 popstate 统一处理
-    } else {
-      // 无历史记录（直接打开预览链接）：原地返回根目录列表
-      const url = new URL(location.href);
-      url.search = '';
-      history.replaceState({}, '', url);
-      showBrowse();
-      loadList('/');
-    }
-  };
+  $('btnBack').onclick = exitPreviewOrBack;
 
   const main = $('pvMain');
   main.innerHTML = '';
@@ -845,14 +979,24 @@ function renderPreview(path, entry) {
     // 深链/刷新时 entry.size 为 0（未知），先经 /api/list 取真实 size 再决定，
     // 避免 >2MB 的大文本被绕过防护全量拉取（2.11）
     const doPreview = (size) => {
-      if (size > 2 * 1024 * 1024) {
-        pvHint(main, '文件较大（超过 2MB），不进行在线预览', path, entry.name);
+      // size<=0（未获取到/目录超限查不到）视为不可预览，走下载提示：
+      // 避免「未获取到 → -1 → -1>2MB 为假 → 绕过 2MB 防护全量拉取大文本」。
+      if (size <= 0 || size > 2 * 1024 * 1024) {
+        pvHint(main, size <= 0 ? '无法确定文件大小，不进行在线预览' : '文件较大（超过 2MB），不进行在线预览', path, entry.name);
       } else {
         main.innerHTML = '<pre class="pv-text">加载中…</pre>';
+        const seq = pvSeq; // 预览序号：迟到响应不覆盖新预览内容
         fetch(fileURL(path))
           .then((r) => r.text())
-          .then((t) => { main.querySelector('.pv-text').textContent = t; })
-          .catch(() => { main.innerHTML = '<div class="pv-hint">文本加载失败</div>'; });
+          .then((t) => {
+            if (seq !== pvSeq) return; // 已打开其他预览，丢弃
+            const el = main.querySelector('.pv-text');
+            if (el) el.textContent = t;
+          })
+          .catch(() => {
+            if (seq !== pvSeq) return;
+            main.innerHTML = '<div class="pv-hint">文本加载失败</div>';
+          });
       }
     };
     if (entry.size > 0) doPreview(entry.size);
@@ -916,7 +1060,7 @@ function buildPlayer(container, path, entry, kind) {
   const isAudio = kind === 'audio';
   container.innerHTML = `
     <div class="player ${isAudio ? 'audio' : ''}" id="player">
-      <video preload="metadata" playsinline ${isAudio ? '' : 'poster=""'}></video>
+      <video preload="auto" playsinline ${isAudio ? '' : 'poster=""'}></video>
       <button class="big-play" id="bigPlay"><svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg></button>
       <div class="player-bar" id="playerBar">
         <button class="pb-btn" id="pbPlay" title="播放/暂停 (空格)"><svg viewBox="0 0 24 24" class="filled"><path d="M7 5v14l12-7z"/></svg></button>
@@ -1003,9 +1147,14 @@ function buildPlayer(container, path, entry, kind) {
   const fmt = (s) => fmtDur(s);
   // 服务端下发的真实时长兜底：HLS EVENT 播放列表转码初期 duration 未知，
   // 进度条按 ffprobe 时长显示，拖拽定位依然可用。
+  // 注意：hls.js 对无 ENDLIST 的 EVENT 流按 live 处理，video.duration = 已生成
+  // 分片总时长并随转码增长——若用 video.duration，进度百分比会随播放回跳。
+  // 因此 realDur 优先用 knownDur（ffprobe 真实总时长），仅当其未知时才回退 video.duration。
   let knownDur = 0;
+  let switchedToHls = false; // 已切换到 hls.js（冷门格式直链失败是预期，不弹误导 toast）
+  const realDur = () => (knownDur > 0 ? knownDur : (video.duration || 0));
   const updateTime = () => {
-    const d = video.duration || knownDur || 0;
+    const d = realDur();
     const c = video.currentTime || 0;
     timeEl.textContent = `${fmt(c)} / ${fmt(d)}`;
     if (d > 0) {
@@ -1037,8 +1186,15 @@ function buildPlayer(container, path, entry, kind) {
   video.addEventListener('playing', () => { bigPlay.classList.remove('buffering'); updatePlayIcon(); });
   video.addEventListener('error', () => {
     bigPlay.classList.remove('buffering');
-    // HLS 转码中途失败等场景：给用户明确提示而非永远黑屏
-    toast('视频加载失败（可能是编码不支持或服务端转码出错）', true);
+    // 直链失败对冷门格式是预期的（浏览器解不了容器）：即将/已切到 hls.js，
+    // 此时不弹误导性 toast（否则每次打开冷门视频都闪「加载失败」）。
+    // 延迟一拍再判断：error 可能先于 infoP.then 的 hls 切换执行。
+    setTimeout(() => {
+      if (pvVideo !== video) return; // 已离开预览
+      if (switchedToHls) return;     // 已切 HLS（直链失败是预期）
+      // HLS 转码中途失败等场景：给用户明确提示而非永远黑屏
+      toast('视频加载失败（可能是编码不支持或服务端转码出错）', true);
+    }, 0);
   });
 
   bigPlay.addEventListener('click', () => requestPlay());
@@ -1051,7 +1207,7 @@ function buildPlayer(container, path, entry, kind) {
   const seekFromEvent = (e) => {
     const rect = prog.getBoundingClientRect();
     const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-    const d = video.duration || knownDur;
+    const d = realDur();
     if (d) video.currentTime = ratio * d;
   };
   prog.addEventListener('pointerdown', (e) => {
@@ -1063,7 +1219,7 @@ function buildPlayer(container, path, entry, kind) {
   prog.addEventListener('pointermove', (e) => {
     const rect = prog.getBoundingClientRect();
     const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-    const d = video.duration || knownDur || 0;
+    const d = realDur();
     tip.textContent = fmt(ratio * d);
     tip.style.left = Math.min(96, Math.max(4, ratio * 100)) + '%'; // 边界内不溢出
     if (dragging) seekFromEvent(e);
@@ -1115,17 +1271,28 @@ function buildPlayer(container, path, entry, kind) {
   pvVideo = video;
 
   // ---- 设置播放源 ----
+  // 直链优先：立即设置 src 让浏览器立刻开始拉流/解析 moov，不等任何网络探测，
+  // 起播不再被「等待 video-info 往返」串联拖慢。video-info 仅异步补时长（进度条）。
+  // 因服务端已禁 ffmpeg/HLS，mode 恒为 direct；仅当出现 hls（异常残留）时兜底切换。
   if (isAudio) {
     video.src = fileURL(path); // 音频一律直链（浏览器原生支持）
     return;
   }
-  // 视频：先问服务端播放方式（direct 直链 / hls 转码流）。
-  // 会话内缓存 video-info 结果：重复点开同一视频免往返探测。
+  video.src = fileURL(path); // 视频直链：立即拉流，浏览器 GPU 硬解
+
+  // 异步补时长（不阻塞起播）：命中缓存立即返回，未命中则后台探测。
+  // 失败结果（{} 且无关键字段）不入缓存，下次仍重试（否则瞬时错误会永久锁死该视频的时长）。
   const infoKey = 'vinfo:' + path;
   let infoP = videoInfoCache.get(infoKey);
   if (!infoP) {
-    infoP = fetch(videoInfoURL(path)).then((r) => (r.ok ? r.json() : { mode: 'direct' })).catch(() => ({ mode: 'direct' }));
-    videoInfoCache.set(infoKey, infoP);
+    infoP = fetch(videoInfoURL(path)).then((r) => (r.ok ? r.json() : {})).catch(() => ({}));
+    infoP.then((info) => {
+      if (info && (info.mode === 'hls' || info.duration)) {
+        videoInfoCache.set(infoKey, infoP); // 有效结果才缓存
+      } else {
+        videoInfoCache.delete(infoKey); // 失败：不留缓存，允许下次重试
+      }
+    }).catch(() => {});
     while (videoInfoCache.size > VIDEO_INFO_CACHE_MAX) {
       const oldest = videoInfoCache.keys().next().value;
       if (oldest === undefined) break;
@@ -1134,18 +1301,26 @@ function buildPlayer(container, path, entry, kind) {
   }
   infoP.then((info) => {
     if (pvVideo !== video) return; // 用户已离开该预览页
+    if (info.mode === 'hls') {
+      // 冷门格式（MKV/RMVB/HEVC 等）：服务端转码流（--ffmpeg 开启时）。
+      // 先清掉预设置的直链 src（浏览器加载冷门容器会失败/黑屏），再挂 hls.js。
+      // knownDur 设为服务端真实总时长：进度条/拖动用真实时长定位，
+      // 避免 hls.js 把 EVENT 流的 media duration(已生成量)当总时长导致进度回跳。
+      knownDur = info.duration || 0;
+      updateTime();
+      switchedToHls = true; // 标记已切 HLS，error 处理器据此跳过误导 toast
+      try {
+        video.removeAttribute('src');
+        video.load();
+      } catch (_) { /* ignore */ }
+      attachHls(video, path);
+      return;
+    }
     knownDur = info.duration || 0;
     updateTime();
-    if (info.mode === 'hls') {
-      attachHls(video, path); // HLS 的播放意图由 attachHls 在挂载源之后统一触发
-    } else {
-      // faststart 标志：小文件已由服务端重封装为 moov 前置，直链即点即播
-      video.src = fileURL(path, false, !!info.faststart);
-      // 用户已提前点过播放：src 就绪后立即开播（消除探测竞态）
-      firePendingPlay();
-    }
-    // 快速决策下 duration 可能尚未探测完成（后台 ffprobe）：
-    // 2 秒后二次查询补时长，让进度条尽早显示真实总时长
+    // 用户已提前点过播放：src 已就绪，立即开播（消除等待 src 的竞态）
+    firePendingPlay();
+    // duration 可能尚未探测完成：稍后二次查询补真实总时长
     if (!info.duration) {
       setTimeout(() => {
         fetch(videoInfoURL(path))
@@ -1184,9 +1359,14 @@ function attachHls(video, path) {
       // hls.js 按 VOD 语义处理：首片即播、无直播追边缘问题。
       // fragLoadingTimeOut 与服务端分片等待上限对齐：seek 超前时服务端
       // 阻塞等分片生成（秒级），超时 404 由 hls.js 重试/恢复。
+      // 服务端播放列表：转码进行中为 EVENT 流（无 ENDLIST，随转码增长分片），
+      // 完成后带 ENDLIST 正常结束。hls.js 对无 ENDLIST 的流按 live 处理：
+      // liveSyncDurationCount=999 让它不从「直播边缘」跳播（我们是从头生成的流），
+      // 而是从第一个分片顺序播放，配合下方 8s 轮询持续拉取新分片。
       const hls = new Hls({
         enableWorker: true,
         backBufferLength: 30,
+        liveSyncDurationCount: 999,
         fragLoadingTimeOut: 30000,
         fragLoadingMaxRetry: 4,
         fragLoadingRetryDelay: 500,
@@ -1227,15 +1407,28 @@ function attachHls(video, path) {
       const onSeeking = () => {
         if (hlsAvail > 4 && video.currentTime > hlsAvail - 1.5) {
           video.currentTime = Math.max(0, hlsAvail - 3);
-          toast('已跳到当前可播位置', false);
+          // 去抖：seeking 会连续触发，只提示一次直到位置变化
+          if (!onSeeking.__notified) { toast('已跳到当前可播位置', false); onSeeking.__notified = true; }
+          setTimeout(() => { onSeeking.__notified = false; }, 1500);
         }
       };
       video.addEventListener('seeking', onSeeking);
       updateAvail();
-      // 转码进行中：定时重载 manifest 让 hls.js 看到新分片（转码完成后自动趋于稳定）
+      // 转码进行中：定时重载 manifest 让 hls.js 看到新分片。
+      // 检测到 ENDLIST（转码完成）即停止轮询——hls.js 已按 VOD 结束，无需再推。
       pvHlsTimer = setInterval(() => {
-        try { hls.startLoad(); } catch (_) { /* ignore */ }
-        updateAvail();
+        fetch(url, { cache: 'no-store' })
+          .then((r) => r.text())
+          .then((txt) => {
+            updateAvail();
+            if (txt.includes('#EXT-X-ENDLIST')) {
+              clearInterval(pvHlsTimer);
+              pvHlsTimer = null;
+              return; // 转码完成，停止轮询
+            }
+            try { hls.startLoad(); } catch (_) { /* ignore */ }
+          })
+          .catch(() => {});
       }, 8000);
       hls.on(Hls.Events.ERROR, (_evt, data) => {
         if (data.fatal) {
@@ -1311,10 +1504,8 @@ function exitSearch() {
 // 条目点击统一入口：搜索模式走搜索路径，浏览模式走普通逻辑（4.7 单一函数，无重赋值）
 function onEntryClick(e) {
   if (state.searching) { openSearchEntry(e); return; }
-  // 点击视频时立即请求预热（若视口预热的排队还没轮到它）：
-  // ffmpeg 随后启动，读到的是预热已推进的部分，首片更快
+  // 点击视频：中止在途缩略图请求，播放优先（不抢机械硬盘）
   if (fileKind(e) === 'video') {
-    maybePrewarm(e, entryPath(e));
     pauseThumbs(); // 播放优先：中止在途缩略图请求，不抢机械硬盘
   }
   openEntry(e);
@@ -1354,16 +1545,182 @@ function reloadWithSort() {
   else loadList(state.path);
 }
 
+/* ---------- 怪封装规整化面板 ---------- */
+
+let normPollTimer = null;
+
+// showNormalizePanel 打开规整化/备份面板
+function showNormalizePanel() {
+  $('normalizePanel').classList.remove('hidden');
+  refreshNormalizeStatus();
+  refreshBackups();
+  if (!normPollTimer) {
+    normPollTimer = setInterval(() => {
+      refreshNormalizeStatus();
+      refreshBackups();
+    }, 1200);
+  }
+}
+
+function hideNormalizePanel() {
+  $('normalizePanel').classList.add('hidden');
+  if (normPollTimer) { clearInterval(normPollTimer); normPollTimer = null; }
+}
+
+// refreshNormalizeStatus 拉取任务队列并渲染
+let normPrevActive = false; // 上一轮是否有进行中任务（用于"刚完成时刷新备份"）
+let normStatusBusy = false; // in-flight 保护：上一轮未完成时跳过本轮，防请求堆积
+async function refreshNormalizeStatus() {
+  if (normStatusBusy) return;
+  normStatusBusy = true;
+  try {
+    const d = await api(normalizeStatusURL);
+    const list = d.tasks || [];
+    const hasActive = list.some(x => ['queued', 'normalizing', 'verifying', 'backing_up'].includes(x.state));
+    // 任务刚全部结束（之前在进行中、现在空闲/完成）：立即刷新备份列表
+    if (normPrevActive && !hasActive) refreshBackups();
+    normPrevActive = hasActive;
+    $('normState').textContent = hasActive ? '规整化进行中…' : (list.length ? '空闲' : '暂无任务');
+    const box = $('normTaskList');
+    box.innerHTML = '';
+    if (!list.length) {
+      box.innerHTML = '<div class="norm-empty">暂无规整任务。在怪封装视频卡片上点「规整化」即可加入。</div>';
+    }
+    for (const t of list) {
+      const row = document.createElement('div');
+      row.className = 'norm-task';
+      const pct = Math.round(t.percent || 0);
+      row.innerHTML = `
+        <div class="norm-task-head">
+          <span class="norm-task-name" title="${esc(t.path)}">${esc(t.name)}</span>
+          <span class="norm-task-state state-${esc(t.state)}">${esc(stateLabel(t.state))}</span>
+        </div>
+        <div class="norm-bar"><div class="norm-bar-fill" style="width:${pct}%"></div></div>
+        ${t.err ? `<div class="norm-err">${esc(t.err)}</div>` : ''}`;
+      box.appendChild(row);
+    }
+  } catch (_) { /* 服务不可用/未启动时静默 */ } finally {
+    normStatusBusy = false;
+  }
+}
+
+function stateLabel(s) {
+  return { queued: '排队中', normalizing: '规整中', verifying: '校验中', backing_up: '备份中', done: '完成', failed: '失败' }[s] || s;
+}
+
+// refreshBackups 拉取备份列表并渲染
+let normBackupsBusy = false; // in-flight 保护：备份列表全量 WalkDir 可能 >1.2s，防堆积
+async function refreshBackups() {
+  if (normBackupsBusy) return;
+  normBackupsBusy = true;
+  try {
+    const d = await api(backupsURL);
+    const list = d.backups || [];
+    const box = $('backupList');
+    box.innerHTML = '';
+    if (!list.length) {
+      box.innerHTML = '<div class="norm-empty">暂无备份。规整化会自动备份原文件。</div>';
+    }
+    for (const b of list) {
+      const row = document.createElement('div');
+      row.className = 'backup-item';
+      row.innerHTML = `
+        <div class="backup-info">
+          <div class="backup-name" title="${esc(b.path)}">${esc(b.name)}</div>
+          <div class="backup-meta">${fmtSize(b.size)} · ${fmtTime(b.mtime)}${b.exists ? '' : '（原文件不在）'}</div>
+        </div>
+        <div class="backup-actions">
+          ${b.exists ? `<button class="mini-btn" data-act="restore" data-path="${esc(b.path)}">恢复</button>` : ''}
+          <button class="mini-btn danger" data-act="del" data-path="${esc(b.path)}">删除</button>
+        </div>`;
+      box.appendChild(row);
+    }
+    // 绑定事件
+    box.querySelectorAll('button[data-act]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const act = btn.dataset.act, path = btn.dataset.path;
+        const url = act === 'restore' ? restoreURL(path) : deleteBackupURL(path);
+        btn.disabled = true;
+        try {
+          const r = await fetch(url, { method: 'POST' });
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(j.error || '失败');
+          toast(act === 'restore' ? '已恢复原文件' : '已删除备份', false);
+          refreshBackups();
+          refreshNormalizeStatus();
+        } catch (e) {
+          toast(e.message, true);
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    });
+  } catch (_) { /* 静默 */ } finally {
+    normBackupsBusy = false;
+  }
+}
+
+// 面板按钮
+$('btnNormalize').addEventListener('click', () => {
+  if ($('normalizePanel').classList.contains('hidden')) showNormalizePanel();
+  else hideNormalizePanel();
+});
+$('btnNormClose').addEventListener('click', hideNormalizePanel);
+
+/* ---------- 冷门格式支持开关（ffmpeg） ---------- */
+
+// setFFmpegUI 根据服务端能力更新按钮外观；refresh=true 时刷新列表（缩略图策略变化）
+function setFFmpegUI(ffavail, hls, refresh) {
+  const btn = $('btnFFmpeg');
+  btn.classList.toggle('active', !!hls);
+  btn.title = hls
+    ? '冷门格式支持已开启（MKV/RMVB/HEVC 等可在线播放）— 点击关闭'
+    : (ffavail ? '冷门格式支持已关闭 — 点击开启' : '冷门格式支持不可用（服务端无 ffmpeg）');
+  if (refresh && state.path && !state.searching) {
+    loadList(state.path);
+  }
+}
+
+// 点击切换
+$('btnFFmpeg').addEventListener('click', async () => {
+  const btn = $('btnFFmpeg');
+  const target = !btn.classList.contains('active');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/settings/ffmpeg', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: target }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || '切换失败');
+    state.hls = !!j.hls;
+    localStorage.setItem('fs.hls', state.hls ? '1' : '0');
+    toast(state.hls ? '冷门格式支持已开启' : '冷门格式支持已关闭', false);
+    setFFmpegUI(true, state.hls, true);
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+let loadMoreBusy = false; // 加载更多 in-flight 保护：防双击并发同 offset 重复条目
 $('btnLoadMore').addEventListener('click', async () => {
-  if (state.searching) return;
+  if (state.searching || loadMoreBusy) return;
+  loadMoreBusy = true;
   const offset = state.entries.length;
+  const seq = state.listSeq;
   try {
     const data = await api(listURL(state.path, state.sort, state.order, PAGE, offset));
+    if (seq !== state.listSeq) return; // 已导航到其他目录，丢弃
     state.entries = state.entries.concat(data.entries);
     state.hasMore = !!data.truncated;
     render();
   } catch (e) {
     toast(e.message, true);
+  } finally {
+    loadMoreBusy = false;
   }
 });
 
@@ -1382,7 +1739,7 @@ document.addEventListener('keydown', (e) => {
     else if (e.key === 'r' || e.key === 'R') $('lbRotate').click();
     return;
   }
-  if (e.key === 'Escape' && pvOpen) { history.back(); return; }
+  if (e.key === 'Escape' && pvOpen) { exitPreviewOrBack(); return; }
   if (pvOpen) return;
   if (e.key === '/') {
     e.preventDefault();
@@ -1407,16 +1764,19 @@ window.addEventListener('popstate', () => {
   const params = new URL(location.href).searchParams;
   const view = params.get('view');
   if (view) {
-    // 离开列表页进入预览前，记住列表滚动位置
-    rememberScroll();
+    // 进入预览：不能调 rememberScroll()——当前页面若是预览页（预览→预览导航），
+    // window.scrollY 是预览页的，会覆盖列表正确滚动位置。列表位置由
+    // openPreview 在首次进入预览前记录；预览→预览不需要更新列表位置。
     $('browse').classList.add('hidden');
     $('preview').classList.remove('hidden');
     const name = view.split('/').pop();
     renderPreview(view, { name, size: 0, mtime: 0 });
   } else {
-    // 回到列表页：先记住离开的预览所在目录（如有），再从 URL 恢复目录
-    // 注意：后退/前进时 state.path 仍是旧目录，需用它保存离开前的滚动位置
-    rememberScroll();
+    // 回到列表页：从 URL 恢复目录。
+    // 注意：这里【不能】调 rememberScroll()——popstate 时页面还显示着
+    // 预览/子目录内容，window.scrollY 是那个页面的滚动位置，会覆盖
+    // 此前正确记录的列表滚动位置（这正是"返回后滚动条丢失"的根因）。
+    // 正确的列表滚动位置在进入预览/子目录前已由 openPreview/navigate 记录。
     const path = params.get('path') || '/';
     showBrowse();
     loadList(path);
@@ -1437,7 +1797,22 @@ window.addEventListener('popstate', () => {
     .then((info) => {
       if (info.kinds) state.kinds = info.kinds; // 统一扩展名映射（4.1）
       if (info.search_limit) state.searchLimit = info.search_limit; // 搜索上限（4.5）
-      state.hls = !!info.hls; // 服务端是否支持 HLS 转码（决定 hls.js 预加载）
+      const ffavail = !!info.ffmpeg;
+      // 用户上次的开关选择（localStorage）优先于服务端默认（--ffmpeg 参数）
+      const saved = localStorage.getItem('fs.hls');
+      let want = !!info.hls;
+      if (saved !== null) {
+        want = saved === '1';
+        if (want !== !!info.hls) {
+          // 同步服务端到用户选择（不阻塞初始化）
+          fetch('/api/settings/ffmpeg', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: want }),
+          }).catch(() => {});
+        }
+      }
+      state.hls = want && ffavail;
+      setFFmpegUI(ffavail, state.hls, false);
     })
     .catch(() => {})
     .finally(() => {

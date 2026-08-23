@@ -29,6 +29,12 @@
       <button id="btnRefresh" class="icon-btn" title="刷新 (F5)" aria-label="刷新">
         <svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v4h-4"/></svg>
       </button>
+      <button id="btnNormalize" class="icon-btn" title="规整化 / 备份管理" aria-label="规整化备份">
+        <svg viewBox="0 0 24 24"><path d="M4 4h16v4H4zM4 10h10M6 10v9a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-9M10 6h4"/></svg>
+      </button>
+      <button id="btnFFmpeg" class="icon-btn" title="冷门格式支持（MKV/RMVB/HEVC 等在线播放与缩略图，需 ffmpeg）" aria-label="冷门格式开关">
+        <svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/><path d="M3 8h3M5 6v4M16 3v3M14.5 4.5h3"/></svg>
+      </button>
       <div class="seg" role="group" aria-label="视图切换">
         <button id="btnGrid" class="seg-btn active" title="网格视图" aria-label="网格视图">
           <svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg>
@@ -51,6 +57,21 @@
       </button>
     </div>
   </header>
+
+  <!-- 怪封装规整化 / 备份 面板 -->
+  <div id="normalizePanel" class="norm-panel hidden">
+    <div class="norm-panel-head">
+      <span>规整化 · 备份管理</span>
+      <button id="btnNormClose" class="icon-btn" title="关闭" aria-label="关闭">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="norm-panel-state" id="normState">暂无任务</div>
+    <div class="norm-section-title">规整任务</div>
+    <div id="normTaskList" class="norm-task-list"></div>
+    <div class="norm-section-title">备份（可恢复/删除）</div>
+    <div id="backupList" class="norm-task-list"></div>
+  </div>
 
   <main id="main">
     <div id="skeleton" class="skeleton" aria-hidden="true"></div>

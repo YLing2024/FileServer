@@ -81,6 +81,10 @@ const (
 	// 时长/媒体信息缓存条数上限（防无限增长）
 	durationCacheMax = 4096
 	mediaInfoMax     = 4096
+	// mp4HeadProbe 顺序读取的头部区域大小：用于解析 MP4 顶层 box、识别怪封装
+	// （怪封装的 moov 通常在头部，mdat 碎片也集中在前部；顺序读此区域即可
+	// 在内存中解析，避免逐 box 随机 seek 在机械盘上耗时数秒）。
+	mp4HeadProbe = 8 << 20
 )
 
 // FindFfmpeg 查找 ffmpeg/ffprobe：优先 exe 同目录的 ffmpeg\ 子目录，其次 PATH
@@ -523,6 +527,37 @@ func runFFmpeg(ctx context.Context, path string, args []string, lowPriority bool
 	return nil
 }
 
+// ExtractFrame 用 ffmpeg 从任意视频（含 MKV/RMVB/HEVC 等冷门格式）抽取一帧写为 JPEG。
+// 供冷门格式的服务端缩略图使用（--ffmpeg 开启时）：
+//   - 低优先级运行（BELOW_NORMAL），不抢用户播放/浏览；
+//   - 超时 20s（个别冷门格式 seek 慢）；
+//   - Job Object 随主进程终止（防孤儿 ffmpeg 占资源）。
+// 帧位置：跳过开头黑场/片头（-ss 1），质量 4（较清晰）。
+func (f *Ffmpeg) ExtractFrame(ctx context.Context, src, dst string) error {
+	if f == nil || f.ffmpegPath == "" {
+		return fmt.Errorf("ffmpeg 不可用")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	args := []string{
+		"-hide_banner", "-loglevel", "error", "-y",
+		"-ss", "1", // 跳过开头黑场/片头
+		"-i", src,
+		"-frames:v", "1",
+		"-q:v", "4",
+		"-f", "image2", dst,
+	}
+	if err := runFFmpeg(ctx, f.ffmpegPath, args, true); err != nil {
+		os.Remove(dst)
+		return err
+	}
+	if fi, err := os.Stat(dst); err != nil || fi.Size() == 0 {
+		os.Remove(dst)
+		return fmt.Errorf("抽帧结果为空")
+	}
+	return nil
+}
+
 // Faststart 把 MP4（moov 在尾部）重封装为 moov 前置的 MP4 写入 dst。
 // 小文件几十毫秒完成；大文件（>32MB）为磁盘速任务，放宽超时到 10 分钟、
 // 以低于正常优先级运行（不抢正在播放的直链链路）。-c copy 无损。
@@ -563,7 +598,12 @@ type mp4Layout struct {
 	mdatCount  int
 }
 
-// mp4LayoutOf 解析 MP4 顶层 box（只读头部，毫秒级）
+// mp4LayoutOf 解析 MP4 顶层 box。关键性能点：顺序读文件头部一块区域后
+// 在内存中解析 box，而不是每个 box 一次 ReadAt 随机寻道——怪封装文件有
+// 几百到几千个 mdat 块，逐块 seek 在机械盘上要几秒（实测 4s），而顺序读
+// 头部区域只需 ~150ms。
+// 头部未找到 moov 时再读尾部区域找 moov（moov 在尾部的正常录制片）——
+// 供 thumb-src 正确识别「moov 后置」文件，避免误判为解析失败而整段返回。
 func mp4LayoutOf(abs string) mp4Layout {
 	var l mp4Layout
 	l.moovOffset = -1
@@ -576,38 +616,69 @@ func mp4LayoutOf(abs string) mp4Layout {
 	if err != nil || st.Size() < 1024 {
 		return l
 	}
-	buf := make([]byte, 8)
+	fileSize := st.Size()
+	buf := make([]byte, mp4HeadProbe)
+	n, _ := f.Read(buf) // 顺序读头部（机械盘友好）
+	buf = buf[:n]
 	var pos int64 = 0
-	const maxBoxes = 4096
-	for i := 0; i < maxBoxes && pos+8 <= st.Size(); i++ {
-		if _, err := f.ReadAt(buf, pos); err != nil {
-			break
-		}
-		boxSize := int64(buf[0])<<24 | int64(buf[1])<<16 | int64(buf[2])<<8 | int64(buf[3])
-		typ := string(buf[4:8])
+	const maxBoxes = 5000
+	for i := 0; i < maxBoxes && pos+8 <= int64(len(buf)); i++ {
+		boxSize := int64(buf[pos])<<24 | int64(buf[pos+1])<<16 | int64(buf[pos+2])<<8 | int64(buf[pos+3])
+		typ := string(buf[pos+4 : pos+8])
 		if typ == "moov" {
+			// 记录 moov 位置但不返回：怪封装可能是 moov 在头 + 大量 mdat 碎块在后，
+			// 必须继续遍历才能统计 mdat 块数（这是「怪封装」的真正判据）。
 			l.moovOffset = pos
 			l.moovSize = boxSize
-			return l
-		}
-		if typ == "mdat" {
+		} else if typ == "mdat" {
 			l.mdatCount++
 			if boxSize == 0 {
-				break // mdat 延伸到 EOF，其后不再有顶层 moov
+				break // mdat 延伸到 EOF，其后不再有顶层 box
 			}
 		}
 		if boxSize == 1 {
-			var ext [8]byte
-			if _, err := f.ReadAt(ext[:], pos+8); err != nil {
+			if pos+16 > int64(len(buf)) {
 				break
 			}
-			boxSize = int64(ext[0])<<56 | int64(ext[1])<<48 | int64(ext[2])<<40 | int64(ext[3])<<32 |
-				int64(ext[4])<<24 | int64(ext[5])<<16 | int64(ext[6])<<8 | int64(ext[7])
+			boxSize = int64(buf[pos+8])<<56 | int64(buf[pos+9])<<48 | int64(buf[pos+10])<<40 | int64(buf[pos+11])<<32 |
+				int64(buf[pos+12])<<24 | int64(buf[pos+13])<<16 | int64(buf[pos+14])<<8 | int64(buf[pos+15])
 		}
 		if boxSize < 8 {
 			break
 		}
 		pos += boxSize
+	}
+
+	// 头部未找到 moov：读尾部区域找 moov（moov 在尾部的正常录制片）
+	if l.moovOffset < 0 {
+		tailStart := fileSize - mp4HeadProbe
+		if tailStart < 0 {
+			tailStart = 0
+		}
+		tbuf := make([]byte, mp4HeadProbe)
+		tn, _ := f.ReadAt(tbuf, tailStart)
+		tbuf = tbuf[:tn]
+		var tpos int64 = 0
+		for i := 0; i < maxBoxes && tpos+8 <= int64(len(tbuf)); i++ {
+			boxSize := int64(tbuf[tpos])<<24 | int64(tbuf[tpos+1])<<16 | int64(tbuf[tpos+2])<<8 | int64(tbuf[tpos+3])
+			typ := string(tbuf[tpos+4 : tpos+8])
+			if typ == "moov" {
+				l.moovOffset = tailStart + tpos
+				l.moovSize = boxSize
+				return l
+			}
+			if boxSize == 1 {
+				if tpos+16 > int64(len(tbuf)) {
+					break
+				}
+				boxSize = int64(tbuf[tpos+8])<<56 | int64(tbuf[tpos+9])<<48 | int64(tbuf[tpos+10])<<40 | int64(tbuf[tpos+11])<<32 |
+					int64(tbuf[tpos+12])<<24 | int64(tbuf[tpos+13])<<16 | int64(tbuf[tpos+14])<<8 | int64(tbuf[tpos+15])
+			}
+			if boxSize < 8 {
+				break
+			}
+			tpos += boxSize
+		}
 	}
 	return l
 }
@@ -656,11 +727,10 @@ func mp4IsFastStart(abs string) bool {
 	return l.moovOffset >= 0 && l.moovOffset <= 256*1024
 }
 
-// mp4IsWeirdLayout 判断 MP4 是否为「怪封装」：moov 巨大或 mdat 块数量异常多
-// （某些二次转封装的片源把音视频逐块交错成几百上千个 mdat，moov 高达数 MB，
-// Chrome 解析这种布局起播前要下载海量索引甚至全文件，表现为点开十几秒不动）。
-// 此类文件交给 ffmpeg 重封装（HLS copy），秒级出片。
+// mp4IsWeirdLayout 判断 MP4 是否为「怪封装」：mdat 碎片化严重（大量小 mdat 块交错）。
+// 注意：不以 moov 大小为判据——规整化后的文件 moov 更大但 mdat 单块、解析飞快。
+// 是否「值得规整」还需结合文件体积（见 isWeird：≥256MB 才有明显收益）。
 func mp4IsWeirdLayout(abs string) bool {
 	l := mp4LayoutOf(abs)
-	return l.moovOffset >= 0 && (l.moovSize > 4*1024*1024 || l.mdatCount > 4)
+	return l.mdatCount > 4
 }

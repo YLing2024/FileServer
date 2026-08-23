@@ -172,6 +172,7 @@ a { color: var(--accent); text-decoration: none; }
 .seg-btn svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .seg-btn:hover { color: var(--text); }
 .seg-btn.active { background: var(--card); color: var(--accent); box-shadow: var(--shadow-sm); }
+.icon-btn.active { color: var(--accent); background: var(--accent-soft); }
 
 /* 排序 */
 .sort-select {
@@ -598,3 +599,160 @@ tr:hover .row-act { opacity: 1; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* ============================================================
+   怪封装规整化 / 备份管理
+   ============================================================ */
+
+/* 卡片内的怪封装标记 + 规整按钮 */
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+.weird-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--danger);
+  border: 1px solid var(--danger);
+  border-radius: 999px;
+  padding: 1px 8px;
+  opacity: .92;
+  white-space: nowrap;
+}
+.normalize-btn {
+  font-size: 11px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--hover);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.normalize-btn:hover { background: var(--accent-soft); border-color: var(--accent); }
+.normalize-btn:disabled { opacity: .55; cursor: wait; }
+
+/* 规整化/备份 侧边面板 */
+.norm-panel {
+  position: fixed;
+  top: var(--toolbar-h);
+  right: 0;
+  bottom: 0;
+  width: min(400px, 92vw);
+  background: var(--bg-soft);
+  border-left: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px 20px;
+  overflow-y: auto;
+}
+.norm-panel.hidden { display: none; }
+.norm-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+.norm-panel-state {
+  font-size: 13px;
+  color: var(--text-2);
+  margin-bottom: 6px;
+}
+.norm-section-title {
+  font-size: 12px;
+  color: var(--text-3);
+  margin: 12px 0 6px;
+  letter-spacing: .04em;
+}
+.norm-task-list { display: flex; flex-direction: column; gap: 8px; }
+.norm-empty {
+  font-size: 12.5px;
+  color: var(--text-3);
+  padding: 12px 4px;
+  text-align: center;
+}
+.norm-task {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 9px 11px;
+}
+.norm-task-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+.norm-task-name {
+  font-size: 12.5px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.norm-task-state {
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--text-2);
+}
+.norm-task-state.state-done { color: #4ad295; }
+.norm-task-state.state-failed { color: var(--danger); }
+.norm-bar {
+  height: 5px;
+  background: var(--hover);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.norm-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-strong));
+  border-radius: 999px;
+  transition: width .3s var(--ease);
+}
+.norm-err {
+  font-size: 11.5px;
+  color: var(--danger);
+  margin-top: 6px;
+  word-break: break-all;
+}
+
+/* 备份条目 */
+.backup-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 11px;
+}
+.backup-info { min-width: 0; }
+.backup-name {
+  font-size: 12.5px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.backup-meta { font-size: 11px; color: var(--text-3); margin-top: 2px; }
+.backup-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.backup-actions .mini-btn {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--hover);
+  color: var(--text);
+  cursor: pointer;
+}
+.backup-actions .mini-btn:hover { background: var(--accent-soft); border-color: var(--accent); }
+.backup-actions .mini-btn.danger:hover { background: rgba(255, 107, 107, .14); border-color: var(--danger); color: var(--danger); }

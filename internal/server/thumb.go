@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"container/list"
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
@@ -31,6 +32,7 @@ const (
 	thumbMaxAge               = 7 * 24 * time.Hour
 	thumbImgMaxConc           = 4      // 图片解码/整读并发上限（多客户端批量缩略图提速）
 	thumbTmpMaxAge            = time.Hour // .tmp 残留清理阈值
+	ffThumbMaxConc            = 2      // 服务端 ffmpeg 抽帧并发上限（冷门格式缩略图；机械盘上多路抽帧会抢磁头）
 )
 
 // ThumbCache 缩略图磁盘缓存 + 内存 LRU（图片缩略图专用；视频缩略图已 100% 浏览器抽帧）
@@ -224,8 +226,15 @@ func (s *Server) handleThumb(w http.ResponseWriter, r *http.Request) {
 	case "image":
 		s.serveImageThumb(w, r, abs, fi, wq, hq)
 	case "video":
-		// 视频缩略图已 100% 改为浏览器抽帧（服务端 ffmpeg 抽帧已废弃）：
-		// 返回 404 让旧版前端/直接请求降级为图标。
+		// 视频缩略图：
+		// - MP4/WebM：浏览器抽帧（服务端不生成），404 降级为图标；
+		// - 冷门格式（MKV/RMVB/HEVC 等）且 --ffmpeg 开启：服务端 ffmpeg 抽帧 JPEG；
+		// - 冷门格式且未开启：404（无法生成，保持图标）。
+		ext := strings.ToLower(filepath.Ext(fi.Name()))
+		if s.transcodeEnabled.Load() && ext != ".mp4" && ext != ".m4v" && ext != ".mov" && ext != ".webm" {
+			s.serveRemoteThumb(w, r, abs, fi)
+			return
+		}
 		writeErr(w, http.StatusNotFound, "视频缩略图由浏览器抽帧生成")
 	default:
 		writeErr(w, http.StatusNotFound, "该类型不支持缩略图")
@@ -296,8 +305,14 @@ func (s *Server) serveThumbSrc(w http.ResponseWriter, r *http.Request) {
 		size = st.Size()
 	}
 
-	// 非 MP4 容器（MKV/AVI/…）无法截取（顶层结构不同）：整段返回
+	// 非 MP4 容器（MKV/AVI/RMVB/…）：
+	// - --ffmpeg 开启时：服务端 ffmpeg 抽帧生成 JPEG 缩略图（带磁盘缓存）；
+	// - 未开启时：整段返回（浏览器原生 `<video>` 解不了 → 前端显示图标）。
 	if ext != ".mp4" && ext != ".m4v" && ext != ".mov" {
+		if s.transcodeEnabled.Load() && s.ff != nil {
+			s.serveRemoteThumb(w, r, abs, fi)
+			return
+		}
 		http.ServeContent(w, r, fi.Name(), fi.ModTime(), f)
 		return
 	}
@@ -320,6 +335,56 @@ func (s *Server) serveThumbSrc(w http.ResponseWriter, r *http.Request) {
 		// moov 跨截取边界（超 16MB 的巨 moov）：整段兜底
 		http.ServeContent(w, r, fi.Name(), fi.ModTime(), f)
 	}
+}
+
+// serveRemoteThumb 冷门格式（MKV/RMVB/HEVC 等）的服务端缩略图：
+// ffmpeg 抽一帧 JPEG，磁盘缓存到 .FileServer\thumb\（复用 ThumbCache，7 天清理）。
+// 并发受 ffThumbSem 限制（2 路），抽帧进程低优先级 + 20s 超时 + Job Object 防孤儿。
+func (s *Server) serveRemoteThumb(w http.ResponseWriter, r *http.Request, abs string, fi os.FileInfo) {
+	wq := parseIntSafe(r.URL.Query().Get("w"), 256, thumbMaxDim)
+	hq := parseIntSafe(r.URL.Query().Get("h"), 256, thumbMaxDim)
+	key := thumbKey(abs, fi, wq, hq)
+
+	if data, ok := s.thumbs.Get(key); ok {
+		serveCached(w, r, key, data, "image/jpeg")
+		return
+	}
+	// singleflight：同一 key 并发请求只有生成者跑，其余等结果复用——
+	// 并发上限（ffThumbSem）放在生成函数内：同 key 的等待者在 Do 里等生成者，
+	// 不会像「先抢 sem 再进 Do」那样让第 3 个同 key 请求阻塞在 sem 上多等一轮。
+	data, ok := s.thumbs.Do(key, func() ([]byte, bool) {
+		if data, ok := s.thumbs.Get(key); ok { // 双检
+			return data, true
+		}
+		s.ffThumbSem <- struct{}{}
+		defer func() { <-s.ffThumbSem }()
+		tmp := filepath.Join(s.thumbs.dir, key+".src.tmp")
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if err := s.ff.ExtractFrame(ctx, abs, tmp); err != nil {
+			os.Remove(tmp)
+			return nil, false
+		}
+		// 解码裁剪为方形缩略图
+		src, err := decodeImageFile(tmp)
+		os.Remove(tmp)
+		if err != nil {
+			return nil, false
+		}
+		out := coverCrop(src, wq, hq)
+		var enc bytes.Buffer
+		if err := jpeg.Encode(&enc, out, &jpeg.Options{Quality: 80}); err != nil {
+			return nil, false
+		}
+		data := enc.Bytes()
+		s.thumbs.Put(key, data)
+		return data, true
+	})
+	if !ok {
+		writeErr(w, http.StatusNotFound, "无法生成缩略图")
+		return
+	}
+	serveCached(w, r, key, data, "image/jpeg")
 }
 
 type part struct{ off, length int64 }
@@ -372,6 +437,135 @@ func (s *Server) mp4LayoutCached(src string, size int64) mp4Layout {
 	}
 	s.layouts[key] = layoutEntry{l, time.Now()}
 	return l
+}
+
+// isWeird 判断视频是否为「值得规整」的怪封装（带布局缓存）。
+// 实测校准（ffprobe 解析耗时 vs 文件结构）：
+//   - 解析耗时主要随文件体积增长（moov 索引表随帧数线性膨胀），碎片化再叠加
+//     机械盘随机寻道成本；
+//   - 小文件（<256MB）即使 mdat 碎片多，解析也在亚秒级，规整收益极小；
+//   - 大文件且 mdat 碎片化（大量小块交错）解析要数秒~十几秒，规整后降至亚秒。
+// 判据：mdat > 4 块 且 体积 ≥ 256MB。不以 moov 体积为判据——规整后 moov 反而更大。
+func (s *Server) isWeird(abs string) bool {
+	fi, err := os.Stat(abs)
+	if err != nil {
+		return false
+	}
+	if fi.Size() < 256<<20 {
+		return false // 小文件解析本来就快，规整无收益
+	}
+	l := s.mp4LayoutCached(abs, fi.Size())
+	return l.mdatCount > 4
+}
+
+// isWeirdStream 与 isWeird 同判据，但用「边读边判」的流式扫描替代整块读头：
+// 顺序读探测区（块式累积），解析 box 数 mdat，数到 >4 立即返回 true。
+// 探测上限动态扩展：moov 巨大的文件（如 7MB moov + 7000 个 mdat 碎块，mdat 从
+// moov 结束后才开始）若只读固定 8MB 会漏判——先扫 8MB 找 moov，若 moovEnd 接近
+// 窗口边缘，则继续读到 moovEnd+2MB 再统计。判定结果回写布局缓存。
+// 供目录级批量扫描用（/api/weird）。
+func (s *Server) isWeirdStream(abs string) bool {
+	fi, err := os.Stat(abs)
+	if err != nil || fi.Size() < 256<<20 {
+		return false
+	}
+	key := fmt.Sprintf("%s|%d", abs, fi.Size())
+	// 命中布局缓存：直接判
+	s.layoutMu.Lock()
+	if e, ok := s.layouts[key]; ok && time.Since(e.t) < time.Hour {
+		weird := e.l.mdatCount > 4
+		s.layoutMu.Unlock()
+		return weird
+	}
+	s.layoutMu.Unlock()
+
+	f, err := os.Open(abs)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	const readChunk = 512 << 10
+	baseProbe := int64(8 << 20)
+	// 探测上限：8MB 起步；发现 moov 很大时动态扩到 moovEnd+2MB
+	probeLimit := baseProbe
+	buf := make([]byte, 0, probeLimit)
+	var loaded int64
+	ensure := func(n int64) bool {
+		for loaded < n && loaded < probeLimit {
+			chunk := make([]byte, readChunk)
+			if loaded+int64(len(chunk)) > probeLimit {
+				chunk = chunk[:probeLimit-loaded]
+			}
+			m, err := f.ReadAt(chunk, loaded)
+			if m > 0 {
+				buf = append(buf, chunk[:m]...)
+				loaded += int64(m)
+			}
+			if err != nil {
+				break
+			}
+		}
+		return int64(len(buf)) >= n
+	}
+	var pos int64
+	mdatCount := 0
+	var moovEnd int64 = -1
+	for pos+8 <= probeLimit {
+		if !ensure(pos + 8) {
+			break
+		}
+		boxSize := int64(buf[pos])<<24 | int64(buf[pos+1])<<16 | int64(buf[pos+2])<<8 | int64(buf[pos+3])
+		typ := string(buf[pos+4 : pos+8])
+		switch typ {
+		case "moov":
+			if boxSize == 1 {
+				if !ensure(pos + 16) {
+					break
+				}
+				boxSize = int64(buf[pos+8])<<56 | int64(buf[pos+9])<<48 | int64(buf[pos+10])<<40 | int64(buf[pos+11])<<32 |
+					int64(buf[pos+12])<<24 | int64(buf[pos+13])<<16 | int64(buf[pos+14])<<8 | int64(buf[pos+15])
+			}
+			moovEnd = pos + boxSize
+			// moov 巨大（mdat 从 moov 后才开始）：动态扩窗口到 moovEnd+2MB
+			if moovEnd > probeLimit-1<<20 {
+				probeLimit = moovEnd + 2<<20
+			}
+		case "mdat":
+			mdatCount++
+			if mdatCount > 4 {
+				s.cacheWeirdLayout(key, pos, boxSize, mdatCount)
+				return true
+			}
+			if boxSize == 0 {
+				// mdat 延伸到 EOF：扫描结束，按当前计数判定并写缓存
+				s.cacheWeirdLayout(key, -1, 0, mdatCount)
+				return mdatCount > 4
+			}
+		}
+		if boxSize == 1 {
+			if !ensure(pos + 16) {
+				break
+			}
+			boxSize = int64(buf[pos+8])<<56 | int64(buf[pos+9])<<48 | int64(buf[pos+10])<<40 | int64(buf[pos+11])<<32 |
+				int64(buf[pos+12])<<24 | int64(buf[pos+13])<<16 | int64(buf[pos+14])<<8 | int64(buf[pos+15])
+		}
+		if boxSize < 8 {
+			break
+		}
+		pos += boxSize
+	}
+	s.cacheWeirdLayout(key, -1, 0, mdatCount)
+	return mdatCount > 4
+}
+
+// cacheWeirdLayout 把扫描结果写入布局缓存（供二次 /api/weird 秒回）
+func (s *Server) cacheWeirdLayout(key string, moovOffset, moovSize int64, mdatCount int) {
+	s.layoutMu.Lock()
+	if len(s.layouts) >= 256 {
+		s.layouts = make(map[string]layoutEntry)
+	}
+	s.layouts[key] = layoutEntry{l: mp4Layout{moovOffset: moovOffset, moovSize: moovSize, mdatCount: mdatCount}, t: time.Now()}
+	s.layoutMu.Unlock()
 }
 
 // thumbKey 缓存键：真实路径|大小|修改时间|尺寸 的 SHA1

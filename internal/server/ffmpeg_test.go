@@ -434,11 +434,13 @@ func TestVideoInfoDecision(t *testing.T) {
 		minDur   float64
 		maxDur   float64
 	}{
+		// 播放决策：一律 direct（浏览器原生解码直链）。服务端不转码/不重封装——
+		// 怪封装大文件起播慢交给用户手动「规整化」（/api/normalize）处理。
 		{"faststart mp4 → direct", "/fast.mp4", "direct", 1.5, 2.5},
-		{"小非 faststart mp4 → direct(预热)", "/smallslow.mp4", "direct", 1.5, 2.5},
-		{"非 faststart 大 mp4 → hls", "/slow.mp4", "hls", 14, 16},
-		{"mkv → hls", "/x.mkv", "hls", 1.5, 2.5},
-		{"hevc mp4 → hls", "/hevc.mp4", "hls", 1.5, 2.5},
+		{"小非 faststart mp4 → direct", "/smallslow.mp4", "direct", 1.5, 2.5},
+		{"非 faststart 大 mp4 → direct", "/slow.mp4", "direct", 14, 16},
+		{"mkv → direct", "/x.mkv", "direct", 1.5, 2.5},
+		{"hevc mp4 → direct", "/hevc.mp4", "direct", 1.5, 2.5},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

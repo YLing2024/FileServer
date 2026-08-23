@@ -188,19 +188,28 @@ func (m *HlsManager) Active() bool {
 // 已完成的会话不受影响（其缓存文件保留，下次点开秒开）。
 func (m *HlsManager) Abandon(key string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	s, ok := m.sessions[key]
 	if !ok {
+		m.mu.Unlock()
 		return
 	}
 	select {
 	case <-s.done:
+		m.mu.Unlock()
 		return // 已完成/已结束
 	default:
 	}
 	if s.cancel != nil && !s.stopped {
 		s.stopped = true
 		s.cancel()
+	}
+	// 立即强杀该会话的 ffmpeg 进程（GPU 转码偶发卡死时 Kill 不生效，
+	// 若等 runOnce 内的 5s taskkill 兜底，期间进程持续占资源；
+	// 且 fallback 可能已起第二个进程——一并清理防残留）。
+	cmd := s.cmd
+	m.mu.Unlock()
+	if cmd != nil && cmd.Process != nil {
+		exec.Command("taskkill", "/F", "/T", "/PID", strconvItoa(cmd.Process.Pid)).Run()
 	}
 }
 
@@ -377,7 +386,7 @@ func (m *HlsManager) run(ctx context.Context, s *hlsSession, ff *Ffmpeg, fi os.F
 		if lastErr == nil {
 			return nil
 		}
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || s.stopped {
 			return fmt.Errorf("转码已取消")
 		}
 	}
@@ -403,8 +412,10 @@ func (m *HlsManager) runOnce(ctx context.Context, s *hlsSession, ff *Ffmpeg, inf
 		// 机械硬盘冷读一次十几秒，直接把首片产出拖到十几秒。
 		args = append(args, "-analyzeduration", "0", "-probesize", "32")
 	}
-	if !spec.copyMode && spec.hwaccel != "" {
-		// 硬件解码：-hwaccel 必须在 -i 之前；失败由上层降级重试兜底
+	if !spec.copyMode && spec.hwaccel != "" && hwaccelSupported(info) {
+		// 硬件解码：-hwaccel 必须在 -i 之前；失败由上层降级重试兜底。
+		// 仅对 H.264/HEVC 使用——CUDA 硬解不支持 RMVB(RealVideo)/VP9 等编码，
+		// 强行 -hwaccel cuda 会卡死（进程挂起、永不产出分片，实测残留）。
 		args = append(args, "-hwaccel", spec.hwaccel)
 	}
 	args = append(args, "-i", s.src, "-map", "0:v:0")
@@ -548,6 +559,21 @@ func (m *HlsManager) runOnce(ctx context.Context, s *hlsSession, ff *Ffmpeg, inf
 
 func strconvItoa(n int) string { return fmt.Sprintf("%d", n) }
 
+// hwaccelSupported 该媒体是否适合硬件解码（-hwaccel cuda 等）：
+// 仅 H.264/HEVC 有成熟的 GPU 硬解；RMVB(RealVideo)/VP8/9/AV1 等用 CUDA 硬解
+// 会挂起（实测 nvenc+cuda 转 RMVB 进程卡死不产分片）。info 为 nil（未探测到）
+// 时保守不用硬解（CPU 解码兜底，仅 GPU 编码）。
+func hwaccelSupported(info *MediaInfo) bool {
+	if info == nil {
+		return false
+	}
+	switch info.VideoCodec {
+	case "h264", "hevc":
+		return true
+	}
+	return false
+}
+
 // dirSize 目录内所有文件总大小（看门狗进度判据）
 func dirSize(dir string) int64 {
 	var total int64
@@ -639,7 +665,15 @@ func (s *Server) serveHlsFile(w http.ResponseWriter, r *http.Request, session *h
 			writeErr(w, http.StatusInternalServerError, "读取播放列表失败")
 			return
 		}
-		w.Write(rewritePlaylistURIs(data, r))
+		// done=true 仅在转码完成时传：进行中的流不加 ENDLIST（EVENT 语义，
+		// hls.js 会持续拉新分片）；转码完成后加 ENDLIST 正常结束。
+		done := false
+		select {
+		case <-session.done:
+			done = true
+		default:
+		}
+		w.Write(rewritePlaylistURIs(data, r, done))
 		return
 	}
 	// 分片内容不变：可缓存
@@ -657,11 +691,13 @@ func (s *Server) serveHlsFile(w http.ResponseWriter, r *http.Request, session *h
 // rewritePlaylistURIs 改写播放列表：
 // 1) 相对 URI（init.mp4 / seg_*.m4s）→ 指向 /api/hls 的绝对 URL（浏览器/hls.js
 //    按播放列表 URL 目录解析相对 URI 会 404）；
-// 2) 输出「VOD 快照」语义：去掉 EXT-X-PLAYLIST-TYPE:EVENT、末尾追加 ENDLIST。
-//    服务端转码快于实时，但 hls.js 对 EVENT（live）播放列表会追直播边缘、
-//    大 GOP 源起播要等几十秒；VOD 快照让它拿到首片立即起播，
-//    前端播放中定时重载 manifest 获取随转码增长的新分片。
-func rewritePlaylistURIs(data []byte, r *http.Request) []byte {
+// 2) ENDLIST 仅在转码完成（done=true）时输出：
+//    - 转码进行中：不加 ENDLIST（EVENT 语义）——hls.js 会持续拉取随转码增长的
+//      新分片，不会「播完当前已生成部分就结束」（此前无条件加 ENDLIST 导致
+//      长视频只播开头几秒就停）；
+//    - 转码完成：加 ENDLIST，hls.js 正常结束。
+//    同时移除 EXT-X-PLAYLIST-TYPE:EVENT 声明（避免部分播放器按严格 live 处理）。
+func rewritePlaylistURIs(data []byte, r *http.Request, done bool) []byte {
 	path := r.URL.Query().Get("path")
 	base := "/api/hls?path=" + url.QueryEscape(path) + "&f="
 	lines := strings.Split(string(data), "\n")
@@ -673,11 +709,13 @@ func rewritePlaylistURIs(data []byte, r *http.Request) []byte {
 			continue
 		}
 		if strings.HasPrefix(trimmed, "#EXT-X-PLAYLIST-TYPE:") {
-			continue // 移除 live/EVENT 声明 → VOD 快照
+			continue // 移除 live/EVENT 声明
 		}
 		if trimmed == "#EXT-X-ENDLIST" {
 			hasEnd = true
-			out = append(out, trimmed)
+			if done {
+				out = append(out, trimmed)
+			}
 			continue
 		}
 		if strings.HasPrefix(trimmed, "#EXT-X-MAP:") {
@@ -705,7 +743,7 @@ func rewritePlaylistURIs(data []byte, r *http.Request) []byte {
 			out = append(out, trimmed)
 		}
 	}
-	if !hasEnd {
+	if done && !hasEnd {
 		out = append(out, "#EXT-X-ENDLIST")
 	}
 	return []byte(strings.Join(out, "\n"))

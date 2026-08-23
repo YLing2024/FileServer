@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"embed"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"log"
@@ -15,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -43,11 +45,16 @@ type Server struct {
 	hidden  bool   // 是否显示隐藏文件
 	auth    string // 可选口令 "user:pass"
 	verbose bool
-	thumbs  *ThumbCache
-	ff      *Ffmpeg
-	hls     *HlsManager
-	imgSem  chan struct{} // 图片缩略图解码/整读并发上限
+	thumbs *ThumbCache
+	ff     *Ffmpeg
+	hls    *HlsManager
+	norm   *Normalizer
+	imgSem chan struct{} // 图片缩略图解码/整读并发上限
+	ffThumbSem chan struct{} // 服务端 ffmpeg 抽帧并发上限（冷门格式缩略图，低并发防占盘）
 	started time.Time
+	// transcodeEnabled：冷门格式（MKV/RMVB/HEVC 等）在线转码播放 + 服务端抽帧缩略图。
+	// 默认跟随 --ffmpeg 参数，可在前端设置面板动态切换（POST /api/settings/ffmpeg）。
+	transcodeEnabled atomic.Bool
 
 	listMu    sync.Mutex
 	listCache map[string]*listCacheEntry // 目录列表短缓存（返回/翻页秒开）
@@ -68,6 +75,7 @@ type Options struct {
 	Hidden  bool
 	Auth    string
 	Verbose bool
+	FFmpeg  bool // 开启冷门格式（MKV/RMVB/HEVC 等）的在线转码播放 + 服务端缩略图
 }
 
 // New 创建文件服务器
@@ -85,15 +93,19 @@ func New(root string, opts Options) *Server {
 	os.MkdirAll(fsDir, 0o755)
 	go cleanupOldFiles(fsDir, 7*24*time.Hour) // 清理 7 天前的重封装缓存
 
-	return &Server{
+	ff := FindFfmpeg()
+
+	srv := &Server{
 		root:    root,
 		hidden:  opts.Hidden,
 		auth:    opts.Auth,
 		verbose: opts.Verbose,
 		thumbs:  NewThumbCache(root),
-		ff:      FindFfmpeg(),
+		ff:      ff,
 		hls:     NewHlsManager(root),
+		norm:    NewNormalizer(root, base, ff),
 		imgSem:  make(chan struct{}, thumbImgMaxConc),
+		ffThumbSem: make(chan struct{}, ffThumbMaxConc),
 		started: time.Now(),
 		fsDir:   fsDir,
 		fsBusy:  make(map[string]bool),
@@ -101,6 +113,8 @@ func New(root string, opts Options) *Server {
 		pb:      &playbackState{},
 		layouts: make(map[string]layoutEntry),
 	}
+	srv.transcodeEnabled.Store(opts.FFmpeg && ff != nil && ff.Available())
+	return srv
 }
 
 // cleanupOldFiles 删除 dir 下超过 maxAge 的文件（启动时调用一次）
@@ -141,6 +155,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/prewarm", s.handlePrewarm)
 	mux.HandleFunc("GET /api/zip", s.handleZip)
 	mux.HandleFunc("GET /api/search", s.handleSearch)
+	// 怪封装规整化（手动触发 + 进度 + 备份管理）
+	mux.HandleFunc("GET /api/weird", s.handleWeirdList)
+	mux.HandleFunc("GET /api/normalize/status", s.handleNormalizeStatus)
+	mux.HandleFunc("GET /api/normalize/backups", s.handleBackupList)
+	mux.HandleFunc("POST /api/normalize", s.handleNormalizeStart)
+	mux.HandleFunc("POST /api/normalize/restore", s.handleRestore)
+	mux.HandleFunc("POST /api/normalize/delete-backup", s.handleBackupDelete)
+	mux.HandleFunc("POST /api/settings/ffmpeg", s.handleSetFFmpeg)
 	mux.Handle("GET /", s.frontendHandler())
 
 	var h http.Handler = mux
@@ -159,12 +181,32 @@ func (s *Server) Handler() http.Handler {
 	return h
 }
 
+// handleSetFFmpeg POST /api/settings/ffmpeg {"enabled":true|false}
+// 前端设置面板动态开关冷门格式支持（转码播放 + 服务端缩略图）。
+// 无 ffmpeg 时拒绝开启；切换不影响已在进行中的转码会话（正在看的继续播完）。
+func (s *Server) handleSetFFmpeg(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "参数格式错误")
+		return
+	}
+	if body.Enabled && (s.ff == nil || !s.ff.Available()) {
+		writeErr(w, http.StatusBadGateway, "服务端无 ffmpeg，无法开启冷门格式支持")
+		return
+	}
+	s.transcodeEnabled.Store(body.Enabled)
+	writeJSON(w, http.StatusOK, map[string]any{"hls": body.Enabled})
+}
+
 // handleInfo 返回服务端能力信息（前端据此决定视频缩略图策略与扩展名映射）
 func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
+	ffavail := s.ff != nil && s.ff.Available()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"name":         "FileServer",
-		"ffmpeg":       s.ff.Available(),
-		"hls":          s.ff.Available(), // HLS 转码与 ffmpeg 同开关
+		"ffmpeg":       ffavail,
+		"hls":          s.transcodeEnabled.Load(), // 冷门格式在线转码播放（可前端动态开关）
 		"version":      "1.0.0",
 		"kinds":        kindExtMap(), // 统一扩展名→类型映射（前端不再自维护）
 		"search_limit": searchMaxLimit,
@@ -351,39 +393,13 @@ func (s *Server) handleVideoInfo(w http.ResponseWriter, r *http.Request) {
 		"mime": mediaMime(ext),
 	}
 
-	// 快速决策（完全不依赖 ffprobe，毫秒级）：
-	// - WebM：浏览器原生可播 → direct
-	// - MP4 家族：读文件头/尾 256KB 字节判断 HEVC（hvc1/hev1 标志）——
-	//   HEVC → hls；小文件（≤32MB，完整下载毫秒级）或 moov 在头部
-	//   （≤256KB，含怪封装巨 moov：Chrome 顺序下载 moov 即可解析起播，
-	//   ffmpeg 对碎片化 moov 构建索引反而要十几秒）→ direct；
-	//   moov 在中/尾部的大文件 → hls（Chrome 直链要下整个文件，
-	//   ffmpeg 读尾部 moov 快，秒级出片）
-	// - 其余容器（MKV/AVI/...）：hls
-	switch ext {
-	case ".webm":
-		// direct
-	case ".mp4", ".m4v", ".mov":
-		if mp4HasHEVC(abs) {
-			resp["mode"] = "hls"
-		} else if fi.Size() <= 32*1024*1024 || mp4IsFastStart(abs) {
-			// 直链即点即播。首次播放时后台 faststart 化
-			// （copy 重封装，大文件磁盘速任务低于正常优先级），
-			// 完成后走缓存直链，二次打开秒开。
-			if s.ff != nil && s.faststartCachePath(abs, fi) == "" {
-				go s.warmFaststart(abs, fi)
-			}
-			if s.faststartCachePath(abs, fi) != "" {
-				resp["faststart"] = true // 直链缓存已就绪（起播最快）
-			}
-		} else {
-			// moov 中/尾的大文件：直链要下整个文件才能解析，走 HLS copy 重封装
-			resp["mode"] = "hls"
-		}
-	default:
-		if s.ff != nil {
-			resp["mode"] = "hls"
-		}
+	// 播放决策：
+	// - 默认（未开启 --ffmpeg）：一律直链——浏览器原生能播的（H.264 MP4/WebM 等）直接播，
+	//   播不了的（MKV/RMVB/HEVC 等）前端提示不可在线播放（可下载）。
+	// - 开启 --ffmpeg：浏览器原生可播 → direct；冷门格式（MKV/AVI/WMV/RMVB/FLV/TS/3GP/
+	//   MPG/OGV + HEVC MP4）→ hls（服务端 ffmpeg 实时转码，GPU 优先，见 HLS 管理器）。
+	if s.transcodeEnabled.Load() && !s.browserNativePlayable(ext, abs) {
+		resp["mode"] = "hls"
 	}
 
 	// 元数据：优先内存缓存（命中即返回完整信息）；
@@ -398,6 +414,30 @@ func (s *Server) handleVideoInfo(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// browserNativePlayable 判断浏览器能否原生播放该扩展名（无需服务端转码）。
+// MP4 家族需进一步排除 HEVC（Chrome 无 HEVC 解码）；其余按扩展名白名单。
+// 启用 --ffmpeg 时，怪封装 MP4 也返回 false——走 HLS copy 重封装流
+// （ffmpeg -c copy 实时把碎片化 mdat 重封装成规整分片，起播从 30s 降到 1-2s，
+// 零画质损失；规整化仍是用户主动操作，这里只是播放路径优化）。
+func (s *Server) browserNativePlayable(ext, abs string) bool {
+	switch ext {
+	case ".webm":
+		return true
+	case ".mp4", ".m4v", ".mov":
+		if mp4HasHEVC(abs) {
+			return false
+		}
+		if s.transcodeEnabled.Load() && s.isWeird(abs) {
+			return false // 怪封装 → HLS copy 流
+		}
+		return true
+	case ".mp3", ".wav", ".flac", ".ogg", ".oga", ".aac", ".m4a", ".opus", ".wma", ".ogv":
+		// 音频与 Ogv 由浏览器原生处理（音频不支持时按不支持处理，但保持 direct 让浏览器决定）
+		return true
+	}
+	return false
 }
 
 // mp4HasHEVC 判断 MP4 视频编码是否为 HEVC：读文件头/尾各 256KB，

@@ -23,6 +23,7 @@ type Entry struct {
 	ModTime int64  `json:"mtime"` // Unix 秒
 	Ext     string `json:"ext"`
 	Kind    string `json:"kind"`
+	Weird   bool   `json:"weird,omitempty"` // 是否怪封装（video 且 moov 过大 / mdat 碎片过多）
 
 	de os.DirEntry // 懒加载 size/mtime 用（不序列化）
 }
@@ -167,6 +168,8 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 		} else {
 			e.Kind = fileKind(name, false)
 		}
+		// 注：不在此同步判定怪封装（isWeird 要顺序读 8MB 头，大目录首屏会拖慢列表）。
+		// 前端加载列表后异步调用 /api/weird 接口标注怪封装（该接口同样带缓存）。
 		entries = append(entries, e)
 	}
 
