@@ -80,7 +80,7 @@ python scripts/smoke_test.py        # 另有 regression_test.py / hls_e2e_test.p
 
 ## 已知坑
 
-- **`go vet` / `go test` 必须全绿再提交**：`internal/server` 下有 10+ 个测试文件覆盖播放决策、路径安全、规整化、缩略图，是主要防线。
+- **`go vet` / `go test` 必须全绿再提交**：`internal/` 下有 10 个 `_test.go`，覆盖播放决策、路径安全、规整化、缩略图，是主要防线。
 - 规整化会**改动用户原文件**：先自动备份（可恢复/删除），改动这段逻辑前先读 `doc/video-pipeline.md` 与 `doc/cache.md`。
 - 冷门格式 / GPU 转码相关的行为**强依赖 ffmpeg 是否同目录**，没有 ffmpeg 时相关分支应优雅降级（保持文件图标），不要报错。
 - 服务器（本仓库所在的 Linux VPS）**不是运行目标**：`internal/platform/platform_other.go` 让代码在 Linux 上能编译/测试，但真实验收要在 Windows + 有头浏览器 + 真实大文件目录上做。
