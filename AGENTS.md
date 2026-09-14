@@ -86,3 +86,29 @@ python scripts/smoke_test.py        # 另有 regression_test.py / hls_e2e_test.p
 - 服务器（本仓库所在的 Linux VPS）**不是运行目标**：`internal/platform/platform_other.go` 让代码在 Linux 上能编译/测试，但真实验收要在 Windows + 有头浏览器 + 真实大文件目录上做。
 - `testdata/*.mp4`、`dist/`、`.tools/`、`*.exe`、`.FileServer/` 均被 `.gitignore` 忽略，不要提交。
 - 二维码实现是自研的，改动 `internal/qrcode/` 后要跑 `compare_test.go`（与参考实现比对）。
+
+## 项目记忆（PROJECT_MEMORY.md · 自迭代 · 不入库）
+
+仓库根目录的 `PROJECT_MEMORY.md` 是**只存在于本机的项目记忆**，跨会话累积。与本文档分工：**AGENTS.md 记「当前事实与铁律」，PROJECT_MEMORY.md 记「过程与理由」**。
+
+**它自迭代——你随时可以写进去，不必请示，也不需要用户批准：**
+
+- 用户/维护者在本项目新立的规矩（命名、文案口径、设计令牌、流程约束）
+- 排查确认的结论与有效验证命令（「这个报错其实是 X 导致的」）
+- 决策背景：为什么选 A 不选 B、哪个方案被否决过及原因
+- AGENTS.md 里没有、但下次会省时间的一切
+
+**约束：**
+
+- 已在 `.gitignore` 中忽略，**不提交、不推送**（`git status` 里也不该出现）。因此可以放心写内部信息（真实域名、绝对路径、内部地址），但**禁止写入密钥 / token 明文**
+- 追加式记录、**最新在上**、每条带日期；不要回头改写或删除历史条目
+- 文件不存在时按此骨架创建：
+
+```markdown
+# PROJECT_MEMORY — <项目名>
+> 本机项目记忆，已被 .gitignore 忽略，不提交。
+
+## 用户/维护者立下的规矩
+## 决策与理由
+## 踩坑与验证配方
+```
