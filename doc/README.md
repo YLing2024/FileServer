@@ -12,7 +12,7 @@
 | [ffmpeg.md](ffmpeg.md) | ffmpeg 集成：查找与打包、GPU 编码器探测、HLS 转码、faststart、媒体探测（缩略图已弃用服务端方案） |
 | [cache.md](cache.md) | 缓存体系：`.FileServer` 目录结构、各缓存的生命周期与清理策略 |
 | [frontend.md](frontend.md) | 前端架构：模块、播放器、浏览器抽帧缩略图（thumb-src）、移动端适配 |
-| [security.md](security.md) | 安全模型：路径穿越、符号链接、认证、只读保证 |
+| [security.md](security.md) | 安全模型：路径穿越、符号链接、认证、写入范围 |
 | [build-and-test.md](build-and-test.md) | 构建、发布打包、测试体系 |
 
 ## 快速导航
