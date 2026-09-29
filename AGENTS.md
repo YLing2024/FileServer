@@ -72,7 +72,7 @@ python scripts/smoke_test.py        # 另有 regression_test.py / hls_e2e_test.p
 
 ## 设计约定
 
-- **只读保证**：任何写操作都不得发生在用户目录里；项目自身的缓存/临时文件统一放目标目录下的 `.FileServer/`。
+- **浏览即读，写入仅一处**：浏览 / 预览 / 下载路径不得写用户目录；缓存与临时文件统一放目标目录下的 `.FileServer/`。**设计内的唯一例外是规整化**（`internal/server/normalize.go`）：它先 `os.Rename` 把原文件移进备份目录、再把规整结果 `os.Rename` 就位。因此文档里不要再写「本服务无任何写接口 / 从不写用户目录」—— 要写明这一处。
 - **零安装**：不引入需要额外安装的运行时依赖；能自研就自研（qrcode 就是先例）。
 - **平台差异隔离在 `internal/platform/`**：`*_windows.go` / `*_other.go` 成对出现，改一个必须同步另一个。
 - **进程安全**：ffmpeg 子进程用 Job Object 防孤儿，abandon 即终止（taskkill 兜底），空闲 10 分钟回收——这块逻辑改动务必回归。
