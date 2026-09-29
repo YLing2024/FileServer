@@ -46,7 +46,7 @@ doc/                          # 项目深度文档（见下）
 | ffmpeg 集成、GPU 编码器探测、转码规格 | `doc/ffmpeg.md` |
 | `.FileServer` 缓存生命周期 | `doc/cache.md` |
 | 前端播放器、抽帧缩略图、移动端适配 | `doc/frontend.md` |
-| 路径穿越、符号链接、只读保证 | `doc/security.md` |
+| 路径穿越、符号链接、写入范围（浏览即读 + 规整化这一处例外） | `doc/security.md` |
 | 构建、发布打包、测试体系 | `doc/build-and-test.md` |
 
 ## 命令
