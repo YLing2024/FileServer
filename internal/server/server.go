@@ -80,6 +80,15 @@ type Options struct {
 // New 创建文件服务器
 func New(root string, opts Options) *Server {
 	root = filepath.Clean(root)
+	// 解析根目录中的符号链接 / junction / subst：safePath 拿 EvalSymlinks 后的
+	// real 与 s.root 做前缀比较，若根目录本身是链接而 s.root 保存词法路径，两者
+	// 前缀永不匹配 → 全站每个请求都 403。解析失败（路径暂不存在等）回退原值并
+	// 记日志，交由后续 MkdirAll / 调用方报错。
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	} else {
+		log.Printf("解析服务根目录真实路径失败，沿用原路径 %q: %v", root, err)
+	}
 
 	// 缓存基目录：共享根目录下的隐藏文件夹 .FileServer（不往系统目录写文件）。
 	// 根目录不可写（只读介质）时回退系统临时目录。
