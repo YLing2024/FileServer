@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -507,6 +509,60 @@ func TestHlsEndpoint(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("未开启转码时 /api/hls 应 404, 得到 %d", resp.StatusCode)
+	}
+}
+
+// TestHlsEndpointEnabled 开启转码（Options{FFmpeg:true}）后 /api/hls 正常返回
+// 播放列表与 fmp4 分片，即 M2 修复没有把「开启侧」一起关掉。
+func TestHlsEndpointEnabled(t *testing.T) {
+	ff := FindFfmpeg()
+	if ff == nil {
+		t.Skip("ffmpeg 不可用，跳过集成测试")
+	}
+	root := t.TempDir()
+	src := filepath.Join(root, "ep.mkv")
+	gen := exec.Command(ff.ffmpegPath, "-hide_banner", "-loglevel", "error", "-y",
+		"-f", "lavfi", "-i", "testsrc2=s=320x240:d=4:r=30",
+		"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-f", "matroska", src)
+	if out, err := gen.CombinedOutput(); err != nil {
+		t.Skipf("无法生成测试视频: %s", strings.TrimSpace(string(out)))
+	}
+
+	srv := New(root, Options{FFmpeg: true})
+	defer srv.Close()
+	if !srv.transcodeEnabled.Load() {
+		t.Skip("ffmpeg 不可执行，转码未启用")
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	// 播放列表（首次请求会触发转码并等待首片）
+	resp := get(t, ts.URL+"/api/hls?path=/ep.mkv&f=index.m3u8")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("播放列表状态码 %d", resp.StatusCode)
+	}
+	pl, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(pl), "#EXTM3U") {
+		t.Fatalf("不是合法播放列表: %s", pl)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "application/vnd.apple.mpegurl" {
+		t.Errorf("m3u8 Content-Type = %q", ct)
+	}
+
+	// 提取第一个分片名并请求
+	re := regexp.MustCompile(`seg_\d+\.m4s`)
+	name := re.FindString(string(pl))
+	if name == "" {
+		t.Skip("播放列表尚无分片（转码未完成）")
+	}
+	resp2 := get(t, ts.URL+"/api/hls?path=/ep.mkv&f="+name)
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("分片状态码 %d", resp2.StatusCode)
+	}
+	if ct := resp2.Header.Get("Content-Type"); ct != "video/mp4" {
+		t.Errorf("分片 Content-Type = %q", ct)
 	}
 }
 
