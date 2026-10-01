@@ -50,6 +50,7 @@
 文件下载/直链预览，支持 Range 断点续传（`http.ServeContent`）。
 - `dl=1`：强制附件下载。
 - `fs=1`：faststart 重封装缓存存在时读缓存（起播最快）；未就绪回退原文件。
+  缓存由 `/api/video-info` 触发后台重封装生成（见下）。
 - 视频/音频 Range 请求会触发 `markVideoRead()`（直链播放活动跟踪，
   预热/重封装据此让路）。
 - HTML/SVG/JS 等可执行扩展名强制 attachment（防 XSS 渲染）。
@@ -60,15 +61,24 @@
 
 响应：`{mode, mime, faststart?, duration?, ...}`
 
-决策树（详见 video-pipeline.md）：
+`mode` 默认 `direct`；仅当**开启 `--ffmpeg`**（且找到 ffmpeg）且该扩展名浏览器
+不能原生播放时才置 `hls`（详见 video-pipeline.md）：
 
 | 情况 | mode |
 |---|---|
-| `.webm` | direct |
-| MP4 家族且含 HEVC（hvc1/hev1，头尾 256KB 探测） | hls |
-| MP4 ≤32MB 或 moov 在头部（≤256KB 偏移） | direct（顺带后台 faststart 化） |
-| MP4 大文件 moov 在中/尾 | hls |
-| 其他容器（MKV/AVI/…） | hls |
+| 未开启 `--ffmpeg`（或未找到 ffmpeg） | 一律 direct |
+| 开启 `--ffmpeg`：`.webm` | direct |
+| 开启 `--ffmpeg`：MP4 家族含 HEVC（hvc1/hev1，头尾 256KB 探测） | hls |
+| 开启 `--ffmpeg`：MP4 家族且「怪封装」（≥256MB 且 mdat > 4 块） | hls（copy 重封装） |
+| 开启 `--ffmpeg`：MP4 家族其余（H.264 等） | direct |
+| 开启 `--ffmpeg`：音频 / `.ogv` | direct |
+| 开启 `--ffmpeg`：其他容器（MKV/AVI/RMVB/…） | hls |
+
+直链 MP4（`.mp4/.m4v/.mov`、非 HEVC、原文件 moov 不在头部、尚无缓存）会**后台
+触发一次 faststart 重封装预热**（`warmFaststart`，best-effort，失败只记日志）：
+本次播放用原文件，二次打开 `/api/file?fs=1` 命中缓存秒开。预热受单飞（同一文件
+不重复）与「播放/转码进行中让路」约束；缓存已就绪时响应带 `"faststart": true`。
+该触发只要求本机找到 ffmpeg，不依赖 `--ffmpeg` 开关。
 
 元数据：内存缓存命中直接返回完整信息；未命中后台 ffprobe（2s 超时），
 前端 2 秒后二次查询补时长。
