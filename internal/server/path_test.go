@@ -102,6 +102,40 @@ func TestSafePathSymlink(t *testing.T) {
 	}
 }
 
+// TestRootSymlinkResolved 服务根目录本身是符号链接/junction 时不应全站 403（M1）。
+// 修复前 New() 保存的是链接词法路径，safePath 里 EvalSymlinks 出的真实路径
+// 落在该前缀之外，导致每个请求都被判为越界。
+func TestRootSymlinkResolved(t *testing.T) {
+	target := t.TempDir()
+	if err := os.WriteFile(filepath.Join(target, "hello.txt"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "rootlink")
+	if err := os.Symlink(target, link); err != nil {
+		// Windows 创建目录符号链接需开发者模式/管理员权限，环境不允许时跳过，
+		// 不保留一个恒真的假用例。
+		t.Skipf("当前环境无法创建目录符号链接（Windows 需开发者模式/管理员）: %v", err)
+	}
+	resolved, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv := New(link, Options{})
+	defer srv.Close()
+	if srv.root != resolved {
+		t.Errorf("New() 应保存解析后的根: root=%q, want %q", srv.root, resolved)
+	}
+	// 根内文件必须可访问（修复前这里返回 errForbidden → 全站 403）
+	abs, err := srv.safePath("hello.txt")
+	if err != nil {
+		t.Fatalf("符号链接根目录下的文件应可访问, 却失败: %v", err)
+	}
+	if !pathWithin(srv.root, abs) {
+		t.Fatalf("解析结果 %q 不在根 %q 内", abs, srv.root)
+	}
+}
+
 func TestPathWithin(t *testing.T) {
 	// 该用例使用 Windows 盘符路径，仅 Windows 语义有效
 	if runtime.GOOS != "windows" {
