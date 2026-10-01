@@ -513,7 +513,7 @@ const videoQueue = [];
 const MAX_ACTIVE = 3;
 
 /* moov 预读预热已移除：按用户要求，服务端不做任何自动后台任务（不预热/不常驻）。
-   怪封装文件的起播优化改为用户手动「规整化」（卡片上的规整按钮 / 规整化面板）。 */
+   怪封装文件的起播优化：开启冷门格式支持后走 HLS copy；永久规整改用独立项目 mp4norm。 */
 
 function observeVideoThumb(e, img, holder, thumbEl, p) {
   const key = p;

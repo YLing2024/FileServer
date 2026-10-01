@@ -439,20 +439,20 @@ func (s *Server) mp4LayoutCached(src string, size int64) mp4Layout {
 	return l
 }
 
-// isWeird 判断视频是否为「值得规整」的怪封装（带布局缓存）。
+// isWeird 判断视频是否为「怪封装」——起播慢、适合走 HLS copy 加速（带布局缓存）。
 // 实测校准（ffprobe 解析耗时 vs 文件结构）：
 //   - 解析耗时主要随文件体积增长（moov 索引表随帧数线性膨胀），碎片化再叠加
 //     机械盘随机寻道成本；
-//   - 小文件（<256MB）即使 mdat 碎片多，解析也在亚秒级，规整收益极小；
-//   - 大文件且 mdat 碎片化（大量小块交错）解析要数秒~十几秒，规整后降至亚秒。
-// 判据：mdat > 4 块 且 体积 ≥ 256MB。不以 moov 体积为判据——规整后 moov 反而更大。
+//   - 小文件（<256MB）即使 mdat 碎片多，解析也在亚秒级，加速收益极小；
+//   - 大文件且 mdat 碎片化（大量小块交错）解析要数秒~十几秒，走 HLS copy 起播可降到约 1 秒。
+// 判据：mdat > 4 块 且 体积 ≥ 256MB。不以 moov 体积为判据。
 func (s *Server) isWeird(abs string) bool {
 	fi, err := os.Stat(abs)
 	if err != nil {
 		return false
 	}
 	if fi.Size() < 256<<20 {
-		return false // 小文件解析本来就快，规整无收益
+		return false // 小文件解析本来就快，无需 HLS copy 加速
 	}
 	l := s.mp4LayoutCached(abs, fi.Size())
 	return l.mdatCount > 4
