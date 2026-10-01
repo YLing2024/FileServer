@@ -360,6 +360,28 @@ func (s *Server) warmFaststart(abs string, fi os.FileInfo) {
 	}
 }
 
+// maybeWarmFaststart 在 MP4 直链且尚未 faststart 时调度一次后台重封装预热。
+// 触发条件（全部满足才生成缓存，避免无谓重封装）：
+//   - ffmpeg 可用；
+//   - 浏览器可原生直链（非 HEVC，HEVC MP4 预热了也播不了）；
+//   - 原文件 moov 不在头部（未 faststart）且尚无缓存。
+//
+// 只负责调度：单飞防重复（fsBusy/fsMu）与「播放进行中让路」在 warmFaststart
+// 内实现，因此多次请求不会退化成多条无条件后台任务。
+func (s *Server) maybeWarmFaststart(abs string, fi os.FileInfo) {
+	if s.ff == nil || mp4HasHEVC(abs) {
+		return
+	}
+	// 复用布局缓存（moov 头部 256KB 内视为已 faststart），避免重复扫描。
+	if l := s.mp4LayoutCached(abs, fi.Size()); l.moovOffset >= 0 && l.moovOffset <= 256*1024 {
+		return
+	}
+	if s.faststartCachePath(abs, fi) != "" {
+		return
+	}
+	go s.warmFaststart(abs, fi)
+}
+
 // handleVideoInfo GET /api/video-info?path=
 // 返回播放决策：direct（浏览器原生直链）/ hls（需服务端转码流化），
 // 以及时长、分辨率等元数据（前端播放器进度条/信息展示）。
@@ -402,6 +424,18 @@ func (s *Server) handleVideoInfo(w http.ResponseWriter, r *http.Request) {
 	//   MPG/OGV + HEVC MP4）→ hls（服务端 ffmpeg 实时转码，GPU 优先，见 HLS 管理器）。
 	if s.transcodeEnabled.Load() && !s.browserNativePlayable(ext, abs) {
 		resp["mode"] = "hls"
+	}
+
+	// MP4 家族：直链且尚未 faststart（moov 不在头部）时，后台预热重封装缓存——
+	// 本次播放用原文件（best-effort，绝不影响播放），二次打开走 fs=1 缓存秒开，
+	// 抽帧源也优先命中（见 thumb.go）。已有缓存则在响应里标记 faststart。
+	// 单飞防重复与「播放中让路」语义全部封装在 warmFaststart 内，这里只做触发判定。
+	if ext == ".mp4" || ext == ".m4v" || ext == ".mov" {
+		if s.faststartCachePath(abs, fi) != "" {
+			resp["faststart"] = true
+		} else if resp["mode"] == "direct" {
+			s.maybeWarmFaststart(abs, fi)
+		}
 	}
 
 	// 元数据：优先内存缓存（命中即返回完整信息）；
