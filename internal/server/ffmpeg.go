@@ -727,10 +727,3 @@ func mp4IsFastStart(abs string) bool {
 	return l.moovOffset >= 0 && l.moovOffset <= 256*1024
 }
 
-// mp4IsWeirdLayout 判断 MP4 是否为「怪封装」：mdat 碎片化严重（大量小 mdat 块交错）。
-// 注意：不以 moov 大小为判据——规整化后的文件 moov 更大但 mdat 单块、解析飞快。
-// 是否「值得规整」还需结合文件体积（见 isWeird：≥256MB 才有明显收益）。
-func mp4IsWeirdLayout(abs string) bool {
-	l := mp4LayoutOf(abs)
-	return l.mdatCount > 4
-}
