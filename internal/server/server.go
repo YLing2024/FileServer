@@ -477,7 +477,10 @@ func mp4HasHEVC(abs string) bool {
 // abandon=1：前端关闭播放器时通知服务端终止该文件的转码会话——
 // 用户已经离开这个视频，机械硬盘上持续读写会拖慢下一个视频的首片。
 func (s *Server) handleHls(w http.ResponseWriter, r *http.Request) {
-	if s.ff == nil {
+	// 与 /api/info 的 "hls" 能力、/api/video-info 的播放决策一致：只有
+	// --ffmpeg 开启（或前端设置面板动态开启）时才允许转码。仅凭 s.ff != nil
+	// 判断会让未开启转码的实例也能拉 m3u8 并在 .FileServer/hls 下建缓存。
+	if !s.transcodeEnabled.Load() || s.ff == nil {
 		writeErr(w, http.StatusNotFound, "服务端未启用视频转码")
 		return
 	}
