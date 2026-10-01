@@ -5,12 +5,11 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
-	"io"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -478,7 +477,9 @@ func TestVideoInfoDecision(t *testing.T) {
 	}
 }
 
-// TestHlsEndpoint 验证 /api/hls 端到端：请求播放列表 → 200 + m3u8；请求分片 → 200 + video/mp4
+// TestHlsEndpoint 验证 /api/hls 的开关门禁：未传 --ffmpeg（转码关闭）时必须 404，
+// 不得仅凭「找得到 ffmpeg」就返回播放列表并建转码缓存。
+// 「开启转码后正常返回 m3u8/分片」由 TestHlsEndpointEnabled 覆盖。
 func TestHlsEndpoint(t *testing.T) {
 	ff := FindFfmpeg()
 	if ff == nil {
@@ -493,38 +494,19 @@ func TestHlsEndpoint(t *testing.T) {
 		t.Skipf("无法生成测试视频: %s", strings.TrimSpace(string(out)))
 	}
 
+	// Options{} 默认关闭转码：/api/hls 必须拒绝，避免绕过 --ffmpeg 开关。
 	srv := New(root, Options{})
 	defer srv.Close()
+	if srv.transcodeEnabled.Load() {
+		t.Fatal("Options{} 不应开启转码")
+	}
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	// 播放列表（首次请求会触发转码并等待首片）
 	resp := get(t, ts.URL+"/api/hls?path=/ep.mkv&f=index.m3u8")
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		t.Fatalf("播放列表状态码 %d", resp.StatusCode)
-	}
-	pl, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(pl), "#EXTM3U") {
-		t.Fatalf("不是合法播放列表: %s", pl)
-	}
-	if ct := resp.Header.Get("Content-Type"); ct != "application/vnd.apple.mpegurl" {
-		t.Errorf("m3u8 Content-Type = %q", ct)
-	}
-
-	// 提取第一个分片名并请求
-	re := regexp.MustCompile(`seg_\d+\.m4s`)
-	name := re.FindString(string(pl))
-	if name == "" {
-		t.Skip("播放列表尚无分片（转码未完成）")
-	}
-	resp2 := get(t, ts.URL+"/api/hls?path=/ep.mkv&f="+name)
-	defer resp2.Body.Close()
-	if resp2.StatusCode != 200 {
-		t.Fatalf("分片状态码 %d", resp2.StatusCode)
-	}
-	if ct := resp2.Header.Get("Content-Type"); ct != "video/mp4" {
-		t.Errorf("分片 Content-Type = %q", ct)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("未开启转码时 /api/hls 应 404, 得到 %d", resp.StatusCode)
 	}
 }
 
@@ -542,7 +524,8 @@ func TestHlsPathSafety(t *testing.T) {
 	if out, err := gen.CombinedOutput(); err != nil {
 		t.Skipf("无法生成测试视频: %s", strings.TrimSpace(string(out)))
 	}
-	srv := New(root, Options{})
+	// 文件名校验发生在开关之后，需开启转码才能走到该分支
+	srv := New(root, Options{FFmpeg: true})
 	defer srv.Close()
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
