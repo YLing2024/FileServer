@@ -22,7 +22,6 @@ internal/server/
 ├── hls.go          HLS 会话管理（copy/转码、分片、EVENT→VOD、abandon、进程强杀）
 ├── ffmpeg.go       ffmpeg 查找、GPU 编码器探测、服务端抽帧、faststart 重封装、媒体探测
 ├── thumb.go        缩略图缓存（内存 LRU + 磁盘 + 失败记忆 + 忙碌计数）、冷门格式服务端抽帧
-├── normalize.go    怪封装规整化（任务队列/备份/恢复/删除/进度）
 └── web/            内嵌前端（原生 HTML/CSS/JS，无构建；Go embed.FS）
 internal/platform/  Windows 平台设施（Job Object 防孤儿进程）
 internal/qrcode/    终端二维码
@@ -34,7 +33,6 @@ internal/qrcode/    终端二维码
 - ffmpeg/ffprobe 以子进程方式按需启动：
   - 冷门格式缩略图抽帧：`BELOW_NORMAL_PRIORITY_CLASS` 低优先级，20s 超时；
   - HLS 转码：GPU 编码器优先（nvenc/amf/qsv 启动时实测），CPU 兜底；
-  - 怪封装规整化：低优先级、单飞（`-c copy +faststart`，可能耗时数分钟）；
   - faststart 重封装：大文件低优先级、10 分钟超时；
   - **防孤儿**：子进程挂到 Windows Job Object（`KillOnParentExit`，句柄不可继承），
     服务退出即连带终止；异常情况再以 `taskkill /F /T` 兜底（仅 ctx 取消后 5s 未退时，
@@ -45,16 +43,12 @@ internal/qrcode/    终端二维码
 
 ```
 浏览器
- ├─ GET /api/list?path=        目录列表（带 2s 短缓存）+ 怪封装标记
- ├─ GET /api/weird?path=       目录怪封装扫描（流式提前停，布局缓存）
+ ├─ GET /api/list?path=        目录列表（带 2s 短缓存）
  ├─ GET /api/thumb-src?path=   视频抽帧源（截短的合法 MP4：moov+样本区，≤16MB）
  ├─ GET /api/thumb?path=..     图片缩略图 + 冷门格式服务端抽帧 JPEG
  ├─ GET /api/video-info?path=  播放决策（毫秒级，不碰 ffprobe）
  ├─ GET /api/file?path=&fs=1   直链播放（Range 断点续传）
  ├─ GET /api/hls?path=&f=...   HLS 分片（copy/转码，EVENT→VOD）
- ├─ POST /api/normalize?path=  加入怪封装规整队列
- ├─ GET  /api/normalize/status|backups  规整进度/备份列表
- ├─ POST /api/normalize/restore|delete-backup  恢复/删除备份
  ├─ POST /api/settings/ffmpeg  冷门格式支持动态开关（前端工具栏按钮）
  └─ GET /api/zip?path=         目录打包下载
 ```
@@ -69,7 +63,6 @@ internal/qrcode/    终端二维码
 | HLS 转码/分片 | copy 4 / 转码 2 | 最高优先级 |
 | 视频缩略图（常规 MP4/WebM 浏览器抽帧） | 浏览器内 3 路 | 点开视频瞬间前端中止在途抽帧 + 暂停新任务 |
 | 冷门格式服务端抽帧 | 2 路（低优先级） | 不抢播放 |
-| 怪封装规整化 | 1 路单飞（低优先级） | 不抢播放 |
 | faststart 重封装 | 每文件单飞 | 播放进行时等待 |
 | 图片缩略图（Go 原生解码） | 4 路 | — |
 
@@ -92,14 +85,15 @@ internal/qrcode/    终端二维码
    走 HLS 转码（GPU 优先），关闭时仅可下载。硬件解码（`-hwaccel cuda`）仅用于
    H.264/HEVC——RMVB 等 CUDA 无法硬解，强行硬解会卡死（曾实测残留进程）。
 3. **怪封装 MP4**：mdat 碎片化严重（大量碎块）导致 Chrome 解析 moov 慢（起播
-   十几秒~三十秒）。两种解法：
-   - 冷门格式支持开启：自动走 HLS copy 重封装流（`-c copy` 零画质损失），起播约 1 秒；
-   - 手动规整化：`-c copy +faststart` 永久整理为 mdat 单块，之后永远秒开；
-     规整前自动备份原文件（可恢复/删除）。
+   十几秒~三十秒）。冷门格式支持开启时自动走 HLS copy 重封装流（`-c copy`
+   零画质损失），起播约 1 秒。若需永久整理为 mdat 单块，请使用独立项目
+   [mp4norm](https://github.com/YLing2024/mp4norm)（FileServer 不再内置该功能）。
 4. **缩略图分工**：常规 MP4/WebM 用浏览器抽帧（零服务端成本）；冷门格式在开启
    冷门格式支持时由服务端 ffmpeg 抽帧（低优先级、2 路并发、磁盘缓存），
    关闭时保持图标（不下载、不占资源）。
-5. **缓存全在服务目录内**：`.FileServer\`（thumb/ hls/ faststart/ backup/），不写系统目录。
+5. **缓存全在服务目录内**：`.FileServer\`（thumb/ hls/ faststart/），不写系统目录。
+   旧版本遗留的 `.FileServer\backup\` 为历史原文件备份，FileServer 不再写入或清理，
+   请用 mp4norm 处理或手工恢复。
 6. **前端无构建**：原生 JS + embed.FS，改前端即改 Go 代码重新编译。
 7. **冷门格式支持可动态切换**：`transcodeEnabled` 原子变量，前端工具栏 🎬 按钮
    调 `/api/settings/ffmpeg` 即时开关并记忆选择（localStorage），无需重启服务。
