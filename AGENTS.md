@@ -7,7 +7,7 @@
 
 Windows 局域网文件服务器，编译成**单文件 exe**（~8MB）：双击即用，控制台打印局域网访问地址 + 二维码，同 WiFi 下任意设备只读浏览/预览/下载 exe 所在目录（或 `--dir` 指定目录）。
 
-核心卖点：**视频在线播放**——原生格式直链秒开；MKV/HEVC/AVI/RMVB 等冷门格式开启后由 ffmpeg 实时转 H.264 边转边播；怪封装 MP4 走 HLS copy 重封装或手动"规整化"实现秒开。
+核心卖点：**视频在线播放**——原生格式直链秒开；MKV/HEVC/AVI/RMVB 等冷门格式开启后由 ffmpeg 实时转 H.264 边转边播；怪封装 MP4 走 HLS copy 重封装实现秒开。永久规整（mdat 合并 / moov 前置）已拆分到独立项目 mp4norm。
 
 ## 技术栈
 
@@ -25,7 +25,7 @@ internal/server/              # HTTP 服务主体
 ├── list.go / search.go / zip.go
 ├── path.go                   # 路径解析与安全（穿越防护，有 path_test / path_posix_test）
 ├── security_test.go
-├── hls.go / ffmpeg.go / prewarm.go / normalize.go   # 视频管线：HLS 会话、转码、预热、怪封装规整化
+├── hls.go / ffmpeg.go / prewarm.go                  # 视频管线：HLS 会话、转码、预热
 ├── thumb.go                  # 缩略图
 └── lanip.go                  # 局域网地址探测
 internal/platform/            # OS 差异（platform_windows.go / platform_other.go）
@@ -46,7 +46,7 @@ doc/                          # 项目深度文档（见下）
 | ffmpeg 集成、GPU 编码器探测、转码规格 | `doc/ffmpeg.md` |
 | `.FileServer` 缓存生命周期 | `doc/cache.md` |
 | 前端播放器、抽帧缩略图、移动端适配 | `doc/frontend.md` |
-| 路径穿越、符号链接、写入范围（浏览即读 + 规整化这一处例外） | `doc/security.md` |
+| 路径穿越、符号链接、写入范围（浏览即读，不写用户文件） | `doc/security.md` |
 | 构建、发布打包、测试体系 | `doc/build-and-test.md` |
 
 ## 命令
@@ -72,7 +72,7 @@ python scripts/smoke_test.py        # 另有 regression_test.py / hls_e2e_test.p
 
 ## 设计约定
 
-- **浏览即读，写入仅一处**：浏览 / 预览 / 下载路径不得写用户目录；缓存与临时文件统一放目标目录下的 `.FileServer/`。**设计内的唯一例外是规整化**（`internal/server/normalize.go`）：它先 `os.Rename` 把原文件移进备份目录、再把规整结果 `os.Rename` 就位。因此文档里不要再写「本服务无任何写接口 / 从不写用户目录」—— 要写明这一处。
+- **浏览即读，不写用户文件**：浏览 / 预览 / 下载路径不得写用户目录；缓存与临时文件统一放目标目录下的 `.FileServer/`。内置规整化已移除，服务不再改写用户原文件；永久规整（mdat 合并 / moov 前置）改用独立项目 mp4norm。
 - **访问口令默认不启用**（用户 2026-09-29 明确决定）：本项目自用、只跑局域网、风险可控，所以保持「不传 `--auth` 即敞开」。**不要**擅自改成默认开启或首启随机口令；自带的就是 `--auth user:pass`（Basic Auth）这一档。
 - **零安装**：不引入需要额外安装的运行时依赖；能自研就自研（qrcode 就是先例）。
 - **平台差异隔离在 `internal/platform/`**：`*_windows.go` / `*_other.go` 成对出现，改一个必须同步另一个。
@@ -81,8 +81,8 @@ python scripts/smoke_test.py        # 另有 regression_test.py / hls_e2e_test.p
 
 ## 已知坑
 
-- **`go vet` / `go test` 必须全绿再提交**：`internal/` 下有 10 个 `_test.go`，覆盖播放决策、路径安全、规整化、缩略图，是主要防线。
-- 规整化会**改动用户原文件**：先自动备份（可恢复/删除），改动这段逻辑前先读 `doc/video-pipeline.md` 与 `doc/cache.md`。
+- **`go vet` / `go test` 必须全绿再提交**：`internal/` 下的 `_test.go` 覆盖播放决策、路径安全、缩略图等，是主要防线。
+- 永久规整**已拆分到独立项目 mp4norm**：FileServer 不再改动用户原文件，`.FileServer\backup\` 仅为历史遗留。
 - 冷门格式 / GPU 转码相关的行为**强依赖 ffmpeg 是否同目录**，没有 ffmpeg 时相关分支应优雅降级（保持文件图标），不要报错。
 - 服务器（本仓库所在的 Linux VPS）**不是运行目标**：`internal/platform/platform_other.go` 让代码在 Linux 上能编译/测试，但真实验收要在 Windows + 有头浏览器 + 真实大文件目录上做。
 - `testdata/*.mp4`、`dist/`、`.tools/`、`*.exe`、`.FileServer/` 均被 `.gitignore` 忽略，不要提交。
