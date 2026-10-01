@@ -154,9 +154,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/zip", s.handleZip)
 	mux.HandleFunc("GET /api/search", s.handleSearch)
 	mux.HandleFunc("POST /api/settings/ffmpeg", s.handleSetFFmpeg)
-	// 根路径兜底注册为任意方法：SPA 仅需 GET，但这样未匹配的旧接口
-	// （如已下线的 POST /api/normalize）会落到前端文件服务并返回 404，
-	// 而不是被 net/http 以「方法不允许」回成 405。
+	// 根路径兜底注册为任意方法：SPA 仅需 GET，但这样未匹配的旧 POST 接口
+	// 会落到前端文件服务并返回 404，而不是被 net/http 以「方法不允许」回成 405。
 	mux.Handle("/", s.frontendHandler())
 
 	var h http.Handler = mux
