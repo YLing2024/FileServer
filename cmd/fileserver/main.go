@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"fileserver/internal/platform"
 	"fileserver/internal/qrcode"
@@ -97,7 +98,12 @@ func main() {
 
 	log.Printf("服务已启动: %s (port %d)", rootAbs, actualPort)
 
-	httpSrv := &http.Server{Handler: handler}
+	// 仅限制请求头读取时长（防慢客户端长期占用连接）；不设 WriteTimeout，
+	// 否则会掐断长视频/大文件响应。
+	httpSrv := &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
 	// Ctrl+C / 关闭控制台窗口：优雅退出，终止 HLS 转码子进程（避免遗留 ffmpeg 空转）
 	go func() {
 		sig := make(chan os.Signal, 1)
