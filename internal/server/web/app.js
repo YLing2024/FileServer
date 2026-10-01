@@ -27,11 +27,6 @@ const listURL = (p, sort, order, limit, offset) => `/api/list?path=${pathParam(p
 const searchURL = (q, p, limit) => `/api/search?q=${pathParam(q)}&path=${pathParam(p)}&limit=${limit}`;
 const videoInfoURL = (p) => '/api/video-info?path=' + pathParam(p);
 const hlsURL = (p) => '/api/hls?path=' + pathParam(p) + '&f=index.m3u8';
-const normalizeURL = (p) => '/api/normalize?path=' + pathParam(p);
-const normalizeStatusURL = '/api/normalize/status';
-const backupsURL = '/api/normalize/backups';
-const restoreURL = (p) => '/api/normalize/restore?path=' + pathParam(p);
-const deleteBackupURL = (p) => '/api/normalize/delete-backup?path=' + pathParam(p);
 
 function fmtSize(n) {
   if (n == null) return '';
@@ -100,7 +95,6 @@ const state = {
   searchLimit: 1000,  // 搜索条数上限（4.5，从 /api/info 取服务端值）
   hasMore: false,     // 目录列表是否还有更多页（服务端分页 3.1）
   listSeq: 0,         // 列表加载序列号（竞态保护）
-  weirdPaths: null,   // 当前目录怪封装视频的路径集合（Set，异步加载）
 };
 
 // 单次目录列表页大小（唯一来源，取代旧的分页常量）
@@ -229,70 +223,15 @@ async function loadList(path) {
     if (seq !== state.listSeq) return; // 已有更新的导航
     state.entries = data.entries;
     state.hasMore = !!data.truncated;
-    state.weirdPaths = new Set(); // 先置空，避免旧的误标
     showSkeleton(false);
     render();
     // 返回本目录时恢复之前记住的滚动位置
     const saved = state.scrollMap[state.path];
     if (saved != null) requestAnimationFrame(() => window.scrollTo(0, saved));
-    // 异步补怪封装标记（列表不阻塞判定）：完成后再渲染一次加 badge
-    loadWeirdFlag(seq);
   } catch (e) {
     if (seq !== state.listSeq) return;
     showSkeleton(false);
     toast(e.message, true);
-  }
-}
-
-// loadWeirdFlag 异步获取当前目录的怪封装路径集合（带缓存，服务端已优化顺序读）。
-// 注意：不能全量 render()——会重建网格销毁在途抽帧 video 元素，
-// 而 activeGrabs 计数不同步清零，导致并发槽永久占满、后续缩略图全部不生成。
-// 改为就地给已有卡片补 badge，不打断抽帧。
-async function loadWeirdFlag(seq) {
-  try {
-    const d = await api('/api/weird?path=' + pathParam(state.path));
-    if (seq !== state.listSeq) return; // 已导航离开
-    state.weirdPaths = new Set(d.weird || []);
-    patchWeirdBadges();
-  } catch (_) { /* 服务端不可用时静默，列表仍可用 */ }
-}
-
-// patchWeirdBadges 就地给已渲染的怪封装视频卡片/列表行补 badge + 规整按钮
-function patchWeirdBadges() {
-  // 补一个 badge+规整按钮到容器
-  const addRow = (container, p) => {
-    if (container.querySelector('.card-actions')) return; // 已有 badge
-    const row = document.createElement('div');
-    row.className = 'card-actions';
-    const badge = document.createElement('span');
-    badge.className = 'weird-badge';
-    badge.textContent = '怪封装';
-    badge.title = '该视频 moov 过大或 mdat 碎片化，起播较慢；可规整化使其秒开';
-    const btn = document.createElement('button');
-    btn.className = 'mini-btn normalize-btn';
-    btn.textContent = '规整化';
-    btn.addEventListener('click', (ev) => {
-      ev.stopPropagation();
-      startNormalize(p, btn);
-    });
-    row.appendChild(badge);
-    row.appendChild(btn);
-    container.appendChild(row);
-  };
-  if (state.view === 'grid') {
-    document.querySelectorAll('.card.kind-video').forEach((card) => {
-      const p = card.dataset.path ? joinPath(state.path, card.dataset.path) : null;
-      if (!p || !state.weirdPaths.has(p)) return;
-      const info = card.querySelector('.card-info');
-      if (info) addRow(info, p);
-    });
-  } else if (state.view === 'list') {
-    document.querySelectorAll('#listBody tr').forEach((tr) => {
-      const p = tr.dataset.path ? joinPath(state.path, tr.dataset.path) : null;
-      if (!p || !state.weirdPaths.has(p)) return;
-      const act = tr.querySelector('.row-act');
-      if (act) addRow(act, p);
-    });
   }
 }
 
@@ -394,57 +333,12 @@ function renderGrid(entries) {
     info.className = 'card-info';
     info.innerHTML = `<div class="card-name" title="${esc(e.name)}">${esc(e.name)}</div>
       <div class="card-meta">${kind === 'dir' ? '文件夹' : fmtSize(e.size)}${e.mtime ? ' · ' + fmtTime(e.mtime) : ''}</div>`;
-    // 怪封装视频：加 badge + 规整按钮（仅 video 且服务端标注 weird）
-    if (state.weirdPaths && state.weirdPaths.has(p) && kind === 'video') {
-      const row = document.createElement('div');
-      row.className = 'card-actions';
-      const badge = document.createElement('span');
-      badge.className = 'weird-badge';
-      badge.textContent = '怪封装';
-      badge.title = '该视频 moov 过大或 mdat 碎片化，起播较慢；可规整化使其秒开';
-      const btn = document.createElement('button');
-      btn.className = 'mini-btn normalize-btn';
-      btn.textContent = '规整化';
-      btn.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        startNormalize(p, btn);
-      });
-      row.appendChild(badge);
-      row.appendChild(btn);
-      info.appendChild(row);
-    }
 
     card.appendChild(thumb);
     card.appendChild(info);
     card.addEventListener('click', () => onEntryClick(e));
     grid.appendChild(card);
   }
-}
-
-// startNormalize 触发对某个视频的规整化，并反馈到按钮
-function startNormalize(p, btn) {
-  if (btn) { btn.disabled = true; btn.textContent = '已加入队列…'; }
-  fetch(normalizeURL(p), { method: 'POST' })
-    .then(async (r) => {
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) {
-        // 409 已入队/进行中：打开面板看进度（不弹错误，按钮保持"规整中"由列表刷新接管）
-        if (r.status === 409) {
-          if (btn) { btn.textContent = '规整中…'; }
-          showNormalizePanel();
-          refreshNormalizeStatus();
-          return;
-        }
-        throw new Error(j.error || ('请求失败 ' + r.status));
-      }
-      if (btn) { btn.textContent = '规整中…'; }
-      showNormalizePanel(); // 打开面板看进度
-      refreshNormalizeStatus();
-    })
-    .catch((e) => {
-      if (btn) { btn.disabled = false; btn.textContent = '规整化'; }
-      toast(e.message, true);
-    });
 }
 
 function downloadBtn(e, p) {
@@ -1544,128 +1438,6 @@ function reloadWithSort() {
   if (state.searching) doSearch(state.query);
   else loadList(state.path);
 }
-
-/* ---------- 怪封装规整化面板 ---------- */
-
-let normPollTimer = null;
-
-// showNormalizePanel 打开规整化/备份面板
-function showNormalizePanel() {
-  $('normalizePanel').classList.remove('hidden');
-  refreshNormalizeStatus();
-  refreshBackups();
-  if (!normPollTimer) {
-    normPollTimer = setInterval(() => {
-      refreshNormalizeStatus();
-      refreshBackups();
-    }, 1200);
-  }
-}
-
-function hideNormalizePanel() {
-  $('normalizePanel').classList.add('hidden');
-  if (normPollTimer) { clearInterval(normPollTimer); normPollTimer = null; }
-}
-
-// refreshNormalizeStatus 拉取任务队列并渲染
-let normPrevActive = false; // 上一轮是否有进行中任务（用于"刚完成时刷新备份"）
-let normStatusBusy = false; // in-flight 保护：上一轮未完成时跳过本轮，防请求堆积
-async function refreshNormalizeStatus() {
-  if (normStatusBusy) return;
-  normStatusBusy = true;
-  try {
-    const d = await api(normalizeStatusURL);
-    const list = d.tasks || [];
-    const hasActive = list.some(x => ['queued', 'normalizing', 'verifying', 'backing_up'].includes(x.state));
-    // 任务刚全部结束（之前在进行中、现在空闲/完成）：立即刷新备份列表
-    if (normPrevActive && !hasActive) refreshBackups();
-    normPrevActive = hasActive;
-    $('normState').textContent = hasActive ? '规整化进行中…' : (list.length ? '空闲' : '暂无任务');
-    const box = $('normTaskList');
-    box.innerHTML = '';
-    if (!list.length) {
-      box.innerHTML = '<div class="norm-empty">暂无规整任务。在怪封装视频卡片上点「规整化」即可加入。</div>';
-    }
-    for (const t of list) {
-      const row = document.createElement('div');
-      row.className = 'norm-task';
-      const pct = Math.round(t.percent || 0);
-      row.innerHTML = `
-        <div class="norm-task-head">
-          <span class="norm-task-name" title="${esc(t.path)}">${esc(t.name)}</span>
-          <span class="norm-task-state state-${esc(t.state)}">${esc(stateLabel(t.state))}</span>
-        </div>
-        <div class="norm-bar"><div class="norm-bar-fill" style="width:${pct}%"></div></div>
-        ${t.err ? `<div class="norm-err">${esc(t.err)}</div>` : ''}`;
-      box.appendChild(row);
-    }
-  } catch (_) { /* 服务不可用/未启动时静默 */ } finally {
-    normStatusBusy = false;
-  }
-}
-
-function stateLabel(s) {
-  return { queued: '排队中', normalizing: '规整中', verifying: '校验中', backing_up: '备份中', done: '完成', failed: '失败' }[s] || s;
-}
-
-// refreshBackups 拉取备份列表并渲染
-let normBackupsBusy = false; // in-flight 保护：备份列表全量 WalkDir 可能 >1.2s，防堆积
-async function refreshBackups() {
-  if (normBackupsBusy) return;
-  normBackupsBusy = true;
-  try {
-    const d = await api(backupsURL);
-    const list = d.backups || [];
-    const box = $('backupList');
-    box.innerHTML = '';
-    if (!list.length) {
-      box.innerHTML = '<div class="norm-empty">暂无备份。规整化会自动备份原文件。</div>';
-    }
-    for (const b of list) {
-      const row = document.createElement('div');
-      row.className = 'backup-item';
-      row.innerHTML = `
-        <div class="backup-info">
-          <div class="backup-name" title="${esc(b.path)}">${esc(b.name)}</div>
-          <div class="backup-meta">${fmtSize(b.size)} · ${fmtTime(b.mtime)}${b.exists ? '' : '（原文件不在）'}</div>
-        </div>
-        <div class="backup-actions">
-          ${b.exists ? `<button class="mini-btn" data-act="restore" data-path="${esc(b.path)}">恢复</button>` : ''}
-          <button class="mini-btn danger" data-act="del" data-path="${esc(b.path)}">删除</button>
-        </div>`;
-      box.appendChild(row);
-    }
-    // 绑定事件
-    box.querySelectorAll('button[data-act]').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const act = btn.dataset.act, path = btn.dataset.path;
-        const url = act === 'restore' ? restoreURL(path) : deleteBackupURL(path);
-        btn.disabled = true;
-        try {
-          const r = await fetch(url, { method: 'POST' });
-          const j = await r.json().catch(() => ({}));
-          if (!r.ok) throw new Error(j.error || '失败');
-          toast(act === 'restore' ? '已恢复原文件' : '已删除备份', false);
-          refreshBackups();
-          refreshNormalizeStatus();
-        } catch (e) {
-          toast(e.message, true);
-        } finally {
-          btn.disabled = false;
-        }
-      });
-    });
-  } catch (_) { /* 静默 */ } finally {
-    normBackupsBusy = false;
-  }
-}
-
-// 面板按钮
-$('btnNormalize').addEventListener('click', () => {
-  if ($('normalizePanel').classList.contains('hidden')) showNormalizePanel();
-  else hideNormalizePanel();
-});
-$('btnNormClose').addEventListener('click', hideNormalizePanel);
 
 /* ---------- 冷门格式支持开关（ffmpeg） ---------- */
 
