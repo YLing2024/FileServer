@@ -61,6 +61,9 @@ type Server struct {
 	fsDir string // 小文件 faststart 重封装缓存目录
 	fsMu  sync.Mutex
 	fsBusy map[string]bool // faststart 重封装进行中（防重复）
+	// faststartHook 仅测试注入：非 nil 时替代 go warmFaststart，
+	// 用于断言“预热被触发”而不依赖真实 ffmpeg。生产路径恒为 nil。
+	faststartHook func(abs string, fi os.FileInfo)
 
 	pw *prewarmState // moov 预读预热（机械硬盘冷读提速）
 	pb *playbackState // 直链播放活动跟踪（预热/重封装据此让路）
@@ -357,6 +360,8 @@ func (s *Server) warmFaststart(abs string, fi os.FileInfo) {
 	dst := filepath.Join(s.fsDir, key+".mp4")
 	if err := s.ff.Faststart(context.Background(), abs, dst, fi.Size()); err != nil {
 		os.Remove(dst + ".tmp")
+		// best-effort：预热失败只记日志，绝不影响正在进行的播放。
+		log.Printf("faststart 预热失败 %q: %v", abs, err)
 	}
 }
 
@@ -377,6 +382,10 @@ func (s *Server) maybeWarmFaststart(abs string, fi os.FileInfo) {
 		return
 	}
 	if s.faststartCachePath(abs, fi) != "" {
+		return
+	}
+	if s.faststartHook != nil {
+		s.faststartHook(abs, fi)
 		return
 	}
 	go s.warmFaststart(abs, fi)
