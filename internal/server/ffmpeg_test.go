@@ -379,8 +379,9 @@ func TestHlsManagerIntegration(t *testing.T) {
 	}
 }
 
-// TestVideoInfoDecision 验证 /api/video-info 的 direct/hls 决策：
-// faststart MP4 → direct；非 faststart MP4 → hls；MKV → hls；HEVC MP4 → hls。
+// TestVideoInfoDecision 验证 /api/video-info 的 direct/hls 决策与直链 MP4 的
+// 后台 faststart 预热触发：未开启 --ffmpeg 时一律 direct（浏览器原生解码直链），
+// MKV/HEVC 也保持 direct 由前端提示不可在线播放。
 func TestVideoInfoDecision(t *testing.T) {
 	ff := FindFfmpeg()
 	if ff == nil {
@@ -401,9 +402,9 @@ func TestVideoInfoDecision(t *testing.T) {
 		return p
 	}
 	mkVideo("fast.mp4", "-movflags", "+faststart")
-	// 小非 faststart MP4（<32MB）→ direct + faststart 预热标志
+	// 小非 faststart MP4（<32MB）→ direct，并触发后台 faststart 预热
 	mkVideo("smallslow.mp4", "-movflags", "-faststart")
-	// 非 faststart 且 >32MB（小文件走「服务端即时 faststart 化 + 直链」路径）：
+	// 非 faststart 且 >32MB，覆盖「大文件也先直链、后台预热」路径：
 	// 1280x720 15s @20Mbps ≈ 37MB，ultrafast 生成快
 	slow := filepath.Join(root, "slow.mp4")
 	slowGen := exec.Command(ff.ffmpegPath, "-hide_banner", "-loglevel", "error", "-y",
