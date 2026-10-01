@@ -48,7 +48,6 @@ type Server struct {
 	thumbs *ThumbCache
 	ff     *Ffmpeg
 	hls    *HlsManager
-	norm   *Normalizer
 	imgSem chan struct{} // 图片缩略图解码/整读并发上限
 	ffThumbSem chan struct{} // 服务端 ffmpeg 抽帧并发上限（冷门格式缩略图，低并发防占盘）
 	started time.Time
@@ -103,7 +102,6 @@ func New(root string, opts Options) *Server {
 		thumbs:  NewThumbCache(root),
 		ff:      ff,
 		hls:     NewHlsManager(root),
-		norm:    NewNormalizer(root, base, ff),
 		imgSem:  make(chan struct{}, thumbImgMaxConc),
 		ffThumbSem: make(chan struct{}, ffThumbMaxConc),
 		started: time.Now(),
@@ -155,13 +153,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/prewarm", s.handlePrewarm)
 	mux.HandleFunc("GET /api/zip", s.handleZip)
 	mux.HandleFunc("GET /api/search", s.handleSearch)
-	// 怪封装规整化（手动触发 + 进度 + 备份管理）
-	mux.HandleFunc("GET /api/weird", s.handleWeirdList)
-	mux.HandleFunc("GET /api/normalize/status", s.handleNormalizeStatus)
-	mux.HandleFunc("GET /api/normalize/backups", s.handleBackupList)
-	mux.HandleFunc("POST /api/normalize", s.handleNormalizeStart)
-	mux.HandleFunc("POST /api/normalize/restore", s.handleRestore)
-	mux.HandleFunc("POST /api/normalize/delete-backup", s.handleBackupDelete)
 	mux.HandleFunc("POST /api/settings/ffmpeg", s.handleSetFFmpeg)
 	mux.Handle("GET /", s.frontendHandler())
 
@@ -420,7 +411,7 @@ func (s *Server) handleVideoInfo(w http.ResponseWriter, r *http.Request) {
 // MP4 家族需进一步排除 HEVC（Chrome 无 HEVC 解码）；其余按扩展名白名单。
 // 启用 --ffmpeg 时，怪封装 MP4 也返回 false——走 HLS copy 重封装流
 // （ffmpeg -c copy 实时把碎片化 mdat 重封装成规整分片，起播从 30s 降到 1-2s，
-// 零画质损失；规整化仍是用户主动操作，这里只是播放路径优化）。
+// 零画质损失）。
 func (s *Server) browserNativePlayable(ext, abs string) bool {
 	switch ext {
 	case ".webm":
