@@ -117,7 +117,9 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 
 	sortKey := r.URL.Query().Get("sort")
 	order := r.URL.Query().Get("order")
-	limit := parseIntSafe(r.URL.Query().Get("limit"), 0, listMaxLimit)
+	// 缺省值即上限：不带 limit（或传 limit=0）时也不得返回整个目录，
+	// 与 doc/api.md 及 /api/info 的 list_limit 承诺一致。
+	limit := parseIntSafe(r.URL.Query().Get("limit"), listMaxLimit, listMaxLimit)
 	offset := parseIntSafe(r.URL.Query().Get("offset"), 0, 1<<30)
 
 	rel := relOf(s.root, dir)

@@ -326,6 +326,48 @@ func TestListPagination(t *testing.T) {
 	}
 }
 
+// TestListDefaultLimit 未指定 limit 时目录列表也必须有上限（M4）：
+// 历史实现 parseIntSafe 的缺省值是 0，slicePage 在 limit<=0 时返回整个目录，
+// 与 /api/info 的 list_limit=2000 承诺不符，超大目录可被一次性拉全。
+func TestListDefaultLimit(t *testing.T) {
+	srv := New(t.TempDir(), Options{})
+	root := srv.root
+	const n = listMaxLimit + 5
+	for i := 0; i < n; i++ {
+		os.WriteFile(filepath.Join(root, "f"+pad4(i)), []byte("x"), 0o644)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	// 不带 limit：应截断到上限
+	var lr ListResp
+	resp := get(t, ts.URL+"/api/list?path=/")
+	if err := json.NewDecoder(resp.Body).Decode(&lr); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if lr.Total != n {
+		t.Errorf("Total 应为 %d, 得到 %d", n, lr.Total)
+	}
+	if len(lr.Entries) != listMaxLimit {
+		t.Errorf("默认应返回上限 %d 条, 得到 %d", listMaxLimit, len(lr.Entries))
+	}
+	if !lr.Truncated {
+		t.Error("超出上限应 truncated=true")
+	}
+
+	// 显式 limit=0 同样不得退化为不限量
+	resp0 := get(t, ts.URL+"/api/list?path=/&limit=0")
+	var lr0 ListResp
+	if err := json.NewDecoder(resp0.Body).Decode(&lr0); err != nil {
+		t.Fatal(err)
+	}
+	resp0.Body.Close()
+	if len(lr0.Entries) != listMaxLimit {
+		t.Errorf("limit=0 应回落到上限 %d 条, 得到 %d", listMaxLimit, len(lr0.Entries))
+	}
+}
+
 // pad4 0 填充到 4 位（如 7 → "0007"），保证文件名排序稳定
 func pad4(i int) string {
 	s := intString(i)
