@@ -1,3 +1,5 @@
+[简体中文](README.md) ｜ [English](README.en.md)
+
 # FileServer
 
 Windows 局域网文件服务器：双击单个 exe，同一 WiFi 下的手机与电脑即可只读浏览、预览、下载指定目录。
