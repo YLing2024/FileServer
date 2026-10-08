@@ -52,6 +52,29 @@ func (s *Server) safePath(rel string) (string, error) {
 	return real, nil
 }
 
+// hiddenBlocked 判断 abs 是否不可通过 HTTP 访问：
+//  1. 任一路径分量为保留缓存目录名 .FileServer —— 无论 --hidden 与否一律拒绝；
+//  2. 未开启 --hidden 时，任一分量以 . 开头（隐藏）拒绝——与列表/搜索/zip
+//     的过滤语义一致，防止直链或打包绕过 UI 隐藏设置。
+func (s *Server) hiddenBlocked(abs string) bool {
+	rel, err := filepath.Rel(s.cfg.root, abs)
+	if err != nil {
+		return false
+	}
+	if rel == "." {
+		return false // 根目录本身永不视为隐藏
+	}
+	for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
+		if isCacheEntry(part) {
+			return true
+		}
+		if !s.cfg.hidden && strings.HasPrefix(part, ".") {
+			return true
+		}
+	}
+	return false
+}
+
 // pathWithin 判断 p 是否位于 root 内。
 // 平台差异：Windows/NTFS 大小写不敏感，用 EqualFold 兼容用户输入大小写差异；
 // POSIX 大小写敏感，必须严格按字符比较——否则根目录 /srv 内若存在指向 /SRV
