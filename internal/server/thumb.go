@@ -204,17 +204,17 @@ func (s *Server) handleThumb(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	abs, err := s.safePath(q.Get("path"))
 	if err != nil {
-		writeErr(w, errToStatus(err), err.Error())
+		httpError(w, errToStatus(err), err.Error())
 		return
 	}
 	// --hidden 未开启时与列表一致地拒绝隐藏文件缩略图
 	if s.hiddenBlocked(abs) {
-		writeErr(w, http.StatusNotFound, "无法生成缩略图")
+		httpError(w, http.StatusNotFound, "无法生成缩略图")
 		return
 	}
 	fi, err := os.Stat(abs)
 	if err != nil || fi.IsDir() {
-		writeErr(w, http.StatusNotFound, "无法生成缩略图")
+		httpError(w, http.StatusNotFound, "无法生成缩略图")
 		return
 	}
 
@@ -235,9 +235,9 @@ func (s *Server) handleThumb(w http.ResponseWriter, r *http.Request) {
 			s.serveRemoteThumb(w, r, abs, fi)
 			return
 		}
-		writeErr(w, http.StatusNotFound, "视频缩略图由浏览器抽帧生成")
+		httpError(w, http.StatusNotFound, "视频缩略图由浏览器抽帧生成")
 	default:
-		writeErr(w, http.StatusNotFound, "该类型不支持缩略图")
+		httpError(w, http.StatusNotFound, "该类型不支持缩略图")
 	}
 }
 
@@ -271,20 +271,20 @@ type layoutEntry struct {
 func (s *Server) serveThumbSrc(w http.ResponseWriter, r *http.Request) {
 	abs, err := s.safePath(r.URL.Query().Get("path"))
 	if err != nil {
-		writeErr(w, errToStatus(err), err.Error())
+		httpError(w, errToStatus(err), err.Error())
 		return
 	}
 	if s.hiddenBlocked(abs) {
-		writeErr(w, http.StatusNotFound, "路径不存在")
+		httpError(w, http.StatusNotFound, "路径不存在")
 		return
 	}
 	fi, err := os.Stat(abs)
 	if err != nil || fi.IsDir() {
-		writeErr(w, http.StatusNotFound, "无法访问该文件")
+		httpError(w, http.StatusNotFound, "无法访问该文件")
 		return
 	}
 	if fileKind(fi.Name(), false) != "video" {
-		writeErr(w, http.StatusNotFound, "该类型不支持抽帧源")
+		httpError(w, http.StatusNotFound, "该类型不支持抽帧源")
 		return
 	}
 	ext := strings.ToLower(filepath.Ext(fi.Name()))
@@ -296,7 +296,7 @@ func (s *Server) serveThumbSrc(w http.ResponseWriter, r *http.Request) {
 	}
 	f, err := os.Open(src)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "打开文件失败")
+		httpError(w, http.StatusInternalServerError, "打开文件失败")
 		return
 	}
 	defer func() { _ = f.Close() }()
@@ -381,7 +381,7 @@ func (s *Server) serveRemoteThumb(w http.ResponseWriter, r *http.Request, abs st
 		return data, true
 	})
 	if !ok {
-		writeErr(w, http.StatusNotFound, "无法生成缩略图")
+		httpError(w, http.StatusNotFound, "无法生成缩略图")
 		return
 	}
 	serveCached(w, r, key, data, "image/jpeg")
@@ -496,7 +496,7 @@ func (s *Server) serveImageThumb(w http.ResponseWriter, r *http.Request, abs str
 	// 先读尺寸：巨图不解码，直接返回原图（防内存尖峰）
 	cfg, _, err := decodeConfig(abs)
 	if err != nil {
-		writeErr(w, http.StatusNotFound, "无法解码图片")
+		httpError(w, http.StatusNotFound, "无法解码图片")
 		return
 	}
 	if cfg.Width > thumbDirectServeThreshold || cfg.Height > thumbDirectServeThreshold {
@@ -536,7 +536,7 @@ func (s *Server) serveImageThumb(w http.ResponseWriter, r *http.Request, abs str
 		return data, true
 	})
 	if !ok {
-		writeErr(w, http.StatusNotFound, "无法解码图片")
+		httpError(w, http.StatusNotFound, "无法解码图片")
 		return
 	}
 	serveCached(w, r, key, data, "image/jpeg")
@@ -547,7 +547,7 @@ func (s *Server) serveImageThumb(w http.ResponseWriter, r *http.Request, abs str
 func (s *Server) serveOriginalImage(w http.ResponseWriter, r *http.Request, abs string, fi os.FileInfo, contentType string) {
 	f, err := os.Open(abs)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "读取文件失败")
+		httpError(w, http.StatusInternalServerError, "读取文件失败")
 		return
 	}
 	defer func() { _ = f.Close() }()

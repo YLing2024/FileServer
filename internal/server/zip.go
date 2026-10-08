@@ -15,21 +15,21 @@ import (
 func (s *Server) handleZip(w http.ResponseWriter, r *http.Request) {
 	dir, err := s.safePath(r.URL.Query().Get("path"))
 	if err != nil {
-		writeErr(w, errToStatus(err), err.Error())
+		httpError(w, errToStatus(err), err.Error())
 		return
 	}
 	// --hidden 未开启时，隐藏目录（含隐藏祖先）与列表/搜索一致地拒绝打包
 	if s.hiddenBlocked(dir) {
-		writeErr(w, http.StatusNotFound, "路径不存在")
+		httpError(w, http.StatusNotFound, "路径不存在")
 		return
 	}
 	fi, err := os.Stat(dir)
 	if err != nil {
-		writeErr(w, http.StatusNotFound, "路径不存在")
+		httpError(w, http.StatusNotFound, "路径不存在")
 		return
 	}
 	if !fi.IsDir() {
-		writeErr(w, http.StatusBadRequest, "仅支持打包目录")
+		httpError(w, http.StatusBadRequest, "仅支持打包目录")
 		return
 	}
 

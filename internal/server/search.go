@@ -27,23 +27,23 @@ type SearchResult struct {
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	if q == "" {
-		writeErr(w, http.StatusBadRequest, "缺少搜索关键字")
+		httpError(w, http.StatusBadRequest, "缺少搜索关键字")
 		return
 	}
 	root, err := s.safePath(r.URL.Query().Get("path"))
 	if err != nil {
-		writeErr(w, errToStatus(err), err.Error())
+		httpError(w, errToStatus(err), err.Error())
 		return
 	}
 	fi, err := os.Stat(root)
 	if err != nil || !fi.IsDir() {
-		writeErr(w, http.StatusBadRequest, "搜索起点不是目录")
+		httpError(w, http.StatusBadRequest, "搜索起点不是目录")
 		return
 	}
 	// 隐藏路径（--hidden 未开启）与保留缓存目录（.FileServer，任何情况）
 	// 不可作为搜索起点
 	if s.hiddenBlocked(root) {
-		writeErr(w, http.StatusNotFound, "路径不存在")
+		httpError(w, http.StatusNotFound, "路径不存在")
 		return
 	}
 

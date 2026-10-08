@@ -197,11 +197,11 @@ func (s *Server) handleSetFFmpeg(w http.ResponseWriter, r *http.Request) {
 		Enabled bool `json:"enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeErr(w, http.StatusBadRequest, "参数格式错误")
+		httpError(w, http.StatusBadRequest, "参数格式错误")
 		return
 	}
 	if body.Enabled && (s.ff == nil || !s.ff.Available()) {
-		writeErr(w, http.StatusBadGateway, "服务端无 ffmpeg，无法开启冷门格式支持")
+		httpError(w, http.StatusBadGateway, "服务端无 ffmpeg，无法开启冷门格式支持")
 		return
 	}
 	s.transcodeEnabled.Store(body.Enabled)
@@ -261,26 +261,26 @@ func (s *Server) frontendHandler() http.Handler {
 func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 	abs, err := s.safePath(r.URL.Query().Get("path"))
 	if err != nil {
-		writeErr(w, errToStatus(err), err.Error())
+		httpError(w, errToStatus(err), err.Error())
 		return
 	}
 	// --hidden 未开启时，隐藏路径（含其隐藏祖先目录）与列表/搜索一致地拒绝
 	if s.hiddenBlocked(abs) {
-		writeErr(w, http.StatusNotFound, "路径不存在")
+		httpError(w, http.StatusNotFound, "路径不存在")
 		return
 	}
 	fi, err := os.Stat(abs)
 	if err != nil {
-		writeErr(w, errToStatus(err), "无法访问该文件")
+		httpError(w, errToStatus(err), "无法访问该文件")
 		return
 	}
 	if fi.IsDir() {
-		writeErr(w, http.StatusBadRequest, "该路径是目录，无法下载")
+		httpError(w, http.StatusBadRequest, "该路径是目录，无法下载")
 		return
 	}
 	f, err := os.Open(abs)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "打开文件失败")
+		httpError(w, http.StatusInternalServerError, "打开文件失败")
 		return
 	}
 	defer func() { _ = f.Close() }()
@@ -416,22 +416,22 @@ func (s *Server) maybeWarmFaststart(abs string, fi os.FileInfo) {
 func (s *Server) handleVideoInfo(w http.ResponseWriter, r *http.Request) {
 	abs, err := s.safePath(r.URL.Query().Get("path"))
 	if err != nil {
-		writeErr(w, errToStatus(err), err.Error())
+		httpError(w, errToStatus(err), err.Error())
 		return
 	}
 	if s.hiddenBlocked(abs) {
-		writeErr(w, http.StatusNotFound, "路径不存在")
+		httpError(w, http.StatusNotFound, "路径不存在")
 		return
 	}
 	fi, err := os.Stat(abs)
 	if err != nil || fi.IsDir() {
-		writeErr(w, http.StatusNotFound, "无法访问该文件")
+		httpError(w, http.StatusNotFound, "无法访问该文件")
 		return
 	}
 
 	kind := fileKind(fi.Name(), false)
 	if kind != "video" {
-		writeErr(w, http.StatusBadRequest, "该文件不是视频")
+		httpError(w, http.StatusBadRequest, "该文件不是视频")
 		return
 	}
 
@@ -548,21 +548,21 @@ func (s *Server) handleHls(w http.ResponseWriter, r *http.Request) {
 	// --ffmpeg 开启（或前端设置面板动态开启）时才允许转码。仅凭 s.ff != nil
 	// 判断会让未开启转码的实例也能拉 m3u8 并在 .FileServer/hls 下建缓存。
 	if !s.transcodeEnabled.Load() || s.ff == nil {
-		writeErr(w, http.StatusNotFound, "服务端未启用视频转码")
+		httpError(w, http.StatusNotFound, "服务端未启用视频转码")
 		return
 	}
 	abs, err := s.safePath(r.URL.Query().Get("path"))
 	if err != nil {
-		writeErr(w, errToStatus(err), err.Error())
+		httpError(w, errToStatus(err), err.Error())
 		return
 	}
 	if s.hiddenBlocked(abs) {
-		writeErr(w, http.StatusNotFound, "路径不存在")
+		httpError(w, http.StatusNotFound, "路径不存在")
 		return
 	}
 	fi, err := os.Stat(abs)
 	if err != nil || fi.IsDir() {
-		writeErr(w, http.StatusNotFound, "无法访问该文件")
+		httpError(w, http.StatusNotFound, "无法访问该文件")
 		return
 	}
 	if r.URL.Query().Get("abandon") == "1" {
@@ -576,7 +576,7 @@ func (s *Server) handleHls(w http.ResponseWriter, r *http.Request) {
 	}
 	session, err := s.hls.Get(r.Context(), abs, fi, s.ff)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	s.serveHlsFile(w, r, session, fname)
@@ -655,7 +655,7 @@ func (s *Server) basicAuth(next http.Handler) http.Handler {
 			subtle.ConstantTimeCompare([]byte(u), []byte(user)) != 1 ||
 			subtle.ConstantTimeCompare([]byte(p), []byte(pass)) != 1 {
 			w.Header().Set("WWW-Authenticate", `Basic realm="FileServer"`)
-			writeErr(w, http.StatusUnauthorized, "需要访问口令")
+			httpError(w, http.StatusUnauthorized, "需要访问口令")
 			return
 		}
 		next.ServeHTTP(w, r)
