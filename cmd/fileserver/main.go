@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -25,6 +26,7 @@ import (
 
 func main() {
 	cfg := parseConfig(os.Args[1:])
+	setupLogger(cfg.Verbose)
 
 	platform.SetConsoleUTF8()
 
@@ -93,7 +95,7 @@ func main() {
 		go platform.OpenBrowser(fmt.Sprintf("http://127.0.0.1:%d", actualPort))
 	}
 
-	log.Printf("服务已启动: %s (port %d)", rootAbs, actualPort)
+	slog.Info("服务已启动", "dir", rootAbs, "port", actualPort)
 
 	// ReadHeaderTimeout：防慢客户端长期占用连接。
 	// IdleTimeout：复用连接空闲过久后回收，避免半开连接堆积。
@@ -111,7 +113,7 @@ func main() {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 		<-sig
-		log.Println("正在停止服务…")
+		slog.Info("正在停止服务")
 		_ = httpSrv.Close()
 		srv.Close()
 		_ = ln.Close()
@@ -120,6 +122,17 @@ func main() {
 	if err := httpSrv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
+}
+
+// setupLogger 按 -v 配置全局 slog 级别：-v=Debug，否则 Info。
+// 输出走 TextHandler（人类可读文本，非 JSON），与既有控制台风格一致；
+// 未开启 -v 时不打印 Debug 级请求日志，用户可见输出不变。
+func setupLogger(verbose bool) {
+	level := slog.LevelInfo
+	if verbose {
+		level = slog.LevelDebug
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 }
 
 // listenLoop 从 startPort 开始尝试监听，被占用则递增
