@@ -2,8 +2,14 @@
 dist/
 *.exe
 build-*.txt
-testdata/*.mp4
 .FileServer/
+
+# 测试样本：小样本 fixture 入库（见 testdata/README.txt）；
+# 端到端脚本生成的临时/大样本不入库。
+testdata/big.mp4
+testdata/__hls_*.mp4
+testdata/__hls_*.mkv
+testdata/**/*.tmp
 
 # 本机项目记忆（只存本地，不提交 / 不推送）
 PROJECT_MEMORY.md
