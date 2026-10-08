@@ -8,6 +8,27 @@ import (
 	"testing"
 )
 
+// TestRequestIDHeader 断言每个响应都带 X-Request-Id，且传入的 id 被透传。
+func TestRequestIDHeader(t *testing.T) {
+	srv, _ := newTestServer(t)
+	defer srv.Close()
+
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/health", nil))
+	if rr.Header().Get("X-Request-Id") == "" {
+		t.Error("响应缺少 X-Request-Id")
+	}
+
+	const want = "abc123def456"
+	rr2 := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	req.Header.Set("X-Request-Id", want)
+	srv.Handler().ServeHTTP(rr2, req)
+	if got := rr2.Header().Get("X-Request-Id"); got != want {
+		t.Errorf("X-Request-Id 透传失败: got %q, want %q", got, want)
+	}
+}
+
 // TestHealthEndpoint 断言 GET /api/health 返回 ok 与构建版本字段，
 // 字段与 --version 同源（internal/version），保证可追溯。
 func TestHealthEndpoint(t *testing.T) {

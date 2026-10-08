@@ -4,12 +4,14 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io/fs"
-	"log"
+	"log/slog"
 	"mime"
 	"net/http"
 	"os"
@@ -92,7 +94,7 @@ func New(root string, opts Options) *Server {
 	if resolved, err := filepath.EvalSymlinks(root); err == nil {
 		root = resolved
 	} else {
-		log.Printf("解析服务根目录真实路径失败，沿用原路径 %q: %v", root, err)
+		slog.Warn("解析服务根目录真实路径失败，沿用原路径", "path", root, "err", err)
 	}
 
 	// 缓存基目录：共享根目录下的隐藏文件夹 .FileServer（不往系统目录写文件）。
@@ -186,6 +188,9 @@ func (s *Server) Handler() http.Handler {
 	if s.verbose {
 		h = s.accessLog(h)
 	}
+	// 最外层：为每个请求生成/透传 request id，写入响应头并注入 context。
+	// 放在最外层保证 accessLog 也能带上 request_id（-v 时）。
+	h = s.withRequestID(h)
 	return h
 }
 
@@ -376,7 +381,7 @@ func (s *Server) warmFaststart(abs string, fi os.FileInfo) {
 	if err := s.ff.Faststart(context.Background(), abs, dst, fi.Size()); err != nil {
 		_ = os.Remove(dst + ".tmp")
 		// best-effort：预热失败只记日志，绝不影响正在进行的播放。
-		log.Printf("faststart 预热失败 %q: %v", abs, err)
+		slog.Warn("faststart 预热失败", "path", abs, "err", err)
 	}
 }
 
@@ -703,11 +708,51 @@ func (s *Server) hiddenBlocked(abs string) bool {
 	return false
 }
 
-// accessLog 简单访问日志（-v 开启）
+// requestIDKey 请求 id 的 context 键类型（未导出的空结构体避免键冲突）。
+type requestIDKey struct{}
+
+// withRequestID 为每个请求确定 request id：优先沿用调用方传入的
+// X-Request-Id（便于跨端关联），否则生成随机 id；写回响应头并注入 context。
+func (s *Server) withRequestID(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.Header.Get("X-Request-Id")
+		if id == "" {
+			id = newRequestID()
+		}
+		w.Header().Set("X-Request-Id", id)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), requestIDKey{}, id)))
+	})
+}
+
+// requestID 读取 context 中的请求 id（无则空串）。
+func requestID(ctx context.Context) string {
+	if id, ok := ctx.Value(requestIDKey{}).(string); ok {
+		return id
+	}
+	return ""
+}
+
+// newRequestID 生成 16 位十六进制随机 id；随机源失败时回退固定占位（不 panic）。
+func newRequestID() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "unknown"
+	}
+	return hex.EncodeToString(b[:])
+}
+
+// accessLog 访问日志（-v 开启后级别为 Debug，故仅详细模式下打印）。
+// 使用 slog 的结构化字段，控制台仍是人类可读文本（非 JSON）。
 func (s *Server) accessLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		next.ServeHTTP(w, r)
-		log.Printf("%s %s %s (%s)", r.RemoteAddr, r.Method, r.URL.RequestURI(), time.Since(start))
+		slog.Debug("request",
+			"request_id", requestID(r.Context()),
+			"method", r.Method,
+			"path", r.URL.RequestURI(),
+			"remote", r.RemoteAddr,
+			"duration", time.Since(start).String(),
+		)
 	})
 }
