@@ -105,11 +105,16 @@ func main() {
 
 	log.Printf("服务已启动: %s (port %d)", rootAbs, actualPort)
 
-	// 仅限制请求头读取时长（防慢客户端长期占用连接）；不设 WriteTimeout，
-	// 否则会掐断长视频/大文件响应。
+	// ReadHeaderTimeout：防慢客户端长期占用连接。
+	// IdleTimeout：复用连接空闲过久后回收，避免半开连接堆积。
+	// MaxHeaderBytes：限制请求头体积（默认 1MB 已够，这里显式写明）。
+	// 明确不设 WriteTimeout/ReadTimeout：读写都是「按需」的，设了会掐断
+	// 长视频 / 大文件的响应（整段下载可能持续数十分钟），故保持不限时。
 	httpSrv := &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 	// Ctrl+C / 关闭控制台窗口：优雅退出，终止 HLS 转码子进程（避免遗留 ffmpeg 空转）
 	go func() {
