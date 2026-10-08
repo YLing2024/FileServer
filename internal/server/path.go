@@ -31,8 +31,8 @@ func (s *Server) safePath(rel string) (string, error) {
 	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 		return "", errForbidden
 	}
-	abs := filepath.Join(s.root, clean)
-	if !pathWithin(s.root, abs) {
+	abs := filepath.Join(s.cfg.root, clean)
+	if !pathWithin(s.cfg.root, abs) {
 		return "", errForbidden
 	}
 	// 真实路径层：跟随符号链接后必须仍在根目录内
@@ -43,7 +43,7 @@ func (s *Server) safePath(rel string) (string, error) {
 		}
 		return "", errForbidden
 	}
-	if !pathWithin(s.root, real) {
+	if !pathWithin(s.cfg.root, real) {
 		return "", errForbidden
 	}
 	// 残余 TOCTOU：返回 real 后、handler 打开前，若本地攻击者（需根目录内写权限）

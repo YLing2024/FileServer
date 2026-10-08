@@ -85,7 +85,7 @@ func (s *Server) handlePrewarm(w http.ResponseWriter, r *http.Request) {
 	}
 	key := mediaKey(abs, fi)
 	now := time.Now()
-	if s.hls.Active() || s.directPlaying() {
+	if s.deps.hls.Active() || s.directPlaying() {
 		// 播放进行中：不接受新的预热（让路）
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -132,7 +132,7 @@ func (s *Server) prewarmFile(key, abs string) {
 	yield := func() {
 		// 播放（HLS 转码或直链 Range 流）进行中：让路（等待，不退出队列）。
 		// 机械硬盘上多个读者同时 seek 会把各自都拖慢几倍，播放优先。
-		for s.hls.Active() || s.directPlaying() {
+		for s.deps.hls.Active() || s.directPlaying() {
 			time.Sleep(300 * time.Millisecond)
 		}
 		time.Sleep(prewarmPause) // 块间限速：预热是后台任务，约 8~17MB/s 节奏
@@ -182,7 +182,7 @@ func (s *Server) readMoovRegion(f *os.File, buf []byte, off, length, fileSize in
 
 // prewarmNext 补充并行路数（prewarmConcurrent 上限，FIFO 顺序）
 func (s *Server) prewarmNext() {
-	if s.hls.Active() {
+	if s.deps.hls.Active() {
 		// 有转码在跑：清空积压，播放优先
 		s.pw.mu.Lock()
 		s.pw.pending = nil

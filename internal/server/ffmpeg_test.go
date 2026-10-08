@@ -336,11 +336,11 @@ func TestHlsManagerIntegration(t *testing.T) {
 	}
 	srv := New(root, Options{})
 	defer srv.Close()
-	mgr := srv.hls
+	mgr := srv.deps.hls
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	sess, err := mgr.Get(ctx, src, fi, srv.ff)
+	sess, err := mgr.Get(ctx, src, fi, srv.deps.ff)
 	if err != nil {
 		t.Fatalf("HLS 会话创建失败: %v", err)
 	}
@@ -500,7 +500,7 @@ func TestHlsEndpoint(t *testing.T) {
 	// Options{} 默认关闭转码：/api/hls 必须拒绝，避免绕过 --ffmpeg 开关。
 	srv := New(root, Options{})
 	defer srv.Close()
-	if srv.transcodeEnabled.Load() {
+	if srv.cfg.transcodeEnabled.Load() {
 		t.Fatal("Options{} 不应开启转码")
 	}
 	ts := httptest.NewServer(srv.Handler())
@@ -531,7 +531,7 @@ func TestHlsEndpointEnabled(t *testing.T) {
 
 	srv := New(root, Options{FFmpeg: true})
 	defer srv.Close()
-	if !srv.transcodeEnabled.Load() {
+	if !srv.cfg.transcodeEnabled.Load() {
 		t.Skip("ffmpeg 不可执行，转码未启用")
 	}
 	ts := httptest.NewServer(srv.Handler())

@@ -19,7 +19,7 @@ import (
 // list/file/zip/thumb 上行为一致（1.2、5.2）
 func TestHiddenConsistency(t *testing.T) {
 	srv := New(t.TempDir(), Options{}) // hidden=false
-	root := srv.root
+	root := srv.cfg.root
 	os.WriteFile(filepath.Join(root, ".secret"), []byte("s"), 0o644)
 	os.WriteFile(filepath.Join(root, ".git", "config"), []byte("git"), 0o644)
 	os.MkdirAll(filepath.Join(root, ".git"), 0o755)
@@ -82,7 +82,7 @@ func TestHiddenConsistency(t *testing.T) {
 // TestHiddenEnabled --hidden=true 时隐藏文件应正常可见/可下载（5.2）
 func TestHiddenEnabled(t *testing.T) {
 	srv := New(t.TempDir(), Options{Hidden: true})
-	os.WriteFile(filepath.Join(srv.root, ".secret"), []byte("s"), 0o644)
+	os.WriteFile(filepath.Join(srv.cfg.root, ".secret"), []byte("s"), 0o644)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -256,7 +256,7 @@ func TestThumbCacheCleanupTmp(t *testing.T) {
 // TestListPagination 服务端分页与 truncated 标志（3.1、5.4）
 func TestListPagination(t *testing.T) {
 	srv := New(t.TempDir(), Options{})
-	root := srv.root
+	root := srv.cfg.root
 	const n = 1050
 	for i := 0; i < n; i++ {
 		os.WriteFile(filepath.Join(root, "f"+pad4(i)), []byte("x"), 0o644)
@@ -331,7 +331,7 @@ func TestListPagination(t *testing.T) {
 // 与 /api/info 的 list_limit=2000 承诺不符，超大目录可被一次性拉全。
 func TestListDefaultLimit(t *testing.T) {
 	srv := New(t.TempDir(), Options{})
-	root := srv.root
+	root := srv.cfg.root
 	const n = listMaxLimit + 5
 	for i := 0; i < n; i++ {
 		os.WriteFile(filepath.Join(root, "f"+pad4(i)), []byte("x"), 0o644)
@@ -398,7 +398,7 @@ func itoa(i int) string {
 // TestSearchBoundaries 搜索深度上限与 limit 截断（5.4）
 func TestSearchBoundaries(t *testing.T) {
 	srv := New(t.TempDir(), Options{})
-	root := srv.root
+	root := srv.cfg.root
 	// 深度 9（可搜索）与深度 11（超限）
 	deepOK := root
 	for i := 0; i < 9; i++ {
@@ -497,7 +497,7 @@ func TestAuthPasswordColon(t *testing.T) {
 // TestFileBoundaryRanges 文件边界：空文件、超尾 Range、多段 Range、HEAD（5.5）
 func TestFileBoundaryRanges(t *testing.T) {
 	srv := New(t.TempDir(), Options{})
-	root := srv.root
+	root := srv.cfg.root
 	os.WriteFile(filepath.Join(root, "empty.txt"), []byte{}, 0o644)
 	os.WriteFile(filepath.Join(root, "ten.txt"), []byte("0123456789"), 0o644)
 	ts := httptest.NewServer(srv.Handler())
@@ -560,7 +560,7 @@ func TestFileBoundaryRanges(t *testing.T) {
 func TestZipConcurrent(t *testing.T) {
 	srv := New(t.TempDir(), Options{})
 	for i := 0; i < 50; i++ {
-		os.WriteFile(filepath.Join(srv.root, "file"+intString(i)+".txt"), bytes.Repeat([]byte("data"), 100), 0o644)
+		os.WriteFile(filepath.Join(srv.cfg.root, "file"+intString(i)+".txt"), bytes.Repeat([]byte("data"), 100), 0o644)
 	}
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()

@@ -65,7 +65,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			return fs.SkipDir
 		}
 		// 保留缓存目录（.FileServer）任何情况下跳过；其余点开头条目仅 --hidden 时可见
-		if isCacheEntry(d.Name()) || (!s.hidden && strings.HasPrefix(d.Name(), ".")) {
+		if isCacheEntry(d.Name()) || (!s.cfg.hidden && strings.HasPrefix(d.Name(), ".")) {
 			if d.IsDir() {
 				return fs.SkipDir
 			}
@@ -81,7 +81,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		}
 		if containsFold(d.Name(), needle) {
 			e := SearchResult{
-				Path:  relOf(s.root, p),
+				Path:  relOf(s.cfg.root, p),
 				Name:  d.Name(),
 				IsDir: isDir,
 				Kind:  fileKind(d.Name(), isDir),

@@ -17,7 +17,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/YLing2024/FileServer/internal/version"
@@ -42,30 +41,26 @@ const cacheDirName = ".FileServer"
 // POSIX 上同名不同大小写的目录极罕见，误伤面可忽略）。
 func isCacheEntry(name string) bool { return strings.EqualFold(name, cacheDirName) }
 
+// deps 服务器运行时依赖的组件句柄。
+type deps struct {
+	thumbs *ThumbCache
+	ff     *Ffmpeg
+	hls    *HlsManager
+}
+
 // Server 文件服务器
 type Server struct {
-	root       string // 服务根目录（绝对路径）
-	hidden     bool   // 是否显示隐藏文件
-	auth       string // 可选口令 "user:pass"
-	verbose    bool
-	thumbs     *ThumbCache
-	ff         *Ffmpeg
-	hls        *HlsManager
-	imgSem     chan struct{} // 图片缩略图解码/整读并发上限
-	ffThumbSem chan struct{} // 服务端 ffmpeg 抽帧并发上限（冷门格式缩略图，低并发防占盘）
-	started    time.Time
-	// transcodeEnabled：冷门格式（MKV/RMVB/HEVC 等）在线转码播放 + 服务端抽帧缩略图。
-	// 默认跟随 --ffmpeg 参数，可在前端设置面板动态切换（POST /api/settings/ffmpeg）。
-	transcodeEnabled atomic.Bool
+	cfg  config     // 运行配置（root/hidden/auth/verbose/转码开关）
+	deps deps       // 组件句柄（缩略图缓存 / ffmpeg / HLS 管理器）
+	sem  semaphores // 并发信号量
 
-	list listCache // 目录列表短缓存（返回/翻页秒开）
-
+	list      listCache      // 目录列表短缓存（返回/翻页秒开）
+	layouts   layoutCache    // MP4 顶层布局缓存（thumb-src 抽帧源用）
 	faststart faststartState // 小文件 faststart 重封装：缓存目录 + 单飞防重 + 测试钩子
 
-	pw *prewarmState  // moov 预读预热（机械硬盘冷读提速）
-	pb *playbackState // 直链播放活动跟踪（预热/重封装据此让路）
-
-	layouts layoutCache // MP4 顶层布局缓存（thumb-src 抽帧源用）
+	pw      *prewarmState  // moov 预读预热（机械硬盘冷读提速）
+	pb      *playbackState // 直链播放活动跟踪（预热/重封装据此让路）
+	started time.Time
 }
 
 // Options 服务器选项
@@ -80,7 +75,7 @@ type Options struct {
 func New(root string, opts Options) *Server {
 	root = filepath.Clean(root)
 	// 解析根目录中的符号链接 / junction / subst：safePath 拿 EvalSymlinks 后的
-	// real 与 s.root 做前缀比较，若根目录本身是链接而 s.root 保存词法路径，两者
+	// real 与 s.cfg.root 做前缀比较，若根目录本身是链接而 s.cfg.root 保存词法路径，两者
 	// 前缀永不匹配 → 全站每个请求都 403。解析失败（路径暂不存在等）回退原值并
 	// 记日志，交由后续 MkdirAll / 调用方报错。
 	if resolved, err := filepath.EvalSymlinks(root); err == nil {
@@ -103,21 +98,27 @@ func New(root string, opts Options) *Server {
 	ff := FindFfmpeg()
 
 	srv := &Server{
-		root:       root,
-		hidden:     opts.Hidden,
-		auth:       opts.Auth,
-		verbose:    opts.Verbose,
-		thumbs:     NewThumbCache(root),
-		ff:         ff,
-		hls:        NewHlsManager(root),
-		imgSem:     make(chan struct{}, thumbImgMaxConc),
-		ffThumbSem: make(chan struct{}, ffThumbMaxConc),
-		started:    time.Now(),
-		faststart:  faststartState{dir: fsDir},
-		pw:         &prewarmState{warmed: make(map[string]time.Time)},
-		pb:         &playbackState{},
+		cfg: config{
+			root:    root,
+			hidden:  opts.Hidden,
+			auth:    opts.Auth,
+			verbose: opts.Verbose,
+		},
+		deps: deps{
+			thumbs: NewThumbCache(root),
+			ff:     ff,
+			hls:    NewHlsManager(root),
+		},
+		sem: semaphores{
+			img:     make(chan struct{}, thumbImgMaxConc),
+			ffThumb: make(chan struct{}, ffThumbMaxConc),
+		},
+		faststart: faststartState{dir: fsDir},
+		started:   time.Now(),
+		pw:        &prewarmState{warmed: make(map[string]time.Time)},
+		pb:        &playbackState{},
 	}
-	srv.transcodeEnabled.Store(opts.FFmpeg && ff != nil && ff.Available())
+	srv.cfg.transcodeEnabled.Store(opts.FFmpeg && ff != nil && ff.Available())
 	return srv
 }
 
@@ -141,8 +142,8 @@ func cleanupOldFiles(dir string, maxAge time.Duration) {
 
 // Close 释放资源（终止 HLS 转码进程）
 func (s *Server) Close() {
-	if s.hls != nil {
-		s.hls.Close()
+	if s.deps.hls != nil {
+		s.deps.hls.Close()
 	}
 }
 
@@ -172,10 +173,10 @@ func (s *Server) Handler() http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		mux.ServeHTTP(w, r)
 	})
-	if s.auth != "" {
+	if s.cfg.auth != "" {
 		h = s.basicAuth(h)
 	}
-	if s.verbose {
+	if s.cfg.verbose {
 		h = s.accessLog(h)
 	}
 	// 最外层：为每个请求生成/透传 request id，写入响应头并注入 context。
@@ -195,21 +196,21 @@ func (s *Server) handleSetFFmpeg(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "参数格式错误")
 		return
 	}
-	if body.Enabled && (s.ff == nil || !s.ff.Available()) {
+	if body.Enabled && (s.deps.ff == nil || !s.deps.ff.Available()) {
 		httpError(w, http.StatusBadGateway, "服务端无 ffmpeg，无法开启冷门格式支持")
 		return
 	}
-	s.transcodeEnabled.Store(body.Enabled)
+	s.cfg.transcodeEnabled.Store(body.Enabled)
 	writeJSON(w, http.StatusOK, map[string]any{"hls": body.Enabled})
 }
 
 // handleInfo 返回服务端能力信息（前端据此决定视频缩略图策略与扩展名映射）
 func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
-	ffavail := s.ff != nil && s.ff.Available()
+	ffavail := s.deps.ff != nil && s.deps.ff.Available()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"name":         "FileServer",
 		"ffmpeg":       ffavail,
-		"hls":          s.transcodeEnabled.Load(), // 冷门格式在线转码播放（可前端动态开关）
+		"hls":          s.cfg.transcodeEnabled.Load(), // 冷门格式在线转码播放（可前端动态开关）
 		"version":      version.Version,
 		"kinds":        kindExtMap(), // 统一扩展名→类型映射（前端不再自维护）
 		"search_limit": searchMaxLimit,
@@ -314,7 +315,7 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 
 	// ?fs=1：小文件 faststart 化后的直链播放（video-info 已预热重封装缓存；
 	// 缓存未就绪时回退原文件——小文件 moov 在尾部也只是几百毫秒内起播）
-	if r.URL.Query().Get("fs") == "1" && s.ff != nil {
+	if r.URL.Query().Get("fs") == "1" && s.deps.ff != nil {
 		if fp := s.faststartCachePath(abs, fi); fp != "" {
 			if ffs, oerr := os.Open(fp); oerr == nil {
 				_ = f.Close()
@@ -343,7 +344,7 @@ func (s *Server) faststartCachePath(abs string, fi os.FileInfo) string {
 // warmFaststart 后台把 MP4 重封装为 faststart 缓存（单飞防重复）。
 // 大文件是磁盘速长任务：低于正常优先级运行，不抢正在播放的直链链路。
 func (s *Server) warmFaststart(abs string, fi os.FileInfo) {
-	if s.ff == nil || s.faststartCachePath(abs, fi) != "" {
+	if s.deps.ff == nil || s.faststartCachePath(abs, fi) != "" {
 		return
 	}
 	key := mediaKey(abs, fi)
@@ -355,12 +356,12 @@ func (s *Server) warmFaststart(abs string, fi os.FileInfo) {
 	// 播放进行中让路：重封装是整文件顺序读（大文件要跑几分钟），
 	// 机械硬盘上与播放并行会互相拖慢。等播放结束再推进，
 	// 缓存只影响「下次打开」的速度，本次播放优先。
-	for s.hls.Active() || s.directPlaying() {
+	for s.deps.hls.Active() || s.directPlaying() {
 		time.Sleep(500 * time.Millisecond)
 	}
 
 	dst := filepath.Join(s.faststart.dir, key+".mp4")
-	if err := s.ff.Faststart(context.Background(), abs, dst, fi.Size()); err != nil {
+	if err := s.deps.ff.Faststart(context.Background(), abs, dst, fi.Size()); err != nil {
 		_ = os.Remove(dst + ".tmp")
 		// best-effort：预热失败只记日志，绝不影响正在进行的播放。
 		slog.Warn("faststart 预热失败", "path", abs, "err", err)
@@ -376,7 +377,7 @@ func (s *Server) warmFaststart(abs string, fi os.FileInfo) {
 // 只负责调度：单飞防重复（faststart.busy）与「播放进行中让路」在 warmFaststart
 // 内实现，因此多次请求不会退化成多条无条件后台任务。
 func (s *Server) maybeWarmFaststart(abs string, fi os.FileInfo) {
-	if s.ff == nil || mp4HasHEVC(abs) {
+	if s.deps.ff == nil || mp4HasHEVC(abs) {
 		return
 	}
 	// 复用布局缓存（moov 头部 256KB 内视为已 faststart），避免重复扫描。
@@ -433,7 +434,7 @@ func (s *Server) handleVideoInfo(w http.ResponseWriter, r *http.Request) {
 	//   播不了的（MKV/RMVB/HEVC 等）前端提示不可在线播放（可下载）。
 	// - 开启 --ffmpeg：浏览器原生可播 → direct；冷门格式（MKV/AVI/WMV/RMVB/FLV/TS/3GP/
 	//   MPG/OGV + HEVC MP4）→ hls（服务端 ffmpeg 实时转码，GPU 优先，见 HLS 管理器）。
-	if s.transcodeEnabled.Load() && !s.browserNativePlayable(ext, abs) {
+	if s.cfg.transcodeEnabled.Load() && !s.browserNativePlayable(ext, abs) {
 		resp["mode"] = "hls"
 	}
 
@@ -451,13 +452,13 @@ func (s *Server) handleVideoInfo(w http.ResponseWriter, r *http.Request) {
 
 	// 元数据：优先内存缓存（命中即返回完整信息）；
 	// 未命中则后台探测（不阻塞本次响应），前端稍后二次查询获得 duration 等。
-	if s.ff != nil {
-		if info, ierr := s.ff.ProbeMediaCached(abs, fi); ierr == nil {
+	if s.deps.ff != nil {
+		if info, ierr := s.deps.ff.ProbeMediaCached(abs, fi); ierr == nil {
 			resp["duration"] = info.Duration
 			resp["width"] = info.Width
 			resp["height"] = info.Height
 		} else {
-			go func() { _, _ = s.ff.ProbeMedia(context.Background(), abs, fi) }()
+			go func() { _, _ = s.deps.ff.ProbeMedia(context.Background(), abs, fi) }()
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -476,7 +477,7 @@ func (s *Server) browserNativePlayable(ext, abs string) bool {
 		if mp4HasHEVC(abs) {
 			return false
 		}
-		if s.transcodeEnabled.Load() && s.isWeird(abs) {
+		if s.cfg.transcodeEnabled.Load() && s.isWeird(abs) {
 			return false // 怪封装 → HLS copy 流
 		}
 		return true
@@ -532,9 +533,9 @@ func mp4HasHEVC(abs string) bool {
 // 用户已经离开这个视频，机械硬盘上持续读写会拖慢下一个视频的首片。
 func (s *Server) handleHls(w http.ResponseWriter, r *http.Request) {
 	// 与 /api/info 的 "hls" 能力、/api/video-info 的播放决策一致：只有
-	// --ffmpeg 开启（或前端设置面板动态开启）时才允许转码。仅凭 s.ff != nil
+	// --ffmpeg 开启（或前端设置面板动态开启）时才允许转码。仅凭 s.deps.ff != nil
 	// 判断会让未开启转码的实例也能拉 m3u8 并在 .FileServer/hls 下建缓存。
-	if !s.transcodeEnabled.Load() || s.ff == nil {
+	if !s.cfg.transcodeEnabled.Load() || s.deps.ff == nil {
 		httpError(w, http.StatusNotFound, "服务端未启用视频转码")
 		return
 	}
@@ -553,7 +554,7 @@ func (s *Server) handleHls(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Query().Get("abandon") == "1" {
-		s.hls.Abandon(mediaKey(abs, fi))
+		s.deps.hls.Abandon(mediaKey(abs, fi))
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -561,7 +562,7 @@ func (s *Server) handleHls(w http.ResponseWriter, r *http.Request) {
 	if fname == "" {
 		fname = "index.m3u8"
 	}
-	session, err := s.hls.Get(r.Context(), abs, fi, s.ff)
+	session, err := s.deps.hls.Get(r.Context(), abs, fi, s.deps.ff)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -634,7 +635,7 @@ func mediaMime(ext string) string {
 
 // basicAuth 简单口令保护
 func (s *Server) basicAuth(next http.Handler) http.Handler {
-	user, pass, _ := strings.Cut(s.auth, ":")
+	user, pass, _ := strings.Cut(s.cfg.auth, ":")
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u, p, ok := r.BasicAuth()
 		// 恒定时间比较，避免字符串比较的时序侧信道（局域网内可被测量）
@@ -672,7 +673,7 @@ func sanitizeFilename(name string) string {
 //  2. 未开启 --hidden 时，任一分量以 . 开头（隐藏）拒绝——与列表/搜索/zip
 //     的过滤语义一致，防止直链或打包绕过 UI 隐藏设置。
 func (s *Server) hiddenBlocked(abs string) bool {
-	rel, err := filepath.Rel(s.root, abs)
+	rel, err := filepath.Rel(s.cfg.root, abs)
 	if err != nil {
 		return false
 	}
@@ -683,7 +684,7 @@ func (s *Server) hiddenBlocked(abs string) bool {
 		if isCacheEntry(part) {
 			return true
 		}
-		if !s.hidden && strings.HasPrefix(part, ".") {
+		if !s.cfg.hidden && strings.HasPrefix(part, ".") {
 			return true
 		}
 	}

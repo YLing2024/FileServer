@@ -37,7 +37,7 @@ func TestSpecialCharsEndToEnd(t *testing.T) {
 
 	// 构造特殊字符目录与文件
 	dirName := "目录+%#& 空格"
-	dir := filepath.Join(srv.root, dirName)
+	dir := filepath.Join(srv.cfg.root, dirName)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestThumbConcurrent(t *testing.T) {
 	if err := png.Encode(&enc, img); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(srv.root, "pic.png"), enc.Bytes(), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(srv.cfg.root, "pic.png"), enc.Bytes(), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -204,7 +204,7 @@ func TestThumbConcurrentDifferent(t *testing.T) {
 		}
 		var enc bytes.Buffer
 		png.Encode(&enc, img)
-		os.WriteFile(filepath.Join(srv.root, fmt.Sprintf("pic%d.png", i)), enc.Bytes(), 0o644)
+		os.WriteFile(filepath.Join(srv.cfg.root, fmt.Sprintf("pic%d.png", i)), enc.Bytes(), 0o644)
 	}
 
 	var wg sync.WaitGroup

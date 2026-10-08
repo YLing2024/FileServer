@@ -68,8 +68,8 @@ func TestSafePath(t *testing.T) {
 				if err != nil {
 					t.Fatalf("期望成功, 得到错误: %v", err)
 				}
-				if !pathWithin(srv.root, abs) {
-					t.Fatalf("结果 %q 不在根目录 %q 内", abs, srv.root)
+				if !pathWithin(srv.cfg.root, abs) {
+					t.Fatalf("结果 %q 不在根目录 %q 内", abs, srv.cfg.root)
 				}
 			} else if err == nil {
 				t.Fatalf("期望被拒绝, 却得到: %q", abs)
@@ -127,16 +127,16 @@ func TestRootSymlinkResolved(t *testing.T) {
 
 	srv := New(link, Options{})
 	defer srv.Close()
-	if srv.root != resolved {
-		t.Errorf("New() 应保存解析后的根: root=%q, want %q", srv.root, resolved)
+	if srv.cfg.root != resolved {
+		t.Errorf("New() 应保存解析后的根: root=%q, want %q", srv.cfg.root, resolved)
 	}
 	// 根内文件必须可访问（修复前这里返回 errForbidden → 全站 403）
 	abs, err := srv.safePath("hello.txt")
 	if err != nil {
 		t.Fatalf("符号链接根目录下的文件应可访问, 却失败: %v", err)
 	}
-	if !pathWithin(srv.root, abs) {
-		t.Fatalf("解析结果 %q 不在根 %q 内", abs, srv.root)
+	if !pathWithin(srv.cfg.root, abs) {
+		t.Fatalf("解析结果 %q 不在根 %q 内", abs, srv.cfg.root)
 	}
 }
 

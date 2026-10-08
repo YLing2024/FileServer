@@ -231,7 +231,7 @@ func (s *Server) handleThumb(w http.ResponseWriter, r *http.Request) {
 		// - 冷门格式（MKV/RMVB/HEVC 等）且 --ffmpeg 开启：服务端 ffmpeg 抽帧 JPEG；
 		// - 冷门格式且未开启：404（无法生成，保持图标）。
 		ext := strings.ToLower(filepath.Ext(fi.Name()))
-		if s.transcodeEnabled.Load() && ext != ".mp4" && ext != ".m4v" && ext != ".mov" && ext != ".webm" {
+		if s.cfg.transcodeEnabled.Load() && ext != ".mp4" && ext != ".m4v" && ext != ".mov" && ext != ".webm" {
 			s.serveRemoteThumb(w, r, abs, fi)
 			return
 		}
@@ -302,7 +302,7 @@ func (s *Server) serveThumbSrc(w http.ResponseWriter, r *http.Request) {
 	// - --ffmpeg 开启时：服务端 ffmpeg 抽帧生成 JPEG 缩略图（带磁盘缓存）；
 	// - 未开启时：整段返回（浏览器原生 `<video>` 解不了 → 前端显示图标）。
 	if ext != ".mp4" && ext != ".m4v" && ext != ".mov" {
-		if s.transcodeEnabled.Load() && s.ff != nil {
+		if s.cfg.transcodeEnabled.Load() && s.deps.ff != nil {
 			s.serveRemoteThumb(w, r, abs, fi)
 			return
 		}
@@ -338,23 +338,23 @@ func (s *Server) serveRemoteThumb(w http.ResponseWriter, r *http.Request, abs st
 	hq := parseIntSafe(r.URL.Query().Get("h"), 256, thumbMaxDim)
 	key := thumbKey(abs, fi, wq, hq)
 
-	if data, ok := s.thumbs.Get(key); ok {
+	if data, ok := s.deps.thumbs.Get(key); ok {
 		serveCached(w, r, key, data, "image/jpeg")
 		return
 	}
 	// singleflight：同一 key 并发请求只有生成者跑，其余等结果复用——
 	// 并发上限（ffThumbSem）放在生成函数内：同 key 的等待者在 Do 里等生成者，
 	// 不会像「先抢 sem 再进 Do」那样让第 3 个同 key 请求阻塞在 sem 上多等一轮。
-	data, ok := s.thumbs.Do(key, func() ([]byte, bool) {
-		if data, ok := s.thumbs.Get(key); ok { // 双检
+	data, ok := s.deps.thumbs.Do(key, func() ([]byte, bool) {
+		if data, ok := s.deps.thumbs.Get(key); ok { // 双检
 			return data, true
 		}
-		s.ffThumbSem <- struct{}{}
-		defer func() { <-s.ffThumbSem }()
-		tmp := filepath.Join(s.thumbs.dir, key+".src.tmp")
+		s.sem.ffThumb <- struct{}{}
+		defer func() { <-s.sem.ffThumb }()
+		tmp := filepath.Join(s.deps.thumbs.dir, key+".src.tmp")
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		if err := s.ff.ExtractFrame(ctx, abs, tmp); err != nil {
+		if err := s.deps.ff.ExtractFrame(ctx, abs, tmp); err != nil {
 			_ = os.Remove(tmp)
 			return nil, false
 		}
@@ -370,7 +370,7 @@ func (s *Server) serveRemoteThumb(w http.ResponseWriter, r *http.Request, abs st
 			return nil, false
 		}
 		data := enc.Bytes()
-		s.thumbs.Put(key, data)
+		s.deps.thumbs.Put(key, data)
 		return data, true
 	})
 	if !ok {
@@ -473,8 +473,8 @@ func (s *Server) serveImageThumb(w http.ResponseWriter, r *http.Request, abs str
 
 	// 图片解码/整读纳入并发信号量（与 ffmpeg 抽帧对称），
 	// 防止多客户端并发请求不同大图导致内存/CPU 不受控
-	s.imgSem <- struct{}{}
-	defer func() { <-s.imgSem }()
+	s.sem.img <- struct{}{}
+	defer func() { <-s.sem.img }()
 
 	// 先读尺寸：巨图不解码，直接返回原图（防内存尖峰）
 	cfg, _, err := decodeConfig(abs)
@@ -495,14 +495,14 @@ func (s *Server) serveImageThumb(w http.ResponseWriter, r *http.Request, abs str
 	}
 
 	key := thumbKey(abs, fi, wq, hq)
-	if data, ok := s.thumbs.Get(key); ok {
+	if data, ok := s.deps.thumbs.Get(key); ok {
 		serveCached(w, r, key, data, "image/jpeg")
 		return
 	}
 
 	// singleflight：同一缩略图的并发请求只生成一次，不同缩略图并发执行
-	data, ok := s.thumbs.Do(key, func() ([]byte, bool) {
-		if data, ok := s.thumbs.Get(key); ok { // 双检：等待期间可能已被其他请求生成
+	data, ok := s.deps.thumbs.Do(key, func() ([]byte, bool) {
+		if data, ok := s.deps.thumbs.Get(key); ok { // 双检：等待期间可能已被其他请求生成
 			return data, true
 		}
 		src, err := decodeImageFile(abs)
@@ -515,7 +515,7 @@ func (s *Server) serveImageThumb(w http.ResponseWriter, r *http.Request, abs str
 			return nil, false
 		}
 		data := enc.Bytes()
-		s.thumbs.Put(key, data)
+		s.deps.thumbs.Put(key, data)
 		return data, true
 	})
 	if !ok {

@@ -110,7 +110,7 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	limit := parseIntSafe(r.URL.Query().Get("limit"), listMaxLimit, listMaxLimit)
 	offset := parseIntSafe(r.URL.Query().Get("offset"), 0, 1<<30)
 
-	rel := relOf(s.root, dir)
+	rel := relOf(s.cfg.root, dir)
 	cacheKey := fmt.Sprintf("%s|%s|%s", rel, sortKey, order)
 
 	// 命中缓存（目录未变且 TTL 内）：直接分页返回
@@ -139,7 +139,7 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	for _, de := range des {
 		name := de.Name()
 		// 保留缓存目录（.FileServer）任何情况下不出现；其余点开头条目仅 --hidden 时可见
-		if isCacheEntry(name) || (!s.hidden && strings.HasPrefix(name, ".")) {
+		if isCacheEntry(name) || (!s.cfg.hidden && strings.HasPrefix(name, ".")) {
 			continue
 		}
 		// stat 语义的 IsDir：指向目录的符号链接按目录显示/操作（前端可正常进入），

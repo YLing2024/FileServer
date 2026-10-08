@@ -15,7 +15,7 @@ import (
 // TestNoSniffAndScriptableAttachment 全局 nosniff + HTML/SVG/JS 强制 attachment（1.3）
 func TestNoSniffAndScriptableAttachment(t *testing.T) {
 	srv := New(t.TempDir(), Options{})
-	root := srv.root
+	root := srv.cfg.root
 	os.WriteFile(filepath.Join(root, "evil.html"), []byte(`<script>alert(1)</script>`), 0o644)
 	os.WriteFile(filepath.Join(root, "evil.svg"), []byte(`<svg xmlns="http://www.w3.org/2000/svg"/>`), 0o644)
 	os.WriteFile(filepath.Join(root, "evil.js"), []byte(`alert(1)`), 0o644)
@@ -119,7 +119,7 @@ func TestMediaMime(t *testing.T) {
 func TestListRespFields(t *testing.T) {
 	srv := New(t.TempDir(), Options{})
 	for i := 0; i < 5; i++ {
-		os.WriteFile(filepath.Join(srv.root, "f"+itoa(i)), []byte("x"), 0o644)
+		os.WriteFile(filepath.Join(srv.cfg.root, "f"+itoa(i)), []byte("x"), 0o644)
 	}
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
@@ -144,19 +144,19 @@ func TestListRespFields(t *testing.T) {
 // TestHiddenBlockedRoot 根目录本身不应被隐藏过滤误拦（1.2 回归）
 func TestHiddenBlockedRoot(t *testing.T) {
 	srv := New(t.TempDir(), Options{})
-	if srv.hiddenBlocked(srv.root) {
+	if srv.hiddenBlocked(srv.cfg.root) {
 		t.Error("根目录不应视为隐藏路径")
 	}
-	sub := filepath.Join(srv.root, "sub")
+	sub := filepath.Join(srv.cfg.root, "sub")
 	os.MkdirAll(sub, 0o755)
 	if srv.hiddenBlocked(sub) {
 		t.Error("普通子目录不应视为隐藏路径")
 	}
-	os.WriteFile(filepath.Join(srv.root, ".hidden"), []byte("x"), 0o644)
-	if !srv.hiddenBlocked(filepath.Join(srv.root, ".hidden")) {
+	os.WriteFile(filepath.Join(srv.cfg.root, ".hidden"), []byte("x"), 0o644)
+	if !srv.hiddenBlocked(filepath.Join(srv.cfg.root, ".hidden")) {
 		t.Error("隐藏文件应被识别")
 	}
-	if !srv.hiddenBlocked(filepath.Join(srv.root, ".git", "config")) {
+	if !srv.hiddenBlocked(filepath.Join(srv.cfg.root, ".git", "config")) {
 		t.Error("隐藏祖先目录内的文件应被识别")
 	}
 }
@@ -167,7 +167,7 @@ func TestHiddenBlockedRoot(t *testing.T) {
 func TestCacheDirNeverExposed(t *testing.T) {
 	for _, hidden := range []bool{false, true} {
 		srv := New(t.TempDir(), Options{Hidden: hidden})
-		root := srv.root
+		root := srv.cfg.root
 		cache := filepath.Join(root, cacheDirName)
 		// 模拟真实缓存布局
 		os.MkdirAll(filepath.Join(cache, "hls"), 0o755)
@@ -250,7 +250,7 @@ func TestCacheDirNeverExposed(t *testing.T) {
 func TestDownloadSanitizedFilename(t *testing.T) {
 	srv := New(t.TempDir(), Options{})
 	name := "bad\nname.txt"
-	os.WriteFile(filepath.Join(srv.root, name), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(srv.cfg.root, name), []byte("x"), 0o644)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
