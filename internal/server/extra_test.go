@@ -582,7 +582,7 @@ func TestZipConcurrent(t *testing.T) {
 			}
 			defer r.Body.Close()
 			if r.StatusCode != 200 {
-				errs[idx] = &httpError{r.StatusCode}
+				errs[idx] = &statusError{r.StatusCode}
 			}
 		}(i)
 	}
@@ -594,6 +594,6 @@ func TestZipConcurrent(t *testing.T) {
 	}
 }
 
-type httpError struct{ code int }
+type statusError struct{ code int }
 
-func (e *httpError) Error() string { return "http status " + intString(e.code) }
+func (e *statusError) Error() string { return "http status " + intString(e.code) }
