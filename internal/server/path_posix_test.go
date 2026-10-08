@@ -19,9 +19,9 @@ func TestPathWithinPOSIX(t *testing.T) {
 		{"/srv", "/srv", true},
 		{"/srv", "/srv/a.txt", true},
 		{"/srv", "/srv/sub/x", true},
-		{"/srv", "/SRV/secret", false},      // 大小写变体 = 外部目录
-		{"/srv", "/srv2/x", false},          // 前缀兄弟目录
-		{"/srv", "/srvatic/x", false},       // 无分隔符边界
+		{"/srv", "/SRV/secret", false}, // 大小写变体 = 外部目录
+		{"/srv", "/srv2/x", false},     // 前缀兄弟目录
+		{"/srv", "/srvatic/x", false},  // 无分隔符边界
 		{"/srv", "/srv/sub/../../etc", false},
 	}
 	for _, c := range cases {

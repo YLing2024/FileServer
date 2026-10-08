@@ -90,9 +90,9 @@ func kindExtMap() map[string]string {
 // handleList GET /api/list?path=&sort=&order=&limit=&offset= 目录列表
 //
 // 性能要点（慢磁盘/网络盘上的大目录尤其关键）：
-// 1) 默认 name 排序不 stat 全量条目——先按名称排序，只对当前页条目懒取
-//    size/mtime（2000 文件从 2000 次 stat 降到 300 次）；
-// 2) 结果短缓存 3 秒：返回上级目录、加载更多分页均秒开。
+//  1. 默认 name 排序不 stat 全量条目——先按名称排序，只对当前页条目懒取
+//     size/mtime（2000 文件从 2000 次 stat 降到 300 次）；
+//  2. 结果短缓存 3 秒：返回上级目录、加载更多分页均秒开。
 func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	dir, err := s.safePath(r.URL.Query().Get("path"))
 	if err != nil {

@@ -57,7 +57,7 @@ type securityAttributes struct {
 }
 
 type jobIoCounters struct {
-	Read, Write, Other         uint64
+	Read, Write, Other          uint64
 	ReadOps, WriteOps, OtherOps uint64
 }
 

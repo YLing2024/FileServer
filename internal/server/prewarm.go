@@ -20,12 +20,12 @@ import (
 // ============================================================
 
 const (
-	prewarmChunk = 512 << 10             // 每次读 512KB
-	prewarmPause = 30 * time.Millisecond // 块间暂停：约 8MB/s 限速
-	prewarmMax   = 8 << 20             // 头部/尾部各自最多读 8MB
-	prewarmDedup = 30 * time.Minute    // 同一文件 30 分钟内只预热一次
-	prewarmQueue = 32                  // 忙时最多积压的待预热文件数
-	prewarmConcurrent = 1              // 单路预热：机械盘上多路预热会与播放抢磁头
+	prewarmChunk      = 512 << 10             // 每次读 512KB
+	prewarmPause      = 30 * time.Millisecond // 块间暂停：约 8MB/s 限速
+	prewarmMax        = 8 << 20               // 头部/尾部各自最多读 8MB
+	prewarmDedup      = 30 * time.Minute      // 同一文件 30 分钟内只预热一次
+	prewarmQueue      = 32                    // 忙时最多积压的待预热文件数
+	prewarmConcurrent = 1                     // 单路预热：机械盘上多路预热会与播放抢磁头
 )
 
 type prewarmReq struct {

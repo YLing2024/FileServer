@@ -72,7 +72,7 @@ func Render(modules [][]bool, quiet int) string {
 
 // renderChar 半块字符渲染；颜色由调用方上下文决定（深/浅切换）。
 // 上深下深 → '█'；上深下浅 → '▀'；上浅下深 → '▄'；全浅 → ' '。
-//（深=黑、浅=白，由外层在打印深/浅模块前切换 ansiDark/ansiLight。）
+// （深=黑、浅=白，由外层在打印深/浅模块前切换 ansiDark/ansiLight。）
 func renderChar(top, bottom bool) string {
 	switch {
 	case top && bottom:

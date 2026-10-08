@@ -41,16 +41,16 @@ func isCacheEntry(name string) bool { return strings.EqualFold(name, cacheDirNam
 
 // Server 文件服务器
 type Server struct {
-	root    string // 服务根目录（绝对路径）
-	hidden  bool   // 是否显示隐藏文件
-	auth    string // 可选口令 "user:pass"
-	verbose bool
-	thumbs *ThumbCache
-	ff     *Ffmpeg
-	hls    *HlsManager
-	imgSem chan struct{} // 图片缩略图解码/整读并发上限
+	root       string // 服务根目录（绝对路径）
+	hidden     bool   // 是否显示隐藏文件
+	auth       string // 可选口令 "user:pass"
+	verbose    bool
+	thumbs     *ThumbCache
+	ff         *Ffmpeg
+	hls        *HlsManager
+	imgSem     chan struct{} // 图片缩略图解码/整读并发上限
 	ffThumbSem chan struct{} // 服务端 ffmpeg 抽帧并发上限（冷门格式缩略图，低并发防占盘）
-	started time.Time
+	started    time.Time
 	// transcodeEnabled：冷门格式（MKV/RMVB/HEVC 等）在线转码播放 + 服务端抽帧缩略图。
 	// 默认跟随 --ffmpeg 参数，可在前端设置面板动态切换（POST /api/settings/ffmpeg）。
 	transcodeEnabled atomic.Bool
@@ -58,14 +58,14 @@ type Server struct {
 	listMu    sync.Mutex
 	listCache map[string]*listCacheEntry // 目录列表短缓存（返回/翻页秒开）
 
-	fsDir string // 小文件 faststart 重封装缓存目录
-	fsMu  sync.Mutex
+	fsDir  string // 小文件 faststart 重封装缓存目录
+	fsMu   sync.Mutex
 	fsBusy map[string]bool // faststart 重封装进行中（防重复）
 	// faststartHook 仅测试注入：非 nil 时替代 go warmFaststart，
 	// 用于断言“预热被触发”而不依赖真实 ffmpeg。生产路径恒为 nil。
 	faststartHook func(abs string, fi os.FileInfo)
 
-	pw *prewarmState // moov 预读预热（机械硬盘冷读提速）
+	pw *prewarmState  // moov 预读预热（机械硬盘冷读提速）
 	pb *playbackState // 直链播放活动跟踪（预热/重封装据此让路）
 
 	layoutMu sync.Mutex
@@ -107,21 +107,21 @@ func New(root string, opts Options) *Server {
 	ff := FindFfmpeg()
 
 	srv := &Server{
-		root:    root,
-		hidden:  opts.Hidden,
-		auth:    opts.Auth,
-		verbose: opts.Verbose,
-		thumbs:  NewThumbCache(root),
-		ff:      ff,
-		hls:     NewHlsManager(root),
-		imgSem:  make(chan struct{}, thumbImgMaxConc),
+		root:       root,
+		hidden:     opts.Hidden,
+		auth:       opts.Auth,
+		verbose:    opts.Verbose,
+		thumbs:     NewThumbCache(root),
+		ff:         ff,
+		hls:        NewHlsManager(root),
+		imgSem:     make(chan struct{}, thumbImgMaxConc),
 		ffThumbSem: make(chan struct{}, ffThumbMaxConc),
-		started: time.Now(),
-		fsDir:   fsDir,
-		fsBusy:  make(map[string]bool),
-		pw:      &prewarmState{warmed: make(map[string]time.Time)},
-		pb:      &playbackState{},
-		layouts: make(map[string]layoutEntry),
+		started:    time.Now(),
+		fsDir:      fsDir,
+		fsBusy:     make(map[string]bool),
+		pw:         &prewarmState{warmed: make(map[string]time.Time)},
+		pb:         &playbackState{},
+		layouts:    make(map[string]layoutEntry),
 	}
 	srv.transcodeEnabled.Store(opts.FFmpeg && ff != nil && ff.Available())
 	return srv

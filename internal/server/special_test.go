@@ -21,12 +21,12 @@ import (
 // specialNames 覆盖 URL 编码高危字符的文件/目录名
 // 注: Windows 文件系统本身禁止 ? * " < > | 等字符，故不在此列
 var specialNames = []string{
-	"a#b%c+d&e f.txt",     // # % + & 空格
-	"空格 和 中文.txt",      // 空格 + 中文
-	"引号'单引号.txt",       // 单引号
-	"括号(1)[2]{3}.txt",   // 括号
-	"emoji🔥符号.txt",       // emoji
-	"a=b&c=d%.txt",        // = & %
+	"a#b%c+d&e f.txt", // # % + & 空格
+	"空格 和 中文.txt",     // 空格 + 中文
+	"引号'单引号.txt",      // 单引号
+	"括号(1)[2]{3}.txt", // 括号
+	"emoji🔥符号.txt",    // emoji
+	"a=b&c=d%.txt",    // = & %
 }
 
 // TestSpecialCharsEndToEnd 特殊字符文件名/目录名的全链路：列表→缩略图→下载→zip→搜索

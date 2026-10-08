@@ -689,14 +689,14 @@ func (s *Server) serveHlsFile(w http.ResponseWriter, r *http.Request, session *h
 }
 
 // rewritePlaylistURIs 改写播放列表：
-// 1) 相对 URI（init.mp4 / seg_*.m4s）→ 指向 /api/hls 的绝对 URL（浏览器/hls.js
-//    按播放列表 URL 目录解析相对 URI 会 404）；
-// 2) ENDLIST 仅在转码完成（done=true）时输出：
-//    - 转码进行中：不加 ENDLIST（EVENT 语义）——hls.js 会持续拉取随转码增长的
-//      新分片，不会「播完当前已生成部分就结束」（此前无条件加 ENDLIST 导致
-//      长视频只播开头几秒就停）；
-//    - 转码完成：加 ENDLIST，hls.js 正常结束。
-//    同时移除 EXT-X-PLAYLIST-TYPE:EVENT 声明（避免部分播放器按严格 live 处理）。
+//  1. 相对 URI（init.mp4 / seg_*.m4s）→ 指向 /api/hls 的绝对 URL（浏览器/hls.js
+//     按播放列表 URL 目录解析相对 URI 会 404）；
+//  2. ENDLIST 仅在转码完成（done=true）时输出：
+//     - 转码进行中：不加 ENDLIST（EVENT 语义）——hls.js 会持续拉取随转码增长的
+//     新分片，不会「播完当前已生成部分就结束」（此前无条件加 ENDLIST 导致
+//     长视频只播开头几秒就停）；
+//     - 转码完成：加 ENDLIST，hls.js 正常结束。
+//     同时移除 EXT-X-PLAYLIST-TYPE:EVENT 声明（避免部分播放器按严格 live 处理）。
 func rewritePlaylistURIs(data []byte, r *http.Request, done bool) []byte {
 	path := r.URL.Query().Get("path")
 	base := "/api/hls?path=" + url.QueryEscape(path) + "&f="
