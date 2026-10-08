@@ -6,7 +6,6 @@ package main
 
 import (
 	"errors"
-	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -25,26 +24,17 @@ import (
 )
 
 func main() {
-	showVersion := flag.Bool("version", false, "打印版本信息后退出")
-	port := flag.Int("port", 0, "监听端口（默认 8080，被占用自动递增）")
-	dir := flag.String("dir", "", "服务目录（默认 exe 所在目录）")
-	browser := flag.Bool("browser", false, "启动后自动打开默认浏览器（默认关闭）")
-	hidden := flag.Bool("hidden", false, "显示隐藏文件（点开头）")
-	ffmpeg := flag.Bool("ffmpeg", false, "开启冷门格式（MKV/RMVB/HEVC 等）在线转码播放与服务端缩略图（需 exe 旁 ffmpeg；有性能代价）")
-	auth := flag.String("auth", "", "可选访问口令 user:pass")
-	verbose := flag.Bool("v", false, "详细访问日志")
-	noQR := flag.Bool("no-qr", false, "不在终端显示地址二维码")
-	flag.Parse()
+	cfg := parseConfig(os.Args[1:])
 
 	platform.SetConsoleUTF8()
 
-	if *showVersion {
+	if cfg.Version {
 		fmt.Println(version.String())
 		return
 	}
 
 	// 服务根目录：默认 exe 所在目录（双击场景）
-	root := *dir
+	root := cfg.Dir
 	if root == "" {
 		exe, err := os.Executable()
 		if err != nil {
@@ -61,7 +51,7 @@ func main() {
 	}
 
 	// 监听端口（占用自动递增）
-	startPort := *port
+	startPort := cfg.Port
 	if startPort <= 0 {
 		startPort = 8080
 	}
@@ -70,7 +60,7 @@ func main() {
 		log.Fatalf("无法监听端口: %v", err)
 	}
 
-	srv := server.New(rootAbs, server.Options{Hidden: *hidden, Auth: *auth, Verbose: *verbose, FFmpeg: *ffmpeg})
+	srv := server.New(rootAbs, server.Options{Hidden: cfg.Hidden, Auth: cfg.Auth, Verbose: cfg.Verbose, FFmpeg: cfg.FFmpeg})
 	handler := srv.Handler()
 
 	// ---- 控制台输出 ----
@@ -95,11 +85,11 @@ func main() {
 	fmt.Println("------------------------------------------------------------------")
 
 	// ---- 终端二维码 ----
-	if !*noQR {
+	if !cfg.NoQR {
 		printQRs(actualPort, ips)
 	}
 
-	if *browser {
+	if cfg.Browser {
 		go platform.OpenBrowser(fmt.Sprintf("http://127.0.0.1:%d", actualPort))
 	}
 
