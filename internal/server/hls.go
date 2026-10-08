@@ -623,7 +623,7 @@ func isHDR(m *MediaInfo) bool {
 // serveHlsFile 从会话目录按文件名安全地提供文件（index.m3u8 / seg_*.m4s）
 func (s *Server) serveHlsFile(w http.ResponseWriter, r *http.Request, session *hlsSession, fname string) {
 	if !segNameRe.MatchString(fname) || strings.Contains(fname, "..") {
-		writeErr(w, http.StatusBadRequest, "非法文件名")
+		httpError(w, http.StatusBadRequest, "非法文件名")
 		return
 	}
 	session.touch() // 记录访问时间（空闲取消判定）
@@ -642,17 +642,17 @@ func (s *Server) serveHlsFile(w http.ResponseWriter, r *http.Request, session *h
 				}
 				select {
 				case <-session.done:
-					writeErr(w, http.StatusNotFound, "分片不可用（转码已结束）")
+					httpError(w, http.StatusNotFound, "分片不可用（转码已结束）")
 					return
 				case <-time.After(200 * time.Millisecond):
 				}
 				if time.Now().After(deadline) {
-					writeErr(w, http.StatusNotFound, "分片尚未生成（转码中，请稍后拖动）")
+					httpError(w, http.StatusNotFound, "分片尚未生成（转码中，请稍后拖动）")
 					return
 				}
 			}
 		} else {
-			writeErr(w, http.StatusNotFound, "播放列表尚未生成")
+			httpError(w, http.StatusNotFound, "播放列表尚未生成")
 			return
 		}
 	}
@@ -662,7 +662,7 @@ func (s *Server) serveHlsFile(w http.ResponseWriter, r *http.Request, session *h
 		w.Header().Set("Cache-Control", "no-store")
 		data, err := os.ReadFile(fp)
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, "读取播放列表失败")
+			httpError(w, http.StatusInternalServerError, "读取播放列表失败")
 			return
 		}
 		// done=true 仅在转码完成时传：进行中的流不加 ENDLIST（EVENT 语义，
@@ -679,7 +679,7 @@ func (s *Server) serveHlsFile(w http.ResponseWriter, r *http.Request, session *h
 	// 分片内容不变：可缓存
 	f, err := os.Open(fp)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "打开分片失败")
+		httpError(w, http.StatusInternalServerError, "打开分片失败")
 		return
 	}
 	defer func() { _ = f.Close() }()

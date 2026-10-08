@@ -96,22 +96,22 @@ func kindExtMap() map[string]string {
 func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	dir, err := s.safePath(r.URL.Query().Get("path"))
 	if err != nil {
-		writeErr(w, errToStatus(err), err.Error())
+		httpError(w, errToStatus(err), err.Error())
 		return
 	}
 	// 隐藏路径（--hidden 未开启）与保留缓存目录（.FileServer，任何情况）
 	// 与直链/zip 语义一致地拒绝列出
 	if s.hiddenBlocked(dir) {
-		writeErr(w, http.StatusNotFound, "路径不存在")
+		httpError(w, http.StatusNotFound, "路径不存在")
 		return
 	}
 	fi, err := os.Stat(dir)
 	if err != nil {
-		writeErr(w, errToStatus(err), "无法访问该路径")
+		httpError(w, errToStatus(err), "无法访问该路径")
 		return
 	}
 	if !fi.IsDir() {
-		writeErr(w, http.StatusBadRequest, "该路径不是目录")
+		httpError(w, http.StatusBadRequest, "该路径不是目录")
 		return
 	}
 
@@ -143,7 +143,7 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 
 	des, err := os.ReadDir(dir)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "读取目录失败")
+		httpError(w, http.StatusInternalServerError, "读取目录失败")
 		return
 	}
 
@@ -298,7 +298,7 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func writeErr(w http.ResponseWriter, code int, msg string) {
+func httpError(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]string{"error": msg})
 }
 
