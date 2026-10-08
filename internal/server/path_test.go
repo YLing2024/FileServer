@@ -32,33 +32,37 @@ func TestSafePath(t *testing.T) {
 	srv, _ := newTestServer(t)
 
 	cases := []struct {
-		name string
-		rel  string
-		ok   bool
+		name    string
+		rel     string
+		ok      bool
+		winOnly bool // 仅 Windows 语义成立（反斜杠为路径分隔符）
 	}{
-		{"空路径=根", "", true},
-		{"根斜杠", "/", true},
-		{"直接子文件", "a.txt", true},
-		{"子目录文件", "dir1/b.txt", true},
-		{"深层", "dir1/sub/c.txt", true},
-		{"中文与空格", "中文 文件.txt", true},
-		{"前导斜杠", "/a.txt", true},
-		{"反斜杠", `dir1\b.txt`, true},
-		{"父目录逃逸", "../a.txt", false},
-		{"双层逃逸", "../../etc/passwd", false},
-		{"编码层逃逸", "..%2f..%2fa.txt", false},
-		{"混合逃逸", "dir1/../../a.txt", false},
-		{"反斜杠逃逸", `..\..\a.txt`, false},
-		{"子串诱骗", "dir1..a.txt", false}, // 不存在
-		{"绝对路径", "C:\\windows\\system32", false},
-		{"盘符相对", "C:foo", false},
-		{"UNC", `\\server\share\x`, false},
-		{"空字节", "a\x00b.txt", false},
-		{"点路径", ".", true},
-		{"点点路径", "./a.txt", true},
+		{"空路径=根", "", true, false},
+		{"根斜杠", "/", true, false},
+		{"直接子文件", "a.txt", true, false},
+		{"子目录文件", "dir1/b.txt", true, false},
+		{"深层", "dir1/sub/c.txt", true, false},
+		{"中文与空格", "中文 文件.txt", true, false},
+		{"前导斜杠", "/a.txt", true, false},
+		{"反斜杠", `dir1\b.txt`, true, true},
+		{"父目录逃逸", "../a.txt", false, false},
+		{"双层逃逸", "../../etc/passwd", false, false},
+		{"编码层逃逸", "..%2f..%2fa.txt", false, false},
+		{"混合逃逸", "dir1/../../a.txt", false, false},
+		{"反斜杠逃逸", `..\..\a.txt`, false, false},
+		{"子串诱骗", "dir1..a.txt", false, false}, // 不存在
+		{"绝对路径", "C:\\windows\\system32", false, false},
+		{"盘符相对", "C:foo", false, false},
+		{"UNC", `\\server\share\x`, false, false},
+		{"空字节", "a\x00b.txt", false, false},
+		{"点路径", ".", true, false},
+		{"点点路径", "./a.txt", true, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			if c.winOnly && runtime.GOOS != "windows" {
+				t.Skip("反斜杠仅在 Windows 上是路径分隔符")
+			}
 			abs, err := srv.safePath(c.rel)
 			if c.ok {
 				if err != nil {

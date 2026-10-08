@@ -11,6 +11,11 @@ func SetConsoleUTF8() {}
 // KillOnParentExit 非 Windows 平台无操作（子进程由进程组信号统一处理）
 func KillOnParentExit(cmd *exec.Cmd) {}
 
+// SetLowPriority 非 Windows 平台无操作（不做进程优先级调整）。
+// Windows 生产路径见 platform_windows.go：后台任务以 BELOW_NORMAL 运行，
+// 给用户播放链路让路；其余平台交由系统调度器处理。
+func SetLowPriority(cmd *exec.Cmd) {}
+
 // OpenBrowser 使用系统默认浏览器打开 URL
 func OpenBrowser(url string) {
 	exec.Command("xdg-open", url).Start()

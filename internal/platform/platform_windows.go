@@ -124,3 +124,13 @@ func KillOnParentExit(cmd *exec.Cmd) {
 func OpenBrowser(url string) {
 	exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
 }
+
+// SetLowPriority 以低于正常优先级（BELOW_NORMAL_PRIORITY_CLASS = 0x00004000）
+// 启动 cmd。用于后台任务（缩略图抽帧、大文件重封装），避免与用户点开的播放/
+// 转码链路抢 CPU/IO。
+func SetLowPriority(cmd *exec.Cmd) {
+	if cmd == nil {
+		return
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x00004000}
+}

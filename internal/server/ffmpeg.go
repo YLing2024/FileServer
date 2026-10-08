@@ -10,11 +10,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/YLing2024/FileServer/internal/platform"
@@ -493,9 +491,10 @@ func parseDurationFromStderr(b []byte) (float64, error) {
 // 避免与用户点开的播放/转码链路抢 CPU/IO）。
 func runFFmpeg(ctx context.Context, path string, args []string, lowPriority bool) error {
 	cmd := exec.CommandContext(ctx, path, args...)
-	if lowPriority && runtime.GOOS == "windows" {
-		// BELOW_NORMAL_PRIORITY_CLASS
-		cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x00004000}
+	if lowPriority {
+		// 平台差异隔离在 internal/platform：Windows 上设 BELOW_NORMAL，
+		// 其余平台为 no-op（见 platform.SetLowPriority）。
+		platform.SetLowPriority(cmd)
 	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
