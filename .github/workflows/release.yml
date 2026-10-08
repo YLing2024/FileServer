@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # Windows 原生构建：产物是 Windows exe，Windows runner 上直接可测。
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: build with version injection
+        shell: pwsh
+        run: |
+          $v = "${{ github.ref_name }}"
+          $c = (git rev-parse --short HEAD).Trim()
+          $d = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+          $mod = 'github.com/YLing2024/FileServer'
+          $ld = "-s -w -X $mod/internal/version.Version=$v -X $mod/internal/version.Commit=$c -X $mod/internal/version.BuildDate=$d"
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          go build -trimpath -ldflags $ld -o dist/FileServer.exe ./cmd/fileserver
+
+      - name: package lite + checksums
+        shell: pwsh
+        run: |
+          $v = "${{ github.ref_name }}"
+          Compress-Archive -Path dist/FileServer.exe -DestinationPath "dist/FileServer-lite-$v.zip" -Force
+          $h = (Get-FileHash -Algorithm SHA256 -Path dist/FileServer.exe).Hash.ToLower()
+          "$h  FileServer.exe" | Set-Content -Path dist/SHA256SUMS.txt -Encoding ascii
+
+      - name: create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/FileServer-lite-*.zip
+            dist/SHA256SUMS.txt
+          body: |
+            Windows x64 lite 包：单文件 exe（内嵌前端），内含注入的版本 / commit / 构建时间。
+
+            需要冷门格式在线转码或 GPU 加速的用户，请在本机运行 `release.ps1 -Version <版本>`
+            生成 full 包（exe + ffmpeg 组件）。ffmpeg 二进制因体积与许可原因不进 CI / 仓库。
