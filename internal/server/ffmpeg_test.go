@@ -430,11 +430,11 @@ func TestVideoInfoDecision(t *testing.T) {
 	defer ts.Close()
 
 	cases := []struct {
-		name     string
-		path     string
-		mode     string
-		minDur   float64
-		maxDur   float64
+		name   string
+		path   string
+		mode   string
+		minDur float64
+		maxDur float64
 	}{
 		// 播放决策：未开启冷门格式支持时一律 direct（浏览器原生解码直链）。
 		{"faststart mp4 → direct", "/fast.mp4", "direct", 1.5, 2.5},

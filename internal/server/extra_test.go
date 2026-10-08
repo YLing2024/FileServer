@@ -232,9 +232,9 @@ func TestThumbCacheCleanupTmp(t *testing.T) {
 	// 缓存文件名为 40 位 SHA1 + ".jpg"（共 44 字符）
 	oldCache := strings.Repeat("a", 40) + ".jpg"
 	freshCache := strings.Repeat("b", 40) + ".jpg"
-	write(oldCache, old) // 过期缓存
+	write(oldCache, old)     // 过期缓存
 	write(freshCache, fresh) // 新鲜缓存
-	write("stale.tmp", old) // 过期 .tmp 残留
+	write("stale.tmp", old)  // 过期 .tmp 残留
 	write("fresh.tmp", fresh)
 	write("short.tmp", old) // 任意 .tmp 残留（不以 .jpg 结尾）
 	c.cleanup()

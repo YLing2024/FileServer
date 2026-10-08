@@ -56,11 +56,11 @@ func TestNoSniffAndScriptableAttachment(t *testing.T) {
 // TestSanitizeFilename Content-Disposition 控制字符过滤（2.9）
 func TestSanitizeFilename(t *testing.T) {
 	cases := map[string]string{
-		"normal.txt":     "normal.txt",
+		"normal.txt":      "normal.txt",
 		"line\nbreak.txt": "linebreak.txt",
-		"tab\tfile":      "tabfile",
-		"cr\rfile":       "crfile",
-		"中文 文件.txt":     "中文 文件.txt",
+		"tab\tfile":       "tabfile",
+		"cr\rfile":        "crfile",
+		"中文 文件.txt":       "中文 文件.txt",
 	}
 	for in, want := range cases {
 		if got := sanitizeFilename(in); got != want {
@@ -209,7 +209,7 @@ func TestCacheDirNeverExposed(t *testing.T) {
 
 		// 直接列缓存目录（含大小写变体）：404
 		for _, p := range []string{"/" + cacheDirName, "/.fileserver", "/" + cacheDirName + "/hls"} {
-			if code := status(base+"/api/list?path="+url.QueryEscape(p)); code != http.StatusNotFound {
+			if code := status(base + "/api/list?path=" + url.QueryEscape(p)); code != http.StatusNotFound {
 				t.Errorf("hidden=%v: 列表缓存目录 %s 应 404, 得到 %d", hidden, p, code)
 			}
 		}

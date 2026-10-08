@@ -96,8 +96,8 @@ func (q *qr) drawReservedFormat() {
 	// 第一副本围绕左上 finder：列 8 行 0~8 与 行 8 列 0~8（行/列 6 为时序，跳过）
 	for i := 0; i <= 8; i++ {
 		if i != 6 {
-			mark(i, 8)  // 列 8，行 i
-			mark(8, i)  // 行 8，列 i
+			mark(i, 8) // 列 8，行 i
+			mark(8, i) // 行 8，列 i
 		}
 	}
 	// 第二副本 bit 0~7：行 8，列 size-1 .. size-8

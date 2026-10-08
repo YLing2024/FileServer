@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	"image/jpeg"
 	_ "image/gif" // 注册 GIF 解码器
+	"image/jpeg"
 	_ "image/png" // 注册 PNG 解码器
 	"net/http"
 	"os"
@@ -20,8 +20,8 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/image/draw" // CatmullRom 高质量缩放
 	_ "golang.org/x/image/bmp"  // 注册 BMP 解码器
+	"golang.org/x/image/draw"   // CatmullRom 高质量缩放
 	_ "golang.org/x/image/tiff" // 注册 TIFF 解码器
 	_ "golang.org/x/image/webp" // 注册 WEBP 解码器
 )
@@ -30,9 +30,9 @@ const (
 	thumbMaxDim               = 1024 // 客户端可请求的最大缩略图边长
 	thumbDirectServeThreshold = 6000 // 超过此尺寸的原图不做解码缩放，直接返回原图
 	thumbMaxAge               = 7 * 24 * time.Hour
-	thumbImgMaxConc           = 4      // 图片解码/整读并发上限（多客户端批量缩略图提速）
+	thumbImgMaxConc           = 4         // 图片解码/整读并发上限（多客户端批量缩略图提速）
 	thumbTmpMaxAge            = time.Hour // .tmp 残留清理阈值
-	ffThumbMaxConc            = 2      // 服务端 ffmpeg 抽帧并发上限（冷门格式缩略图；机械盘上多路抽帧会抢磁头）
+	ffThumbMaxConc            = 2         // 服务端 ffmpeg 抽帧并发上限（冷门格式缩略图；机械盘上多路抽帧会抢磁头）
 )
 
 // ThumbCache 缩略图磁盘缓存 + 内存 LRU（图片缩略图专用；视频缩略图已 100% 浏览器抽帧）
@@ -263,8 +263,8 @@ const thumbSrcLimit = 16 << 20 // 抽帧源头部截取上限 16MB
 // layoutEntry MP4 顶层布局缓存条目（moov 尾部扫描要遍历全部 mdat 头，
 // 在碎片盘上就是几百上千次寻道，必须缓存）
 type layoutEntry struct {
-	l   mp4Layout
-	t   time.Time
+	l mp4Layout
+	t time.Time
 }
 
 // serveThumbSrc GET /api/thumb-src?path=
@@ -445,6 +445,7 @@ func (s *Server) mp4LayoutCached(src string, size int64) mp4Layout {
 //     机械盘随机寻道成本；
 //   - 小文件（<256MB）即使 mdat 碎片多，解析也在亚秒级，加速收益极小；
 //   - 大文件且 mdat 碎片化（大量小块交错）解析要数秒~十几秒，走 HLS copy 起播可降到约 1 秒。
+//
 // 判据：mdat > 4 块 且 体积 ≥ 256MB。不以 moov 体积为判据。
 func (s *Server) isWeird(abs string) bool {
 	fi, err := os.Stat(abs)

@@ -30,9 +30,9 @@ type Ffmpeg struct {
 	durMu     sync.RWMutex
 	durations map[string]float64 // 时长元数据缓存：键 = 路径|大小|mtime 的 SHA1
 
-	infoMu sync.RWMutex
-	infos  map[string]*MediaInfo // 媒体信息缓存
-	probing map[string]bool      // 探测进行中（单飞）
+	infoMu  sync.RWMutex
+	infos   map[string]*MediaInfo // 媒体信息缓存
+	probing map[string]bool       // 探测进行中（单飞）
 
 	encMu      sync.RWMutex
 	encoder    string   // 选定的 H.264 编码器：h264_nvenc / h264_amf / h264_qsv / libx264
@@ -47,10 +47,10 @@ type MediaInfo struct {
 	Duration   float64 `json:"duration"`
 	Width      int     `json:"width"`
 	Height     int     `json:"height"`
-	FPS        float64 `json:"fps"`     // 帧率（r_frame_rate，如 29.97/23.976/30）
-	VideoCodec string  `json:"vcodec"`  // h264 / hevc / vp9 / av1 / mpeg4 / wmv3 ...
-	AudioCodec string  `json:"acodec"`  // aac / mp3 / ac3 / opus / vorbis / ""（无音轨）
-	PixFmt     string  `json:"pixfmt"`  // yuv420p / yuv420p10le ...（用于 HDR 判定）
+	FPS        float64 `json:"fps"`    // 帧率（r_frame_rate，如 29.97/23.976/30）
+	VideoCodec string  `json:"vcodec"` // h264 / hevc / vp9 / av1 / mpeg4 / wmv3 ...
+	AudioCodec string  `json:"acodec"` // aac / mp3 / ac3 / opus / vorbis / ""（无音轨）
+	PixFmt     string  `json:"pixfmt"` // yuv420p / yuv420p10le ...（用于 HDR 判定）
 	HasAudio   bool    `json:"has_audio"`
 }
 
@@ -291,13 +291,13 @@ func (f *Ffmpeg) ProbeMedia(ctx context.Context, abs string, fi os.FileInfo) (*M
 			Duration string `json:"duration"`
 		} `json:"format"`
 		Streams []struct {
-			CodecType  string `json:"codec_type"`
-			CodecName  string `json:"codec_name"`
-			Width      int    `json:"width"`
-			Height     int    `json:"height"`
-			PixFmt     string `json:"pix_fmt"`
-			FrameRate  string `json:"r_frame_rate"`
-			AvgFps     string `json:"avg_frame_rate"`
+			CodecType string `json:"codec_type"`
+			CodecName string `json:"codec_name"`
+			Width     int    `json:"width"`
+			Height    int    `json:"height"`
+			PixFmt    string `json:"pix_fmt"`
+			FrameRate string `json:"r_frame_rate"`
+			AvgFps    string `json:"avg_frame_rate"`
 		} `json:"streams"`
 	}
 	out, err := exec.CommandContext(cctx, f.ffprobePath,
@@ -532,6 +532,7 @@ func runFFmpeg(ctx context.Context, path string, args []string, lowPriority bool
 //   - 低优先级运行（BELOW_NORMAL），不抢用户播放/浏览；
 //   - 超时 20s（个别冷门格式 seek 慢）；
 //   - Job Object 随主进程终止（防孤儿 ffmpeg 占资源）。
+//
 // 帧位置：跳过开头黑场/片头（-ss 1），质量 4（较清晰）。
 func (f *Ffmpeg) ExtractFrame(ctx context.Context, src, dst string) error {
 	if f == nil || f.ffmpegPath == "" {
@@ -726,4 +727,3 @@ func mp4IsFastStart(abs string) bool {
 	// moov 在开头 256KB 内视为已 faststart（正常情况 moov 紧跟 ftyp，几十 KB 内）
 	return l.moovOffset >= 0 && l.moovOffset <= 256*1024
 }
-
