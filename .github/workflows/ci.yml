@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # 主力 job：Windows 上所有包都能编译，测试才真正全量覆盖。
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: gofmt check
+        shell: pwsh
+        run: |
+          $out = gofmt -l .
+          if ($out) { Write-Host "未格式化文件:"; Write-Host $out; exit 1 }
+      - name: go vet
+        run: go vet ./...
+      - name: go test -race
+        run: go test -race ./...
+      - name: go build
+        run: go build ./...
+
+  # 交叉 job：证明 Linux 侧也能交叉 vet/build，两端都不退化。
+  cross:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: gofmt check
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then echo "未格式化文件:"; echo "$out"; exit 1; fi
+      - name: cross vet (windows/amd64)
+        run: GOOS=windows GOARCH=amd64 go vet ./...
+      - name: cross build (windows/amd64)
+        run: GOOS=windows GOARCH=amd64 go build -trimpath ./cmd/fileserver
+
+  # 正确性 lint：只开 .golangci.yml 声明的规则，版本钉死。
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.14.0
+        env:
+          GOOS: windows
+          GOARCH: amd64
