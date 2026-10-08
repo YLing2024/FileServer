@@ -369,19 +369,6 @@ func parseFPS(s string) float64 {
 	return num / den
 }
 
-// probeDurationCached 只查内存缓存中的时长，绝不发起 ffprobe。
-// 供缩略图等高频短任务使用（探测留给 video-info/播放链路，探测一次缓存共用）。
-func (f *Ffmpeg) probeDurationCached(path string) (float64, error) {
-	key, ok := f.durationKey(path)
-	if !ok {
-		return 0, fmt.Errorf("无法获取文件信息")
-	}
-	if d, hit := f.getDuration(key); hit {
-		return d, nil
-	}
-	return 0, fmt.Errorf("时长未缓存")
-}
-
 // probeDuration 探测视频时长（秒）。优先 ffprobe（JSON 输出）；
 // 当 ffprobe 缺失（ffprobePath==ffmpegPath）或 ffprobe 失败时，
 // 回退到 `ffmpeg -i <file>` 并解析 stderr 中的 Duration 字段。
@@ -515,7 +502,7 @@ func runFFmpeg(ctx context.Context, path string, args []string, lowPriority bool
 		case waitErr = <-waitCh:
 		case <-time.After(5 * time.Second):
 			if cmd.Process != nil {
-				exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(cmd.Process.Pid)).Run()
+				_ = exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(cmd.Process.Pid)).Run()
 			}
 			waitErr = <-waitCh
 		}
@@ -548,11 +535,11 @@ func (f *Ffmpeg) ExtractFrame(ctx context.Context, src, dst string) error {
 		"-f", "image2", dst,
 	}
 	if err := runFFmpeg(ctx, f.ffmpegPath, args, true); err != nil {
-		os.Remove(dst)
+		_ = os.Remove(dst)
 		return err
 	}
 	if fi, err := os.Stat(dst); err != nil || fi.Size() == 0 {
-		os.Remove(dst)
+		_ = os.Remove(dst)
 		return fmt.Errorf("抽帧结果为空")
 	}
 	return nil
@@ -581,11 +568,11 @@ func (f *Ffmpeg) Faststart(ctx context.Context, src, dst string, size int64) err
 		"-f", "mp4", tmp,
 	}
 	if err := runFFmpeg(cctx, f.ffmpegPath, args, lowPri); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	if err := os.Rename(tmp, dst); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	return nil
@@ -611,7 +598,7 @@ func mp4LayoutOf(abs string) mp4Layout {
 	if err != nil {
 		return l
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	st, err := f.Stat()
 	if err != nil || st.Size() < 1024 {
 		return l
