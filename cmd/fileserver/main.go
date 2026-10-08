@@ -21,9 +21,11 @@ import (
 	"github.com/YLing2024/FileServer/internal/platform"
 	"github.com/YLing2024/FileServer/internal/qrcode"
 	"github.com/YLing2024/FileServer/internal/server"
+	"github.com/YLing2024/FileServer/internal/version"
 )
 
 func main() {
+	showVersion := flag.Bool("version", false, "打印版本信息后退出")
 	port := flag.Int("port", 0, "监听端口（默认 8080，被占用自动递增）")
 	dir := flag.String("dir", "", "服务目录（默认 exe 所在目录）")
 	browser := flag.Bool("browser", false, "启动后自动打开默认浏览器（默认关闭）")
@@ -35,6 +37,11 @@ func main() {
 	flag.Parse()
 
 	platform.SetConsoleUTF8()
+
+	if *showVersion {
+		fmt.Println(version.String())
+		return
+	}
 
 	// 服务根目录：默认 exe 所在目录（双击场景）
 	root := *dir

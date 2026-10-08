@@ -18,6 +18,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/YLing2024/FileServer/internal/version"
 )
 
 //go:embed web
@@ -156,6 +158,7 @@ func (s *Server) Close() {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/info", s.handleInfo)
+	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("GET /api/list", s.handleList)
 	mux.HandleFunc("GET /api/thumb", s.handleThumb)
 	mux.HandleFunc("GET /api/thumb-src", s.serveThumbSrc)
@@ -212,10 +215,22 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"name":         "FileServer",
 		"ffmpeg":       ffavail,
 		"hls":          s.transcodeEnabled.Load(), // 冷门格式在线转码播放（可前端动态开关）
-		"version":      "1.0.0",
+		"version":      version.Version,
 		"kinds":        kindExtMap(), // 统一扩展名→类型映射（前端不再自维护）
 		"search_limit": searchMaxLimit,
 		"list_limit":   listMaxLimit,
+	})
+}
+
+// handleHealth GET /api/health 健康检查：返回进程存活与构建版本信息，
+// 供监控/部署脚本确认服务与版本（version/commit 与 --version 输出来自同一注入源）。
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":       true,
+		"version":  version.Version,
+		"commit":   version.Commit,
+		"go":       version.GoVersion(),
+		"platform": version.Platform(),
 	})
 }
 
