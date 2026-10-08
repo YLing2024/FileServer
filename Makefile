@@ -56,7 +56,8 @@ test:
 
 cover:
 	mkdir -p dist
-	$(GO) test -coverprofile=dist/cover.out -covermode=atomic ./...
+	@pkgs="$$($(GO) list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}' ./...)"; \
+	$(GO) test -coverprofile=dist/cover.out -covermode=atomic $$pkgs && \
 	$(GO) tool cover -func=dist/cover.out | tail -1
 
 check: fmt-check vet build test

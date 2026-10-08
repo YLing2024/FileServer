@@ -46,6 +46,8 @@ jobs:
         run: GOOS=windows GOARCH=amd64 go vet ./...
       - name: cross build (windows/amd64)
         run: GOOS=windows GOARCH=amd64 go build -trimpath ./cmd/fileserver
+      - name: coverage
+        run: make cover
 
   # 正确性 lint：只开 .golangci.yml 声明的规则，版本钉死。
   lint:
