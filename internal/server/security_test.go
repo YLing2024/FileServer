@@ -82,7 +82,7 @@ func TestInfoKinds(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
 		t.Fatal(err)
 	}
-	if info.Kinds == nil || len(info.Kinds) == 0 {
+	if len(info.Kinds) == 0 {
 		t.Fatal("info.kinds 应为非空映射")
 	}
 	// fileKind 与 kinds 一致

@@ -106,7 +106,7 @@ func NewHlsManager(root string) *HlsManager {
 	dir := filepath.Join(root, cacheDirName, "hls")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		dir = filepath.Join(os.TempDir(), "FileServer", "hls")
-		os.MkdirAll(dir, 0o755)
+		_ = os.MkdirAll(dir, 0o755)
 	}
 	m := &HlsManager{
 		dir:      dir,
@@ -133,7 +133,7 @@ func (m *HlsManager) cleanupStale() {
 		}
 		p := filepath.Join(m.dir, e.Name())
 		if info, err := e.Info(); err == nil && info.ModTime().Before(cutoff) {
-			os.RemoveAll(p)
+			_ = os.RemoveAll(p)
 		}
 	}
 }
@@ -149,7 +149,7 @@ func (m *HlsManager) cleanupLoop() {
 		for k, s := range m.sessions {
 			// 已完成或过期的会话：目录按 mtime 判定
 			if s.started.Before(cutoff) {
-				os.RemoveAll(s.dir)
+				_ = os.RemoveAll(s.dir)
 				delete(m.sessions, k)
 			}
 		}
@@ -209,7 +209,7 @@ func (m *HlsManager) Abandon(key string) {
 	cmd := s.cmd
 	m.mu.Unlock()
 	if cmd != nil && cmd.Process != nil {
-		exec.Command("taskkill", "/F", "/T", "/PID", strconvItoa(cmd.Process.Pid)).Run()
+		_ = exec.Command("taskkill", "/F", "/T", "/PID", strconvItoa(cmd.Process.Pid)).Run()
 	}
 }
 
@@ -267,8 +267,8 @@ func (m *HlsManager) Get(ctx context.Context, abs string, fi os.FileInfo, ff *Ff
 		}
 	}
 	// 否则重建目录并启动转码
-	os.RemoveAll(s.dir)
-	os.MkdirAll(s.dir, 0o755)
+	_ = os.RemoveAll(s.dir)
+	_ = os.MkdirAll(s.dir, 0o755)
 
 	sctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
@@ -284,7 +284,7 @@ func (m *HlsManager) Get(ctx context.Context, abs string, fi os.FileInfo, ff *Ff
 				delete(m.sessions, s.key)
 			}
 			m.mu.Unlock()
-			os.RemoveAll(s.dir)
+			_ = os.RemoveAll(s.dir)
 		}
 	}()
 	// 等待首片（保证 /api/hls 首次响应就有播放列表可拉）
@@ -539,7 +539,7 @@ func (m *HlsManager) runOnce(ctx context.Context, s *hlsSession, ff *Ffmpeg, inf
 		case waitErr = <-waitCh:
 		case <-time.After(5 * time.Second):
 			if cmd.Process != nil {
-				exec.Command("taskkill", "/F", "/T", "/PID", strconvItoa(cmd.Process.Pid)).Run()
+				_ = exec.Command("taskkill", "/F", "/T", "/PID", strconvItoa(cmd.Process.Pid)).Run()
 			}
 			waitErr = <-waitCh
 		}
@@ -673,7 +673,7 @@ func (s *Server) serveHlsFile(w http.ResponseWriter, r *http.Request, session *h
 			done = true
 		default:
 		}
-		w.Write(rewritePlaylistURIs(data, r, done))
+		_, _ = w.Write(rewritePlaylistURIs(data, r, done))
 		return
 	}
 	// 分片内容不变：可缓存
@@ -682,7 +682,7 @@ func (s *Server) serveHlsFile(w http.ResponseWriter, r *http.Request, session *h
 		writeErr(w, http.StatusInternalServerError, "打开分片失败")
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	w.Header().Set("Content-Type", "video/mp4")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 	http.ServeContent(w, r, fname, fi.ModTime(), f)

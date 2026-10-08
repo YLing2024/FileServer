@@ -117,9 +117,9 @@ func main() {
 		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 		<-sig
 		log.Println("正在停止服务…")
-		httpSrv.Close()
+		_ = httpSrv.Close()
 		srv.Close()
-		ln.Close()
+		_ = ln.Close()
 	}()
 
 	if err := httpSrv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {

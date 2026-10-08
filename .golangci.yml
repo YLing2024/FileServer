@@ -1,0 +1,33 @@
+# golangci-lint 配置（v2 schema）。
+#
+# 只开「正确性」规则，不开纯风格类（lll / godot / revive / gocritic 等），
+# 避免为格式偏好大改既有代码。CI 与本地 `GOOS=windows golangci-lint run ./...`
+# 共用本配置，要求零告警。
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck      # 未处理的 error 返回值
+    - govet         # go vet 全量分析器
+    - ineffassign   # 无效赋值
+    - staticcheck   # SA 系列静态缺陷
+    - unused        # 未使用代码
+    - misspell      # 拼写
+  settings:
+    misspell:
+      # 代码与注释混用中英文；仅按美式拼写词典检查英文单词。
+      locale: US
+  exclusions:
+    # 测试文件与生成代码按 Go 惯例放宽（errcheck 对 defer Close 等）
+    generated: lax
+    rules:
+      # 测试夹具/断言中大量 os.WriteFile、Body.Close 等忽略返回错误是常规写法；
+      # 生产代码不豁免（已逐处显式 `_ =` 或处理）。
+      - path: _test\.go
+        linters:
+          - errcheck
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

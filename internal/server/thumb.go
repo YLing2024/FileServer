@@ -62,7 +62,7 @@ func NewThumbCache(root string) *ThumbCache {
 	dir := filepath.Join(root, cacheDirName, "thumb")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		dir = filepath.Join(os.TempDir(), "FileServer", "thumb")
-		os.MkdirAll(dir, 0o755)
+		_ = os.MkdirAll(dir, 0o755)
 	}
 	c := &ThumbCache{dir: dir, mem: make(map[string][]byte), elem: make(map[string]*list.Element), ll: list.New(), max: 512}
 	go c.cleanupLoop()
@@ -96,7 +96,7 @@ func (c *ThumbCache) cleanup() {
 		}
 		if strings.HasSuffix(name, ".tmp") {
 			if info.ModTime().Before(tmpCutoff) {
-				os.Remove(filepath.Join(c.dir, name))
+				_ = os.Remove(filepath.Join(c.dir, name))
 			}
 			continue
 		}
@@ -104,7 +104,7 @@ func (c *ThumbCache) cleanup() {
 			continue
 		}
 		if info.ModTime().Before(cutoff) {
-			os.Remove(filepath.Join(c.dir, name))
+			_ = os.Remove(filepath.Join(c.dir, name))
 		}
 	}
 }
@@ -168,7 +168,7 @@ func (c *ThumbCache) Put(key string, data []byte) {
 	c.mu.Unlock()
 	tmp := filepath.Join(c.dir, key+".tmp")
 	if err := os.WriteFile(tmp, data, 0o644); err == nil {
-		os.Rename(tmp, filepath.Join(c.dir, key+".jpg"))
+		_ = os.Rename(tmp, filepath.Join(c.dir, key+".jpg"))
 	}
 }
 
@@ -299,7 +299,7 @@ func (s *Server) serveThumbSrc(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "打开文件失败")
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	size := fi.Size()
 	if st, err := f.Stat(); err == nil {
 		size = st.Size()
@@ -362,12 +362,12 @@ func (s *Server) serveRemoteThumb(w http.ResponseWriter, r *http.Request, abs st
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		if err := s.ff.ExtractFrame(ctx, abs, tmp); err != nil {
-			os.Remove(tmp)
+			_ = os.Remove(tmp)
 			return nil, false
 		}
 		// 解码裁剪为方形缩略图
 		src, err := decodeImageFile(tmp)
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		if err != nil {
 			return nil, false
 		}
@@ -411,7 +411,7 @@ func serveThumbSrcParts(w http.ResponseWriter, r *http.Request, f *os.File, part
 			}
 			rn, err := f.ReadAt(buf[:n], off)
 			if rn > 0 {
-				w.Write(buf[:rn])
+				_, _ = w.Write(buf[:rn])
 				off += int64(rn)
 				remaining -= int64(rn)
 			}
@@ -475,7 +475,7 @@ func serveCached(w http.ResponseWriter, r *http.Request, key string, data []byte
 		return
 	}
 	w.Header().Set("Content-Type", contentType)
-	w.Write(data)
+	_, _ = w.Write(data)
 }
 
 // serveImageThumb 图片缩略图：svg 原样返回；巨图直接返回原图；其余解码裁剪
@@ -550,7 +550,7 @@ func (s *Server) serveOriginalImage(w http.ResponseWriter, r *http.Request, abs 
 		writeErr(w, http.StatusInternalServerError, "读取文件失败")
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	w.Header().Set("Content-Type", contentType)
 	http.ServeContent(w, r, fi.Name(), fi.ModTime(), f)
 }
@@ -561,7 +561,7 @@ func decodeConfig(path string) (image.Config, string, error) {
 	if err != nil {
 		return image.Config{}, "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	return image.DecodeConfig(f)
 }
 
@@ -571,7 +571,7 @@ func decodeImageFile(path string) (image.Image, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	img, _, err := image.Decode(f)
 	return img, err
 }

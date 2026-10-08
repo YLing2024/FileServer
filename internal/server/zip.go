@@ -41,7 +41,7 @@ func (s *Server) handleZip(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no")
 
 	zw := zip.NewWriter(w)
-	defer zw.Close()
+	defer func() { _ = zw.Close() }()
 
 	top := filepath.ToSlash(name)
 	err = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
@@ -80,7 +80,7 @@ func (s *Server) handleZip(w http.ResponseWriter, r *http.Request) {
 		// Store 模式：局域网媒体文件已压缩，避免无谓的 CPU 开销
 		hdr := &zip.FileHeader{Name: zipName, Method: zip.Store}
 		hdr.SetMode(info.Mode())
-		hdr.SetModTime(info.ModTime())
+		hdr.Modified = info.ModTime()
 		fw, cerr := zw.CreateHeader(hdr)
 		if cerr != nil {
 			return cerr
@@ -91,7 +91,7 @@ func (s *Server) handleZip(w http.ResponseWriter, r *http.Request) {
 			if oerr != nil {
 				return oerr
 			}
-			defer f.Close()
+			defer func() { _ = f.Close() }()
 			_, cerr := io.Copy(fw, f)
 			return cerr
 		}(); err != nil {

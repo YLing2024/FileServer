@@ -100,10 +100,10 @@ func New(root string, opts Options) *Server {
 	base := filepath.Join(root, cacheDirName)
 	if err := os.MkdirAll(base, 0o755); err != nil {
 		base = filepath.Join(os.TempDir(), "FileServer")
-		os.MkdirAll(base, 0o755)
+		_ = os.MkdirAll(base, 0o755)
 	}
 	fsDir := filepath.Join(base, "faststart")
-	os.MkdirAll(fsDir, 0o755)
+	_ = os.MkdirAll(fsDir, 0o755)
 	go cleanupOldFiles(fsDir, 7*24*time.Hour) // 清理 7 天前的重封装缓存
 
 	ff := FindFfmpeg()
@@ -142,7 +142,7 @@ func cleanupOldFiles(dir string, maxAge time.Duration) {
 		}
 		p := filepath.Join(dir, e.Name())
 		if info, err := e.Info(); err == nil && info.ModTime().Before(cutoff) {
-			os.Remove(p)
+			_ = os.Remove(p)
 		}
 	}
 }
@@ -173,7 +173,7 @@ func (s *Server) Handler() http.Handler {
 	// 会落到前端文件服务并返回 404，而不是被 net/http 以「方法不允许」回成 405。
 	mux.Handle("/", s.frontendHandler())
 
-	var h http.Handler = mux
+	var h http.Handler
 	// 全局安全头：nosniff 防止浏览器嗅探内容类型，
 	// 配合 handleFile 对可执行 MIME 强制 attachment，阻断源内存储型 XSS。
 	h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -283,7 +283,7 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "打开文件失败")
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	name := fi.Name()
 	// 设置正确的 MIME 与 inline/attachment 策略
@@ -322,8 +322,8 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("fs") == "1" && s.ff != nil {
 		if fp := s.faststartCachePath(abs, fi); fp != "" {
 			if ffs, oerr := os.Open(fp); oerr == nil {
-				f.Close()
-				defer ffs.Close()
+				_ = f.Close()
+				defer func() { _ = ffs.Close() }()
 				http.ServeContent(w, r, name, fi.ModTime(), ffs)
 				return
 			}
@@ -374,7 +374,7 @@ func (s *Server) warmFaststart(abs string, fi os.FileInfo) {
 
 	dst := filepath.Join(s.fsDir, key+".mp4")
 	if err := s.ff.Faststart(context.Background(), abs, dst, fi.Size()); err != nil {
-		os.Remove(dst + ".tmp")
+		_ = os.Remove(dst + ".tmp")
 		// best-effort：预热失败只记日志，绝不影响正在进行的播放。
 		log.Printf("faststart 预热失败 %q: %v", abs, err)
 	}
@@ -470,7 +470,7 @@ func (s *Server) handleVideoInfo(w http.ResponseWriter, r *http.Request) {
 			resp["width"] = info.Width
 			resp["height"] = info.Height
 		} else {
-			go s.ff.ProbeMedia(context.Background(), abs, fi)
+			go func() { _, _ = s.ff.ProbeMedia(context.Background(), abs, fi) }()
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -509,7 +509,7 @@ func mp4HasHEVC(abs string) bool {
 	if err != nil {
 		return false
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	st, err := f.Stat()
 	if err != nil || st.Size() < 1024 {
 		return false
@@ -595,7 +595,7 @@ func fileMimeType(name string, f *os.File) string {
 	}
 	buf := make([]byte, 512)
 	n, _ := f.Read(buf)
-	f.Seek(0, 0)
+	_, _ = f.Seek(0, 0)
 	return http.DetectContentType(buf[:n])
 }
 

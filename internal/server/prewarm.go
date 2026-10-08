@@ -127,7 +127,7 @@ func (s *Server) prewarmFile(key, abs string) {
 	if err != nil {
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	buf := make([]byte, prewarmChunk)
 	yield := func() {
 		// 播放（HLS 转码或直链 Range 流）进行中：让路（等待，不退出队列）。

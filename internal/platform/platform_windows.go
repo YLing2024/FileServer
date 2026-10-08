@@ -19,9 +19,9 @@ func SetConsoleUTF8() {
 	}
 	k32 := syscall.NewLazyDLL("kernel32.dll")
 	setOut := k32.NewProc("SetConsoleOutputCP")
-	setOut.Call(65001)
+	_, _, _ = setOut.Call(65001) // 失败不影响运行，保持 best-effort
 	setIn := k32.NewProc("SetConsoleCP")
-	setIn.Call(65001)
+	_, _, _ = setIn.Call(65001)
 
 	// 启用 ENABLE_VIRTUAL_TERMINAL_PROCESSING (0x0004)，
 	// 使 stdout 支持 ANSI 转义序列（Windows 10+ 支持）。
@@ -32,7 +32,7 @@ func SetConsoleUTF8() {
 	handle, _, _ := getStdHandle.Call(uintptr(0xFFFFFFF5))
 	var mode uint32
 	if r, _, _ := getMode.Call(handle, uintptr(unsafe.Pointer(&mode))); r != 0 {
-		setMode.Call(handle, uintptr(mode|0x0004))
+		_, _, _ = setMode.Call(handle, uintptr(mode|0x0004))
 	}
 }
 
@@ -117,12 +117,12 @@ func KillOnParentExit(cmd *exec.Cmd) {
 	assign := syscall.NewLazyDLL("kernel32.dll").NewProc("AssignProcessToJobObject")
 	// 挂载失败（个别系统策略）时子进程退化为普通进程：功能不受影响，
 	// 仅失去「随父进程终止」保护（孤儿清理由 HLS 会话的强杀兜底覆盖）
-	assign.Call(jobH, uintptr(cmd.Process.Pid))
+	_, _, _ = assign.Call(jobH, uintptr(cmd.Process.Pid))
 }
 
 // OpenBrowser 使用系统默认浏览器打开 URL
 func OpenBrowser(url string) {
-	exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+	_ = exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
 }
 
 // SetLowPriority 以低于正常优先级（BELOW_NORMAL_PRIORITY_CLASS = 0x00004000）
