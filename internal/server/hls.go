@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"fileserver/internal/platform"
+	"github.com/YLing2024/FileServer/internal/platform"
 )
 
 // ============================================================

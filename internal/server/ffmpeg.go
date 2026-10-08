@@ -17,7 +17,7 @@ import (
 	"syscall"
 	"time"
 
-	"fileserver/internal/platform"
+	"github.com/YLing2024/FileServer/internal/platform"
 )
 
 // Ffmpeg 服务端视频能力（可选增强：exe 同目录 ffmpeg\ 或 PATH 中存在 ffmpeg 时启用）。

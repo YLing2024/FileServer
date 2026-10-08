@@ -18,9 +18,9 @@ import (
 	"syscall"
 	"time"
 
-	"fileserver/internal/platform"
-	"fileserver/internal/qrcode"
-	"fileserver/internal/server"
+	"github.com/YLing2024/FileServer/internal/platform"
+	"github.com/YLing2024/FileServer/internal/qrcode"
+	"github.com/YLing2024/FileServer/internal/server"
 )
 
 func main() {
