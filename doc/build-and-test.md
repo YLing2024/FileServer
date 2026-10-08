@@ -3,22 +3,55 @@
 ## 1. 环境
 
 - Go（首次构建自动下载工具链到 `.tools\`，免安装；也可用系统 Go）。
+- make（GNU Make，Linux/macOS/WSL 的统一入口；Windows 用 `build.bat` 等价命令）。
+- golangci-lint v2.14.0（可选，本地复现 CI 的 lint；CI 会自动安装同版本）。
 - ffmpeg：可选组件，测试视频生成与 GPU 转码需要。
 - Python 3.12 + Playwright（浏览器端到端测试）。
 
-## 2. 构建
+## 2. 构建与校验
 
-```powershell
-# 校验 + 单元/集成测试
-.tools\go\bin\go.exe vet ./...
-.tools\go\bin\go.exe build ./...
-.tools\go\bin\go.exe test ./internal/...
+统一入口是根目录 `Makefile`（Linux / macOS / WSL）；Windows 侧用 `build.bat` 走等价命令。
+交叉编译目标固定 `windows/amd64`（本项目运行目标是 Windows exe）。
 
-# 发布版 exe（内嵌前端 + 精简符号）
-.tools\go\bin\go.exe build -trimpath -ldflags "-s -w" -o dist\FileServer.exe .\cmd\fileserver
+```bash
+make check                 # fmt-check + 交叉 vet + 交叉 build + go test ./...（提交前必跑）
+make fmt                   # gofmt -w .
+make fmt-check             # 断言无未格式化文件
+make vet                   # GOOS=windows GOARCH=amd64 go vet ./...
+make build                 # 交叉构建 dist/FileServer.exe
+make test                  # go test ./...
+make cover                 # 覆盖率
+make dist VERSION=1.2.3    # 发布构建：注入版本 / commit / 构建时间
 ```
 
-产物：`dist\FileServer.exe`（单文件，~8MB）。
+Windows 侧：
+
+```bat
+build.bat                         rem 首次下载工具链（如需）+ go vet + go build（不再跑 go mod tidy）
+release.ps1 -Version 1.2.3        rem 构建注入版本的 exe + lite/full zip + dist\SHA256SUMS.txt
+```
+
+产物：`dist\FileServer.exe`（单文件，~8MB），内含注入的版本/commit/构建时间
+（`FileServer.exe --version` 可查；`/api/health` 亦返回同一版本信息）。
+
+### CI
+
+`.github/workflows/ci.yml`（push / PR 触发）三个 job：
+
+- **test**（`windows-latest`，主力）：`gofmt -l .` 断言为空 → `go vet ./...` →
+  `go test -race ./...` → `go build ./...`。Windows 是原生环境，所有包都能编译、测试才全量。
+- **cross**（`ubuntu-latest`）：`GOOS=windows GOARCH=amd64 go vet/build` + `gofmt` 断言。
+- **lint**（`ubuntu-latest`，`GOOS=windows`）：`golangci-lint` v2.14.0（配置见 `.golangci.yml`）。
+
+`.github/workflows/release.yml`：打 `v*` tag 时在 `windows-latest` 上构建注入版本的 exe，
+产出 `FileServer-lite-<v>.zip` 与 `SHA256SUMS.txt`，创建 GitHub Release。
+**ffmpeg 二进制不进仓库 / CI**（体积与许可）：CI 只产 lite 包，full 包由本机
+`release.ps1` 生成。
+
+> 本仓库已把 Windows 专属 syscall（进程优先级等）隔离进 `internal/platform/`，
+> 因此 Linux 侧现在也能 `go vet ./...` / `go test ./...` 全部包；CI 的 test job
+> 仍选 Windows 原生 runner，以确保 Windows 行为被真实覆盖。
+
 
 ## 3. 发布部署（目标机）
 
@@ -50,9 +83,12 @@ Start-Process <目标目录>\FileServer.exe -WorkingDirectory <目标目录> -Wi
 - 播放决策单测（`TestVideoInfoDecision`）：小文件→direct、大文件 moov 尾部→hls 等；
 - 缩略图缓存/失败记忆、路径安全等单元测试。
 
-```powershell
-.tools\go\bin\go.exe test ./internal/... -v
+```bash
+make test          # go test ./...（提交前必跑；Windows 全量，其他平台亦全绿）
+make cover         # 覆盖率
 ```
+
+手工验收清单里的第一条由此升级为：**`make check` 全绿**（见 §2 与 AGENTS.md 铁律）。
 
 ### Playwright 端到端（scripts/）
 

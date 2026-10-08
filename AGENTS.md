@@ -51,24 +51,33 @@ doc/                          # 项目深度文档（见下）
 
 ## 命令
 
-开发机是 Windows（本项目产物是 Windows exe）。build.bat 会在首次运行时把 Go 工具链下载到 `.tools\`（免安装）：
+统一校验入口是根目录 `Makefile`（Linux / macOS / WSL）；Windows 开发机用 `build.bat`
+（等价命令，首次运行会把 Go 工具链下载到 `.tools\`，免安装）。
 
-```powershell
-build.bat                                        # 下载工具链（如需）+ vet + build + test
-.tools\go\bin\go.exe vet ./...
-.tools\go\bin\go.exe build ./...
-.tools\go\bin\go.exe test ./internal/...
-.tools\go\bin\go.exe build -trimpath -ldflags "-s -w" -o dist\FileServer.exe .\cmd\fileserver
-release.ps1 -Version 1.2.3                       # 打包 dist\FileServer-lite.zip / -full.zip
+```bash
+make check        # 提交前必跑：fmt-check + 交叉 vet + 交叉 build + go test ./...（exit 0）
+make fmt          # gofmt -w .
+make vet          # GOOS=windows GOARCH=amd64 go vet ./...
+make build        # 交叉构建 dist/FileServer.exe
+make test         # go test ./...
+make dist VERSION=1.2.3   # 发布构建（注入版本/commit/构建时间）
 ```
 
-在有系统 Go 的机器上直接 `go vet ./... && go test ./internal/... && go build ./cmd/fileserver` 亦可。
+```powershell
+build.bat                                        # 下载工具链（如需）+ go vet + go build
+release.ps1 -Version 1.2.3                       # 注入版本，产 lite/full zip + SHA256SUMS.txt
+```
 
 E2E（Python 3.12 + Playwright，需先跑起服务）：
 
 ```bash
 python scripts/smoke_test.py        # 另有 regression_test.py / hls_e2e_test.py / special_e2e_test.py …
 ```
+
+CI（`.github/workflows/ci.yml`）在 push / PR 上跑：`test`（windows-latest，
+gofmt + vet + `go test -race` + build）、`cross`（ubuntu-latest，`GOOS=windows` vet/build）、
+`lint`（golangci-lint v2.14.0）。`.github/workflows/release.yml` 在 `v*` tag 上产 lite 包。
+Windows 专属 syscall 已隔离进 `internal/platform/`，Linux 侧也能 `go vet/test ./...` 全部包。
 
 ## 设计约定
 
@@ -81,7 +90,7 @@ python scripts/smoke_test.py        # 另有 regression_test.py / hls_e2e_test.p
 
 ## 已知坑
 
-- **`go vet` / `go test` 必须全绿再提交**：`internal/` 下的 `_test.go` 覆盖播放决策、路径安全、缩略图等，是主要防线。
+- **提交前必须 `make check` 全绿**（fmt-check + `GOOS=windows` 交叉 vet/build + `go test ./...`），CI 会拦——不绿不许提交。`internal/` 下的 `_test.go` 覆盖播放决策、路径安全、缩略图等，是主要防线；提交信息一律英文 conventional commits。
 - 永久规整**已拆分到独立项目 mp4norm**：FileServer 不再改动用户原文件，`.FileServer\backup\` 仅为历史遗留。
 - 冷门格式 / GPU 转码相关的行为**强依赖 ffmpeg 是否同目录**，没有 ffmpeg 时相关分支应优雅降级（保持文件图标），不要报错。
 - 服务器（本仓库所在的 Linux VPS）**不是运行目标**：`internal/platform/platform_other.go` 让代码在 Linux 上能编译/测试，但真实验收要在 Windows + 有头浏览器 + 真实大文件目录上做。
