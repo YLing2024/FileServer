@@ -1,4 +1,4 @@
-module fileserver
+module github.com/YLing2024/FileServer
 
 go 1.25.0
 
