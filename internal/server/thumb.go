@@ -260,13 +260,6 @@ func (s *Server) handleThumb(w http.ResponseWriter, r *http.Request) {
 // ============================================================
 const thumbSrcLimit = 16 << 20 // 抽帧源头部截取上限 16MB
 
-// layoutEntry MP4 顶层布局缓存条目（moov 尾部扫描要遍历全部 mdat 头，
-// 在碎片盘上就是几百上千次寻道，必须缓存）
-type layoutEntry struct {
-	l mp4Layout
-	t time.Time
-}
-
 // serveThumbSrc GET /api/thumb-src?path=
 func (s *Server) serveThumbSrc(w http.ResponseWriter, r *http.Request) {
 	abs, err := s.safePath(r.URL.Query().Get("path"))
@@ -426,17 +419,7 @@ func serveThumbSrcParts(w http.ResponseWriter, r *http.Request, f *os.File, part
 // 在碎片盘上代价高，同一文件多次抽帧不应重复扫描）
 func (s *Server) mp4LayoutCached(src string, size int64) mp4Layout {
 	key := fmt.Sprintf("%s|%d", src, size)
-	s.layoutMu.Lock()
-	defer s.layoutMu.Unlock()
-	if e, ok := s.layouts[key]; ok && time.Since(e.t) < time.Hour {
-		return e.l
-	}
-	l := mp4LayoutOf(src)
-	if len(s.layouts) >= 256 {
-		s.layouts = make(map[string]layoutEntry)
-	}
-	s.layouts[key] = layoutEntry{l, time.Now()}
-	return l
+	return s.layouts.getOrCompute(key, func() mp4Layout { return mp4LayoutOf(src) })
 }
 
 // isWeird 判断视频是否为「怪封装」——起播慢、适合走 HLS copy 加速（带布局缓存）。

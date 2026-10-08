@@ -17,7 +17,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -59,21 +58,14 @@ type Server struct {
 	// 默认跟随 --ffmpeg 参数，可在前端设置面板动态切换（POST /api/settings/ffmpeg）。
 	transcodeEnabled atomic.Bool
 
-	listMu    sync.Mutex
-	listCache map[string]*listCacheEntry // 目录列表短缓存（返回/翻页秒开）
+	list listCache // 目录列表短缓存（返回/翻页秒开）
 
-	fsDir  string // 小文件 faststart 重封装缓存目录
-	fsMu   sync.Mutex
-	fsBusy map[string]bool // faststart 重封装进行中（防重复）
-	// faststartHook 仅测试注入：非 nil 时替代 go warmFaststart，
-	// 用于断言“预热被触发”而不依赖真实 ffmpeg。生产路径恒为 nil。
-	faststartHook func(abs string, fi os.FileInfo)
+	faststart faststartState // 小文件 faststart 重封装：缓存目录 + 单飞防重 + 测试钩子
 
 	pw *prewarmState  // moov 预读预热（机械硬盘冷读提速）
 	pb *playbackState // 直链播放活动跟踪（预热/重封装据此让路）
 
-	layoutMu sync.Mutex
-	layouts  map[string]layoutEntry // MP4 顶层布局缓存（thumb-src 抽帧源用）
+	layouts layoutCache // MP4 顶层布局缓存（thumb-src 抽帧源用）
 }
 
 // Options 服务器选项
@@ -121,11 +113,9 @@ func New(root string, opts Options) *Server {
 		imgSem:     make(chan struct{}, thumbImgMaxConc),
 		ffThumbSem: make(chan struct{}, ffThumbMaxConc),
 		started:    time.Now(),
-		fsDir:      fsDir,
-		fsBusy:     make(map[string]bool),
+		faststart:  faststartState{dir: fsDir},
 		pw:         &prewarmState{warmed: make(map[string]time.Time)},
 		pb:         &playbackState{},
-		layouts:    make(map[string]layoutEntry),
 	}
 	srv.transcodeEnabled.Store(opts.FFmpeg && ff != nil && ff.Available())
 	return srv
@@ -340,10 +330,10 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 // faststartCachePath 返回 faststart 重封装缓存的路径；不存在/不适用返回 ""
 // （不限文件大小：大文件首次播放后后台重封装，之后直链缓存秒开）
 func (s *Server) faststartCachePath(abs string, fi os.FileInfo) string {
-	if s.fsDir == "" {
+	if s.faststart.dir == "" {
 		return ""
 	}
-	p := filepath.Join(s.fsDir, mediaKey(abs, fi)+".mp4")
+	p := filepath.Join(s.faststart.dir, mediaKey(abs, fi)+".mp4")
 	if info, err := os.Stat(p); err == nil && info.Size() > 0 {
 		return p
 	}
@@ -357,18 +347,10 @@ func (s *Server) warmFaststart(abs string, fi os.FileInfo) {
 		return
 	}
 	key := mediaKey(abs, fi)
-	s.fsMu.Lock()
-	if s.fsBusy[key] {
-		s.fsMu.Unlock()
+	if !s.faststart.busy.tryAcquire(key) {
 		return
 	}
-	s.fsBusy[key] = true
-	s.fsMu.Unlock()
-	defer func() {
-		s.fsMu.Lock()
-		delete(s.fsBusy, key)
-		s.fsMu.Unlock()
-	}()
+	defer s.faststart.busy.release(key)
 
 	// 播放进行中让路：重封装是整文件顺序读（大文件要跑几分钟），
 	// 机械硬盘上与播放并行会互相拖慢。等播放结束再推进，
@@ -377,7 +359,7 @@ func (s *Server) warmFaststart(abs string, fi os.FileInfo) {
 		time.Sleep(500 * time.Millisecond)
 	}
 
-	dst := filepath.Join(s.fsDir, key+".mp4")
+	dst := filepath.Join(s.faststart.dir, key+".mp4")
 	if err := s.ff.Faststart(context.Background(), abs, dst, fi.Size()); err != nil {
 		_ = os.Remove(dst + ".tmp")
 		// best-effort：预热失败只记日志，绝不影响正在进行的播放。
@@ -391,7 +373,7 @@ func (s *Server) warmFaststart(abs string, fi os.FileInfo) {
 //   - 浏览器可原生直链（非 HEVC，HEVC MP4 预热了也播不了）；
 //   - 原文件 moov 不在头部（未 faststart）且尚无缓存。
 //
-// 只负责调度：单飞防重复（fsBusy/fsMu）与「播放进行中让路」在 warmFaststart
+// 只负责调度：单飞防重复（faststart.busy）与「播放进行中让路」在 warmFaststart
 // 内实现，因此多次请求不会退化成多条无条件后台任务。
 func (s *Server) maybeWarmFaststart(abs string, fi os.FileInfo) {
 	if s.ff == nil || mp4HasHEVC(abs) {
@@ -404,8 +386,8 @@ func (s *Server) maybeWarmFaststart(abs string, fi os.FileInfo) {
 	if s.faststartCachePath(abs, fi) != "" {
 		return
 	}
-	if s.faststartHook != nil {
-		s.faststartHook(abs, fi)
+	if s.faststart.hook != nil {
+		s.faststart.hook(abs, fi)
 		return
 	}
 	go s.warmFaststart(abs, fi)

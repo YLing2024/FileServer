@@ -35,18 +35,6 @@ type ListResp struct {
 	Truncated bool    `json:"truncated,omitempty"`
 }
 
-// listCacheEntry 目录列表服务端缓存（按 目录路径|排序 键控）
-type listCacheEntry struct {
-	dirMod  time.Time // 目录修改时间（变化即失效）
-	fetched time.Time
-	entries []Entry // 已过滤隐藏、已排序（懒 stat：仅分页到的条目填 Size/ModTime）
-}
-
-const (
-	listCacheTTL = 3 * time.Second // 短 TTL：返回/加载更多秒开，且 3 秒内目录变化即反映
-	listCacheMax = 64              // 缓存目录数上限
-)
-
 // kindExts 扩展名→类型映射的唯一来源：fileKind 与 /api/info 下发的 kinds 都出自此表，
 // 避免后端 fileKind / mediaMime 与前端 KIND_EXT_MAP 三处漂移。
 var kindExts = map[string][]string{
@@ -126,7 +114,7 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	cacheKey := fmt.Sprintf("%s|%s|%s", rel, sortKey, order)
 
 	// 命中缓存（目录未变且 TTL 内）：直接分页返回
-	if ce := s.listCacheGet(cacheKey); ce != nil && ce.dirMod.Equal(fi.ModTime()) &&
+	if ce := s.list.get(cacheKey); ce != nil && ce.dirMod.Equal(fi.ModTime()) &&
 		time.Since(ce.fetched) < listCacheTTL {
 		total := len(ce.entries)
 		// 复制本页条目再懒填充（缓存切片可能被并发请求共享，不能原地改）
@@ -179,7 +167,7 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	sortEntries(entries, sortKey, order)
 
 	// 缓存排序结果（3 秒内返回/翻页复用）
-	s.listCachePut(cacheKey, fi.ModTime(), entries)
+	s.list.put(cacheKey, fi.ModTime(), entries)
 
 	// 服务端分页：避免大目录一次性全量传输（前端按 offset/limit 逐页加载）
 	total := len(entries)
@@ -223,28 +211,6 @@ func slicePage(entries []Entry, offset, limit int) []Entry {
 		return entries[offset:]
 	}
 	return entries
-}
-
-// listCacheGet 读列表缓存
-func (s *Server) listCacheGet(key string) *listCacheEntry {
-	s.listMu.Lock()
-	defer s.listMu.Unlock()
-	return s.listCache[key]
-}
-
-// listCachePut 写列表缓存（超限整体清空重建，防无界增长）
-func (s *Server) listCachePut(key string, dirMod time.Time, entries []Entry) {
-	s.listMu.Lock()
-	defer s.listMu.Unlock()
-	if s.listCache == nil {
-		s.listCache = make(map[string]*listCacheEntry)
-	}
-	if len(s.listCache) >= listCacheMax {
-		s.listCache = make(map[string]*listCacheEntry, listCacheMax)
-	}
-	// 深拷贝一份避免共享底层数组被后续 fillStats 修改
-	cp := append([]Entry(nil), entries...)
-	s.listCache[key] = &listCacheEntry{dirMod: dirMod, fetched: time.Now(), entries: cp}
 }
 
 // relOf 返回 root 下的相对路径（正斜杠形式，根为 "/"）

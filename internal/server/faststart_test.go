@@ -35,7 +35,7 @@ func TestWarmFaststartTriggered(t *testing.T) {
 	// 假 ffmpeg（保证触发判定通过）+ 钩子（拦截真实重封装）。infos 非 nil 避免后台探测。
 	srv.ff = &Ffmpeg{infos: map[string]*MediaInfo{}}
 	var got []string
-	srv.faststartHook = func(abs string, fi os.FileInfo) { got = append(got, abs) }
+	srv.faststart.hook = func(abs string, fi os.FileInfo) { got = append(got, abs) }
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
