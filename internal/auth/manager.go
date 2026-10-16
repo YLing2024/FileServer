@@ -210,6 +210,11 @@ func (m *Manager) CompleteSetup(password, code string, skipTOTP bool) error {
 	needPassword := m.needPasswordLocked()
 	needTOTP := m.needTOTPLocked()
 
+	// 原子性：先跑完全部校验（口令强度、验证码），任一失败直接返回且不改动
+	// m.data；全部通过后才一次性应用并落盘。若边校验边写 m.data，验证码失败时
+	// 会留下「口令已设、TOTP 未绑」的半配置状态：status 显示 password_set=true、
+	// needs_setup=false，仅凭口令即可登录，双因素实际并未启用。
+	var newPasswordHash string
 	if needPassword {
 		if len([]rune(password)) < 8 {
 			return ErrWeakPassword
@@ -218,9 +223,14 @@ func (m *Manager) CompleteSetup(password, code string, skipTOTP bool) error {
 		if err != nil {
 			return err
 		}
-		m.data.Password = h
+		newPasswordHash = h
 	}
-	if needTOTP && !skipTOTP {
+	if needTOTP && skipTOTP && m.Mode() == ModeTOTP {
+		return ErrInvalidTOTP // totp 形态必须绑定，不可跳过
+	}
+	bindTOTP := needTOTP && !skipTOTP
+	var bindStep int64
+	if bindTOTP {
 		if m.pendingTOTP == "" {
 			return ErrInvalidTOTP
 		}
@@ -228,15 +238,22 @@ func (m *Manager) CompleteSetup(password, code string, skipTOTP bool) error {
 		if err != nil {
 			return ErrInvalidTOTP
 		}
-		// 绑定是「配置」动作：只校验验证码正确，不消费时间步（否则用户绑定后
-		// 立即用同一码登录会被重放防护拒绝）。登录成功才消费时间步。
-		if _, ok := verifyTOTP(raw, code, m.now(), m.data.LastTOTPStep); !ok {
+		step, ok := verifyTOTP(raw, code, m.now(), m.data.LastTOTPStep)
+		if !ok {
 			return ErrInvalidTOTP
 		}
-		m.data.TOTPSecret = m.pendingTOTP
+		bindStep = step
 	}
-	if needTOTP && skipTOTP && m.Mode() == ModeTOTP {
-		return ErrInvalidTOTP // totp 形态必须绑定，不可跳过
+
+	// 全部校验通过：一次性应用并落盘。
+	if newPasswordHash != "" {
+		m.data.Password = newPasswordHash
+	}
+	if bindTOTP {
+		m.data.TOTPSecret = m.pendingTOTP
+		// 绑定同样是「一次成功的 TOTP 校验」，其时间步也必须计入已用集合，
+		// 否则同一时间步内该码还能再次用于登录（重放）。
+		m.data.LastTOTPStep = bindStep
 	}
 	m.pendingTOTP = ""
 	return m.saveLocked()

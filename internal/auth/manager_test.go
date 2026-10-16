@@ -112,6 +112,84 @@ func TestTOTPModeFlow(t *testing.T) {
 	}
 }
 
+// TestCompleteSetupAtomicOnBadTOTP 断言 password+totp 引导提交的原子性（F1）：
+// 验证码错误时整笔拒绝，不得留下任何部分状态——仍处于引导中、口令未设，
+// 且随后仅凭口令登录必须失败（不能退化成"看起来配好了、其实只有单因素"）。
+func TestCompleteSetupAtomicOnBadTOTP(t *testing.T) {
+	m := newTestManager(t, ModePasswordTOTP, "")
+	fixed := time.Unix(1_700_000_000, 0)
+	m.now = func() time.Time { return fixed }
+
+	secret, _, needPw, needTotp, err := m.BeginSetup()
+	if err != nil || !needPw || !needTotp || secret == "" {
+		t.Fatalf("BeginSetup 异常: err=%v need_pw=%v need_totp=%v", err, needPw, needTotp)
+	}
+	// 口令合法但验证码错误
+	if err := m.CompleteSetup("password123", "000000", false); err != ErrInvalidTOTP {
+		t.Fatalf("错误验证码应返回 ErrInvalidTOTP, 得到 %v", err)
+	}
+	// 无部分状态
+	if !m.NeedsSetup() {
+		t.Error("提交失败后应仍处于引导中 (needs_setup=true)")
+	}
+	if m.PasswordSet() || m.TOTPBound() || m.Configured() {
+		t.Errorf("提交失败后不得留下部分状态: password_set=%v totp_bound=%v configured=%v",
+			m.PasswordSet(), m.TOTPBound(), m.Configured())
+	}
+	// 仅凭口令登录必须被拒
+	if _, _, err := m.Login("password123", "", false, "ua", "5.5.5.5"); err != ErrInvalidCredentials {
+		t.Fatalf("未完成配置时仅口令登录应被拒, 得到 %v", err)
+	}
+	// 用正确码重试应原子成功，双因素就位
+	raw, err := decodeTOTPSecret(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.CompleteSetup("password123", codeAt(raw, fixed.Unix()/totpPeriod), false); err != nil {
+		t.Fatalf("正确验证码重试应成功: %v", err)
+	}
+	if !m.PasswordSet() || !m.TOTPBound() || m.NeedsSetup() {
+		t.Fatalf("重试成功后双因素应就位: password_set=%v totp_bound=%v needs_setup=%v",
+			m.PasswordSet(), m.TOTPBound(), m.NeedsSetup())
+	}
+	if _, _, err := m.Login("password123", "", false, "ua", "5.5.5.5"); err != ErrInvalidCredentials {
+		t.Fatalf("双因素下仅口令登录应被拒, 得到 %v", err)
+	}
+}
+
+// TestSetupConsumesTOTPStep 断言引导绑定用过的验证码计入重放集合（F3）：
+// 同一步内该码再次登录必须被拒；窗口语义不变——±2 步拒绝、窗口内未用码可登录。
+func TestSetupConsumesTOTPStep(t *testing.T) {
+	m := newTestManager(t, ModeTOTP, "")
+	fixed := time.Unix(1_700_000_000, 0)
+	m.now = func() time.Time { return fixed }
+
+	secret, _, _, _, err := m.BeginSetup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := decodeTOTPSecret(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cur := fixed.Unix() / totpPeriod
+	if err := m.CompleteSetup("", codeAt(raw, cur), false); err != nil {
+		t.Fatalf("绑定失败: %v", err)
+	}
+	// 绑定步已计入已用集合：同一步同码登录一律 401
+	if _, _, err := m.Login("", codeAt(raw, cur), false, "ua", "7.7.7.7"); err != ErrInvalidCredentials {
+		t.Fatalf("绑定用过的码再登录应被拒, 得到 %v", err)
+	}
+	// 窗口语义不变：±2 步（cur+2）在 now=cur 时拒绝
+	if _, _, err := m.Login("", codeAt(raw, cur+2), false, "ua", "7.7.7.7"); err != ErrInvalidCredentials {
+		t.Fatalf("窗口外（+2 步）的码应被拒, 得到 %v", err)
+	}
+	// 窗口内未用步（cur+1）可登录
+	if _, _, err := m.Login("", codeAt(raw, cur+1), false, "ua", "7.7.7.7"); err != nil {
+		t.Fatalf("窗口内未用码应可登录: %v", err)
+	}
+}
+
 // TestPasswordTOTPSkip 覆盖 password+totp 的跳过路径（退化为单因素）。
 func TestPasswordTOTPSkip(t *testing.T) {
 	m := newTestManager(t, ModePasswordTOTP, "")
