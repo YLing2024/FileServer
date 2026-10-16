@@ -26,7 +26,7 @@ const sessionCookie = "fs_session"
 // 任何服务目录内容，故不泄漏。
 func (s *Server) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.authEnabled() || strings.HasPrefix(r.URL.Path, "/api/auth/") || !strings.HasPrefix(r.URL.Path, "/api/") {
+		if !s.authEnabled() || !strings.HasPrefix(r.URL.Path, "/api/") || s.authExempt(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -36,6 +36,19 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 		}
 		httpError(w, http.StatusUnauthorized, "需要访问口令")
 	})
+}
+
+// authExempt 免鉴权路径：
+//   - /api/auth/*：登录/引导/状态自身，必须匿名可达；
+//   - GET /api/health：运维探活（看门狗、反代健康检查、容器 healthcheck）
+//     需要匿名可达，且响应体只有进程/版本信息，不含目录/文件/会话内容。
+//
+// 其余 /api/*（含 /api/info、/api/list）仍要求有效会话。
+func (s *Server) authExempt(r *http.Request) bool {
+	if strings.HasPrefix(r.URL.Path, "/api/auth/") {
+		return true
+	}
+	return r.Method == http.MethodGet && r.URL.Path == "/api/health"
 }
 
 // authEnabled 是否要求认证（认证启用即要求；Manager 初始化失败也保持失败关闭）。

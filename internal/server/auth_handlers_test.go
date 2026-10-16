@@ -34,6 +34,9 @@ type authStatusResp struct {
 	NeedsSetup    bool   `json:"needs_setup"`
 	NeedPassword  bool   `json:"need_password"`
 	NeedTOTP      bool   `json:"need_totp"`
+	Configured    bool   `json:"configured"`
+	PasswordSet   bool   `json:"password_set"`
+	TOTPBound     bool   `json:"totp_bound"`
 }
 
 func authStatus(t *testing.T, base string) authStatusResp {
@@ -83,13 +86,26 @@ func getWithClient(t *testing.T, client *http.Client, url string) *http.Response
 // totpCodeNow 用标准库按当前时间计算 6 位 TOTP（RFC 6238），供端到端登录测试用。
 func totpCodeNow(t *testing.T, secretB32 string) string {
 	t.Helper()
+	return totpCodeAtStep(t, secretB32, time.Now().Unix()/30)
+}
+
+// totpCodeNext 计算相对当前时间步 +1 的验证码：引导绑定刚消费了当前步，
+// 端到端测试用下一步的新码验证正常登录（避开重放防护）。
+func totpCodeNext(t *testing.T, secretB32 string) string {
+	t.Helper()
+	return totpCodeAtStep(t, secretB32, time.Now().Unix()/30+1)
+}
+
+// totpCodeAtStep 计算指定时间步的 6 位 TOTP。
+func totpCodeAtStep(t *testing.T, secretB32 string, step int64) string {
+	t.Helper()
 	s := strings.ToUpper(strings.TrimRight(strings.ReplaceAll(secretB32, " ", ""), "="))
 	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(s)
 	if err != nil {
 		t.Fatalf("解码 TOTP 密钥失败: %v", err)
 	}
 	var buf [8]byte
-	binary.BigEndian.PutUint64(buf[:], uint64(time.Now().Unix()/30))
+	binary.BigEndian.PutUint64(buf[:], uint64(step))
 	mac := hmac.New(sha1.New, key)
 	mac.Write(buf[:])
 	sum := mac.Sum(nil)
@@ -199,9 +215,112 @@ func TestAuthTOTPFlow(t *testing.T) {
 	if bind.StatusCode != 200 {
 		t.Fatalf("绑定 TOTP 应 200, 得到 %d", bind.StatusCode)
 	}
-	// 登录只填验证码（无密码字段）
-	if code := authLogin(t, client, ts.URL, "", totpCodeNow(t, setup.Secret), false); code != http.StatusOK {
+	// 登录只填验证码（无密码字段）。绑定刚消费了当前时间步，故用下一步的新码
+	// （同一码重放被拒是 F3 的预期行为，见 TestAuthTOTPSetupConsumesCode）。
+	if code := authLogin(t, client, ts.URL, "", totpCodeNext(t, setup.Secret), false); code != http.StatusOK {
 		t.Fatalf("仅验证码登录应 200, 得到 %d", code)
+	}
+}
+
+// TestAuthSetupAtomic 引导提交的原子性（F1）：password+totp 下验证码错误返回
+// 400，且不得留下任何部分状态（status 仍 needs_setup=true、password_set=false），
+// 随后仅凭口令登录必须 401；用正确码重试才成功。
+func TestAuthSetupAtomic(t *testing.T) {
+	ts, client := newAuthServer(t, Options{AuthMode: "password+totp"})
+
+	gr := getWithClient(t, client, ts.URL+"/api/auth/setup")
+	var setup struct {
+		Secret   string `json:"totp_secret"`
+		NeedPw   bool   `json:"need_password"`
+		NeedTotp bool   `json:"need_totp"`
+	}
+	if err := json.NewDecoder(gr.Body).Decode(&setup); err != nil {
+		t.Fatal(err)
+	}
+	gr.Body.Close()
+	if !setup.NeedPw || !setup.NeedTotp || setup.Secret == "" {
+		t.Fatalf("引导状态异常: %+v", setup)
+	}
+	// 口令合法 + 错误验证码：整笔拒绝
+	body, _ := json.Marshal(map[string]any{"password": "password123", "code": "000000"})
+	r := postJSONClient(t, client, ts.URL+"/api/auth/setup", string(body))
+	r.Body.Close()
+	if r.StatusCode != http.StatusBadRequest {
+		t.Fatalf("错误验证码应 400, 得到 %d", r.StatusCode)
+	}
+	// 不得留下部分状态
+	st := authStatus(t, ts.URL)
+	if !st.NeedsSetup || st.PasswordSet || st.TOTPBound || st.Configured {
+		t.Fatalf("失败后不得留下部分状态: %+v", st)
+	}
+	// 仅凭口令登录必须 401
+	if code := authLogin(t, client, ts.URL, "password123", "", false); code != http.StatusUnauthorized {
+		t.Fatalf("未完成双因素配置时仅口令登录应 401, 得到 %d", code)
+	}
+	// 用正确码重试：原子成功
+	bind := postJSONClient(t, client, ts.URL+"/api/auth/setup",
+		`{"password":"password123","code":"`+totpCodeNow(t, setup.Secret)+`"}`)
+	bind.Body.Close()
+	if bind.StatusCode != http.StatusOK {
+		t.Fatalf("正确验证码重试应 200, 得到 %d", bind.StatusCode)
+	}
+	st = authStatus(t, ts.URL)
+	if st.NeedsSetup || !st.PasswordSet || !st.TOTPBound {
+		t.Fatalf("重试成功后双因素应就位: %+v", st)
+	}
+}
+
+// TestAuthTOTPSetupConsumesCode 引导绑定用过的验证码在同一时间步内再次用于
+// 登录必须 401（F3）。
+func TestAuthTOTPSetupConsumesCode(t *testing.T) {
+	ts, client := newAuthServer(t, Options{AuthMode: "totp"})
+
+	gr := getWithClient(t, client, ts.URL+"/api/auth/setup")
+	var setup struct {
+		Secret string `json:"totp_secret"`
+	}
+	if err := json.NewDecoder(gr.Body).Decode(&setup); err != nil {
+		t.Fatal(err)
+	}
+	gr.Body.Close()
+	if setup.Secret == "" {
+		t.Fatal("应返回待绑定 TOTP 密钥")
+	}
+	code := totpCodeNow(t, setup.Secret)
+	bind := postJSONClient(t, client, ts.URL+"/api/auth/setup", `{"code":"`+code+`"}`)
+	bind.Body.Close()
+	if bind.StatusCode != http.StatusOK {
+		t.Fatalf("绑定应 200, 得到 %d", bind.StatusCode)
+	}
+	// 同一个码立即登录：无论是否跨时间步都命中重放集合，必须 401
+	if got := authLogin(t, client, ts.URL, "", code, false); got != http.StatusUnauthorized {
+		t.Fatalf("绑定用过的码登录应 401, 得到 %d", got)
+	}
+}
+
+// TestHealthPublicWhenAuthEnabled 认证开启时 GET /api/health 免鉴权匿名 200
+// （F2），响应体不含目录/文件/会话信息；其余 /api/* 维持 401。
+func TestHealthPublicWhenAuthEnabled(t *testing.T) {
+	ts, _ := newAuthServer(t, Options{Auth: "user:password123"})
+
+	hr := get(t, ts.URL+"/api/health")
+	body, _ := io.ReadAll(hr.Body)
+	hr.Body.Close()
+	if hr.StatusCode != http.StatusOK {
+		t.Fatalf("匿名 /api/health 应 200, 得到 %d", hr.StatusCode)
+	}
+	for _, leaked := range []string{"entries", "sessions", "totp", "path"} {
+		if strings.Contains(string(body), leaked) {
+			t.Errorf("/api/health 泄漏字段 %q: %s", leaked, body)
+		}
+	}
+	// 其余 /api/* 仍 401
+	for _, p := range []string{"/api/info", "/api/list", "/api/search?q=x"} {
+		r := get(t, ts.URL+p)
+		r.Body.Close()
+		if r.StatusCode != http.StatusUnauthorized {
+			t.Errorf("匿名 %s 应 401, 得到 %d", p, r.StatusCode)
+		}
 	}
 }
 
