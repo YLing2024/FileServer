@@ -49,10 +49,48 @@
     失败不留半截文件；并发写入以版本标识（mtime+size）校验，冲突返回 409；
   - 直链下载行为不因可编辑而放宽：`.html/.js/.svg` 仍强制附件下载。
 
-## 6. 认证（可选）
+## 6. 认证（可选，默认关闭）
 
-- `--auth user:pass`：HTTP Basic 认证，全接口生效（含静态资源）；
-- 默认不启用（局域网信任模型）；启用后建议配 HTTPS 反代或仅限内网。
+- 启动参数 `--auth-mode none|totp|password|password+totp`（默认 `none`，局域网敞开，
+  行为与历史版本一致）；兼容用法 `--auth user:pass` 等价于 `password` 模式 + 预置口令。
+- 首次启动且 `--auth-mode != none` 时，浏览器落地**引导页**：设置口令（≥ 8 位；
+  `password`/`password+totp`）与绑定 TOTP（`totp` 必须绑定不可跳过；`password+totp`
+  可跳过，跳过后退化为单因素并可随时补绑）。引导完成后自动转登录页。
+- 登录支持「记住我」：不勾=会话 cookie（关浏览器失效，服务端 TTL 默认 12 小时，
+  `--session-hours`）；勾选=持久 cookie（默认 30 天，`--remember-days`）。
+- cookie 属性：`HttpOnly`、`SameSite=Lax`、`Path=/`；请求为 https 或 `--cookie-secure`
+  时带 `Secure`。
+- 凭据只存服务端产物于 `.FileServer/auth.json`（0600，原子写）：
+  - 口令：自研 Argon2id PHC 哈希（`m=64MiB, t=3, p=4`，标准库自研，RFC 9106 向量校验）；
+  - TOTP 密钥：**明文存储**（无主密钥可加密，取 0600 文件 + 目录受控，等价于 SSH
+    私钥的保护级别；如需更强保护应在磁盘加密层解决）；
+  - 会话/记住我 token：只存 `sha256` 哈希 + 过期时间，永不落明文。列表页也不显示明文。
+- 恒定时间比较：口令走 Argon2 派生后 `subtle.ConstantTimeCompare`，TOTP 校验同理。
+- TOTP 重放防护：同一时间步（含 ±1 步窗口）的验证码登录成功一次即消费，
+  之后同一码及其窗口内早于已消费步的码一律拒绝。
+- 失败限速：按客户端 IP 阶梯锁定（连续 5 次失败 → 60s → 300s → 900s，到顶维持）。
+  默认不信任代理头；`--trust-proxy` 时按 `X-Forwarded-For` **最左**一个作为客户端
+  IP（方向写死，避免伪造右值绕过）。
+- 认证响应不区分「用户不存在 / 口令错 / 验证码错」，统一 `访问凭据无效`；日志
+  （含 `-v`）不打印口令/token/验证码，`/api/auth/*` 仅记录路径不记录查询串。
+- 登录页/引导页响应带严格 CSP、`X-Content-Type-Options: nosniff`、
+  `Referrer-Policy: no-referrer`、`Cache-Control: no-store`。
+
+### 6.1 丢失验证器 / 口令的自救（命令行重置）
+
+服务**未启动**时，用同一 `--dir`（默认 exe 所在目录）执行：
+
+```bash
+# 仅清除 TOTP 绑定，保留口令（丢失验证器时用）
+FileServer --reset-totp
+
+# 清除全部凭据与会话，重新进入引导（口令也忘了时用）
+FileServer --reset-auth
+```
+
+> 安全提示：重置后**任何人都能重新引导绑定**（谁先设谁拥有）。请在**受信网络**
+> 下操作，重置完成并重新配置前不要对外暴露端口。命令执行后进程直接退出，需重新
+> 启动服务并在浏览器完成引导。
 
 ## 7. 其他
 

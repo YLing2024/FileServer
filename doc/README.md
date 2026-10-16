@@ -11,9 +11,10 @@
 | [video-pipeline.md](video-pipeline.md) | 视频播放管线：决策树、HLS 会话生命周期、转码规格、起播/seek 优化 |
 | [ffmpeg.md](ffmpeg.md) | ffmpeg 集成：查找与打包、GPU 编码器探测、HLS 转码、子进程管理、媒体探测（缩略图已弃用服务端方案） |
 | [cache.md](cache.md) | 缓存体系：`.FileServer` 目录结构、各缓存的生命周期与清理策略 |
-| [frontend.md](frontend.md) | 前端架构：模块、播放器、浏览器抽帧缩略图（thumb-src）、移动端适配 |
-| [security.md](security.md) | 安全模型：路径穿越、符号链接、认证、写入范围 |
-| [build-and-test.md](build-and-test.md) | 构建、发布打包、测试体系 |
+| [frontend.md](frontend.md) | 前端架构：模块、播放器、浏览器抽帧缩略图（thumb-src）、文本编辑、认证页、移动端适配 |
+| [COMPONENTS.md](COMPONENTS.md) | 前端可复用 UI 单元登记（原生 JS，无组件框架） |
+| [security.md](security.md) | 安全模型：路径穿越、符号链接、认证与双因子、写入范围 |
+| [build-and-test.md](build-and-test.md) | 构建、发布打包、跨平台部署、测试体系 |
 
 ## 快速导航
 

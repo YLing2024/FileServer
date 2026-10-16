@@ -5,9 +5,10 @@
 
 ```
 服务目录\.FileServer\
-├── thumb\      图片缩略图（jpg，磁盘持久化；视频缩略图为浏览器抽帧，不落盘）
-├── hls\        HLS 转码/重封装会话（index.m3u8 + seg_*.m4s，3 天清理）
-└── procs.pids  POSIX 子进程组登记（服务异常退出后的孤儿 ffmpeg 清理用）
+├── thumb\       图片缩略图（jpg，磁盘持久化；视频缩略图为浏览器抽帧，不落盘）
+├── hls\         HLS 转码/重封装会话（index.m3u8 + seg_*.m4s，3 天清理）
+├── auth.json    认证凭据与会话（0600，仅启用认证时存在）
+└── procs.pids   POSIX 子进程组登记（服务异常退出后的孤儿 ffmpeg 清理用）
 ```
 
 删除 `.FileServer` 文件夹即清空全部缓存，不影响任何功能；已在 `.gitignore` 排除。

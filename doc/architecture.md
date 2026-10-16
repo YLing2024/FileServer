@@ -7,7 +7,8 @@ FileServer 是一个面向局域网的单文件文件服务器，核心场景是
 
 硬约束（决定了大量设计决策）：
 
-- **单 Windows exe**：无安装、无服务注册，双击即用；ffmpeg 为可选旁挂组件。
+- **单文件可执行（跨平台）**：Windows / Linux / macOS 均为一等目标，无安装、无服务注册；
+  Windows 双击即用，Linux/macOS 命令行或 systemd 运行；ffmpeg 为可选旁挂组件。
 - **机械硬盘**：目标磁盘是 5400rpm 机械盘 + 严重碎片化的大视频（数百个 mdat 块、
   数 MB 巨 moov、数百万条 stco 表项）。物理寻道 5~15ms、moov 冷读一次 5~15s，
   是"起播慢、加载不出来"的根本原因。
@@ -22,9 +23,12 @@ internal/server/
 ├── hls.go          HLS 会话管理（copy/转码、分片、EVENT→VOD、abandon、进程强杀）
 ├── ffmpeg.go       ffmpeg 查找、GPU 编码器探测、服务端抽帧、媒体探测
 ├── thumb.go        缩略图缓存（内存 LRU + 磁盘 + 失败记忆 + 忙碌计数）、冷门格式服务端抽帧
+├── text.go         文本文件新建/预览/编辑（白名单 + 原子写 + 版本校验）
+├── auth_handlers.go 认证 HTTP 层（引导/登录/会话/门禁，见 internal/auth）
 └── web/            内嵌前端（原生 HTML/CSS/JS，无构建；Go embed.FS）
-internal/platform/  Windows 平台设施（Job Object 防孤儿进程）
-internal/qrcode/    终端二维码
+internal/auth/      认证状态机：自研 Argon2id/BLAKE2b、TOTP、会话与限速
+internal/platform/  OS 差异（控制台编码、打开浏览器、进程组/Job Object 子进程回收）
+internal/qrcode/    终端二维码 + TOTP 绑定二维码（SVG）
 ```
 
 ## 3. 进程模型
@@ -50,6 +54,7 @@ internal/qrcode/    终端二维码
  ├─ GET /api/hls?path=&f=...   HLS 分片（copy/转码，EVENT→VOD）
  ├─ POST /api/settings/ffmpeg  冷门格式支持动态开关（前端工具栏按钮）
  ├─ GET/POST /api/text[/new]   文本预览/编辑保存/新建（白名单 + 原子写 + 版本校验）
+ ├─ GET/POST /api/auth/*       认证：状态/引导/登录/登出/会话（详见 security.md）
  └─ GET /api/zip?path=         目录打包下载
 ```
 

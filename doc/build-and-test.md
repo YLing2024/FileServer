@@ -11,17 +11,21 @@
 ## 2. 构建与校验
 
 统一入口是根目录 `Makefile`（Linux / macOS / WSL）；Windows 侧用 `build.bat` 走等价命令。
-交叉编译目标固定 `windows/amd64`（本项目运行目标是 Windows exe）。
+本项目为跨平台项目：Windows / Linux / macOS 均为一等目标，`make check` 覆盖三平台
+（linux/darwin 的 amd64+arm64、windows amd64）交叉 vet/build。
 
 ```bash
-make check                 # fmt-check + 交叉 vet + 交叉 build + go test ./...（提交前必跑）
+make check                 # fmt-check + 三平台 vet + 三平台 build + go test ./...（提交前必跑）
 make fmt                   # gofmt -w .
 make fmt-check             # 断言无未格式化文件
-make vet                   # GOOS=windows GOARCH=amd64 go vet ./...
-make build                 # 交叉构建 dist/FileServer.exe
+make vet                   # GOOS=windows GOARCH=amd64 go vet ./...（单目标）
+make vet-all               # 三平台交叉 go vet
+make build                 # 交叉构建 dist/FileServer.exe（windows/amd64）
+make build-all             # 构建五平台产物到 dist/FileServer-<os>-<arch>[.exe]
 make test                  # go test ./...
+make test-race             # go test -race ./...
 make cover                 # 覆盖率
-make dist VERSION=1.2.3    # 发布构建：注入版本 / commit / 构建时间
+make dist VERSION=1.2.3    # 发布构建：注入版本 / commit / 构建时间（windows/amd64）
 ```
 
 Windows 侧：
@@ -36,21 +40,24 @@ release.ps1 -Version 1.2.3        rem 构建注入版本的 exe + lite/full zip 
 
 ### CI
 
-`.github/workflows/ci.yml`（push / PR 触发）三个 job：
+`.github/workflows/ci.yml`（push / PR 触发）：
 
-- **test**（`windows-latest`，主力）：`gofmt -l .` 断言为空 → `go vet ./...` →
-  `go test -race ./...` → `go build ./...`。Windows 是原生环境，所有包都能编译、测试才全量。
-- **cross**（`ubuntu-latest`）：`GOOS=windows GOARCH=amd64 go vet/build` + `gofmt` 断言。
-- **lint**（`ubuntu-latest`，`GOOS=windows`）：`golangci-lint` v2.14.0（配置见 `.golangci.yml`）。
+- **test**（矩阵 `ubuntu-latest` / `windows-latest` / `macos-latest`，任一红灯即失败）：
+  `gofmt -l .` 断言为空 → `go vet ./...` → `go test`（ubuntu/windows 带 `-race`，
+  macOS 跑普通测试）→ `go build ./...`。三端都真跑测试。
+- **cross**（`ubuntu-latest`）：对 `linux/amd64`、`linux/arm64`、`darwin/amd64`、
+  `darwin/arm64`、`windows/amd64` 五目标逐一 `go vet` + `go build`。
+- **lint**（`ubuntu-latest`，矩阵 `GOOS=linux` / `GOOS=windows`）：`golangci-lint`
+  v2.14.0（配置见 `.golangci.yml`）。
 
 `.github/workflows/release.yml`：打 `v*` tag 时在 `windows-latest` 上构建注入版本的 exe，
 产出 `FileServer-lite-<v>.zip` 与 `SHA256SUMS.txt`，创建 GitHub Release。
 **ffmpeg 二进制不进仓库 / CI**（体积与许可）：CI 只产 lite 包，full 包由本机
 `release.ps1` 生成。
 
-> 本仓库已把 Windows 专属 syscall（进程优先级等）隔离进 `internal/platform/`，
-> 因此 Linux 侧现在也能 `go vet ./...` / `go test ./...` 全部包；CI 的 test job
-> 仍选 Windows 原生 runner，以确保 Windows 行为被真实覆盖。
+> 平台差异（控制台编码、打开浏览器、子进程生命周期）全部隔离进 `internal/platform/`，
+> 按 `*_windows.go` / `*_other.go` 分文件；`go vet/test ./...` 在 Linux 上即可覆盖
+> 非 Windows 路径，Windows 专属路径由 `windows-latest` 覆盖。
 
 
 ## 3. 发布部署（目标机）
@@ -74,6 +81,54 @@ Start-Process <目标目录>\FileServer.exe -WorkingDirectory <目标目录> -Wi
 ```
 
 部署后务必在**真实目录 + 有头浏览器**上验收（见下）。
+
+## 3.1 Linux / macOS 部署
+
+Linux/macOS 不再是「仅能编译」，而是一等运行目标：单文件可执行，命令行或 systemd 运行。
+
+```bash
+# 直接运行（默认 0.0.0.0:8080，局域网可访问）
+./FileServer-linux-amd64 --dir /srv/share --ffmpeg
+
+# 只在反向代理后暴露（仅监听回环）
+./FileServer-linux-amd64 --dir /srv/share --host 127.0.0.1 --port 8080
+
+# 启用认证（首次访问浏览器引导设置）
+./FileServer-linux-amd64 --dir /srv/share --auth-mode password+totp
+```
+
+systemd 单元示例（`/etc/systemd/system/fileserver.service`）：
+
+```ini
+[Unit]
+Description=FileServer
+After=network-online.target
+
+[Service]
+Type=simple
+User=fileserver
+ExecStart=/opt/fileserver/FileServer-linux-amd64 --dir /srv/share --host 127.0.0.1 --port 8080
+Restart=on-failure
+# 退出时优雅终止（进程组内 ffmpeg 一并回收）
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target
+```
+
+反向代理到 443（nginx 示例要点）：`proxy_pass http://127.0.0.1:8080;` 并透传
+`Host`/`X-Forwarded-For`/`X-Forwarded-Proto`；此时给服务加 `--trust-proxy`，
+客户端 IP 取 `X-Forwarded-For` 最左值，`X-Forwarded-Proto=https` 时认证 cookie 自动
+带 `Secure`。大文件/视频务必关闭代理缓冲（`proxy_buffering off;`）并放开 Range。
+
+macOS：
+- 产物 `FileServer-darwin-amd64`（Intel）/ `FileServer-darwin-arm64`（Apple Silicon）；
+  首次运行会弹**「允许传入连接」防火墙提示**，需点击允许，否则局域网设备无法访问。
+- `--browser` 用系统 `open` 打开默认浏览器（与 Linux 的 `xdg-open` 分支不同）。
+
+进程回收：POSIX 无 Job Object，改为**进程组**语义——ffmpeg 子进程以独立进程组启动，
+服务退出/终止会话时对整组 `SIGKILL`；服务被强杀（信号处理来不及跑）时，遗留进程组
+登记在 `.FileServer/procs.pids`，**下次启动**按可执行名核验后清理。
 
 ## 4. 测试体系
 
