@@ -8,9 +8,21 @@ permissions:
   contents: read
 
 jobs:
-  # 主力 job：Windows 上所有包都能编译，测试才真正全量覆盖。
+  # 三平台矩阵：ubuntu / macos / windows 都真跑 go test，任一红灯整体失败。
+  # - ubuntu、windows 带 -race（macOS 上 race 需 cgo，改跑普通测试）
+  # - vet + build 在各自原生环境运行，覆盖平台专属代码路径
   test:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            race: "true"
+          - os: windows-latest
+            race: "true"
+          - os: macos-latest
+            race: "false"
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -18,18 +30,26 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: gofmt check
-        shell: pwsh
+        shell: bash
         run: |
-          $out = gofmt -l .
-          if ($out) { Write-Host "未格式化文件:"; Write-Host $out; exit 1 }
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then echo "未格式化文件:"; echo "$out"; exit 1; fi
       - name: go vet
+        shell: bash
         run: go vet ./...
-      - name: go test -race
-        run: go test -race ./...
+      - name: go test
+        shell: bash
+        run: |
+          if [ "${{ matrix.race }}" = "true" ]; then
+            go test -race ./...
+          else
+            go test ./...
+          fi
       - name: go build
+        shell: bash
         run: go build ./...
 
-  # 交叉 job：证明 Linux 侧也能交叉 vet/build，两端都不退化。
+  # 交叉 job：证明五个目标（linux/darwin/windows 的 amd64+arm64）都能 vet/build。
   cross:
     runs-on: ubuntu-latest
     steps:
@@ -42,16 +62,26 @@ jobs:
         run: |
           out="$(gofmt -l .)"
           if [ -n "$out" ]; then echo "未格式化文件:"; echo "$out"; exit 1; fi
-      - name: cross vet (windows/amd64)
-        run: GOOS=windows GOARCH=amd64 go vet ./...
-      - name: cross build (windows/amd64)
-        run: GOOS=windows GOARCH=amd64 go build -trimpath ./cmd/fileserver
+      - name: cross vet/build (5 targets)
+        run: |
+          set -e
+          for p in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            os="${p%/*}"; arch="${p#*/}"
+            echo "== $os/$arch =="
+            GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go vet ./...
+            GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -o /tmp/fileserver-$os-$arch ./cmd/fileserver
+          done
       - name: coverage
         run: make cover
 
   # 正确性 lint：只开 .golangci.yml 声明的规则，版本钉死。
+  # 分别在 linux 原生与 windows 交叉下各跑一次，覆盖两套 build tag 分支。
   lint:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, windows]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -63,5 +93,5 @@ jobs:
         with:
           version: v2.14.0
         env:
-          GOOS: windows
+          GOOS: ${{ matrix.goos }}
           GOARCH: amd64
