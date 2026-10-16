@@ -28,6 +28,10 @@
 健康检查：返回进程存活与构建版本信息（version/commit/go/platform），
 供监控/部署脚本确认服务与版本。无鉴权以外的副作用。
 
+- **免鉴权**：认证开启（`--auth-mode` 非 `none`）时本接口仍可匿名访问并返回 `200`，
+  供看门狗 / 反向代理健康检查 / 容器 healthcheck 使用（响应体只有上述进程/版本
+  信息，不含任何目录、文件或会话内容）。其余 `/api/*` 仍要求有效会话（`401`）。
+
 ```bash
 curl -s http://127.0.0.1:8080/api/health
 # {"ok":true,"version":"dev","commit":"...","go":"go1.25.0","platform":"linux/amd64"}
@@ -162,8 +166,9 @@ moov 预读预热：把 MP4 头部/尾部最多 8MB 顺序读进 OS 缓存（512
 
 ## 认证端点
 
-认证默认关闭（`--auth-mode none`）。启用后，除 `/api/auth/*` 外的全部 `/api/*`
-接口都需要有效会话 cookie（`fs_session`），未认证返回 `401 {"error":"需要访问口令"}`。
+认证默认关闭（`--auth-mode none`）。启用后，除 `/api/auth/*` 与 `GET /api/health`
+外的全部 `/api/*` 接口都需要有效会话 cookie（`fs_session`），未认证返回
+`401 {"error":"需要访问口令"}`（`GET /api/health` 免鉴权，详见该端点说明）。
 
 认证模式 `--auth-mode`：`none` / `totp` / `password` / `password+totp`。
 兼容用法 `--auth user:pass` 等价于 `password` 模式 + 预置口令。
@@ -183,6 +188,14 @@ totp_secret, otpauth_url}`（`need_totp` 时生成待绑定密钥）；已完成
 
 完成引导：设置口令（如需，长度 ≥ 8）并绑定 TOTP（如需，`skip_totp=true` 可跳过；
 `totp` 模式不可跳过）。成功 `200 {"ok":true}`；弱口令/验证码错误 `400`；已完成 `409`。
+
+- **原子提交**：先校验全部必需因素（口令强度、TOTP 验证码），全部通过后才一次性
+  持久化口令哈希 + TOTP 绑定 + 配置状态。任一失败即整笔拒绝，**不留下部分状态**：
+  `GET /api/auth/status` 仍为 `needs_setup=true`、`password_set=false`，
+  此后仅凭口令登录仍返回 `401`（不会出现「看着像配好了、其实只有单因素」）。
+- 绑定成功所用的验证码其时间步计入重放集合，同一时间步内再用该码登录返回 `401`
+  （见 `doc/security.md` 的重放防护说明）。
+- `--auth user:pass` / 环境变量预置口令属于预置路径，不经引导，不受本节影响。
 
 ### GET /api/auth/totp-qr
 
