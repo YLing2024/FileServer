@@ -87,36 +87,3 @@ func (f *Ffmpeg) ExtractFrame(ctx context.Context, src, dst string) error {
 	}
 	return nil
 }
-
-// Faststart 把 MP4（moov 在尾部）重封装为 moov 前置的 MP4 写入 dst。
-// 小文件几十毫秒完成；大文件（>32MB）为磁盘速任务，放宽超时到 10 分钟、
-// 以低于正常优先级运行（不抢正在播放的直链链路）。-c copy 无损。
-func (f *Ffmpeg) Faststart(ctx context.Context, src, dst string, size int64) error {
-	timeout := 30 * time.Second
-	lowPri := false
-	if size > 32*1024*1024 {
-		timeout = 10 * time.Minute
-		lowPri = true
-	}
-	cctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	tmp := dst + ".tmp"
-	args := []string{
-		"-hide_banner", "-loglevel", "error", "-y",
-		"-analyzeduration", "0", "-probesize", "32",
-		"-i", src,
-		"-map", "0",
-		"-c", "copy",
-		"-movflags", "+faststart",
-		"-f", "mp4", tmp,
-	}
-	if err := runFFmpeg(cctx, f.ffmpegPath, args, lowPri, f.procs); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := os.Rename(tmp, dst); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
-}

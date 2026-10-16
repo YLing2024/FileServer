@@ -21,23 +21,18 @@
 其他容器（mkv/avi/rmvb/...）          → hls
 ```
 
-注意：决策**不再按文件大小或 moov 位置**区分 direct / hls（旧文档的
-「≤32MB 或 moov 在头部」判据已废止）。H.264 MP4 无论 moov 在哪都先 direct；
-moov 位置只决定是否触发后台预热重封装。怪封装大文件在开启 --ffmpeg 时走 HLS
-copy（ffmpeg 建索引虽慢但稳定流式），未开启时仍 direct（Chrome 顺序下载 moov
-后即可解析起播，实测 1~3s）。
+注意：决策**不再按文件大小或 moov 位置**区分 direct / hls。H.264 MP4 无论
+moov 在哪都 direct；怪封装大文件在开启 --ffmpeg 时走 HLS copy（ffmpeg 建索引
+虽慢但稳定流式），未开启时仍 direct（Chrome 顺序下载 moov 后即可解析起播，
+实测 1~3s）。
 
 ## 2. 直链播放（direct）
 
-- 浏览器 `<video src="/api/file?path=...&fs=1">`，Range 断点续传。
-- `fs=1`：faststart 重封装缓存（`faststartCachePath`）存在时读缓存——重封装后
-  moov 前置、无碎片，二次打开秒开（实测 1.1~1.9s）；未就绪回退原文件。
-- `/api/video-info` 对**直链、非 HEVC、原文件 moov 不在头部且尚无缓存**的 MP4
-  后台触发一次 `warmFaststart`：`-c copy -movflags +faststart`，失败只记日志
-  （best-effort，绝不影响本次播放）；大文件低于正常优先级、10 分钟超时。
-- 触发只负责调度：`warmFaststart` 内单飞防重复（`fsBusy`/`fsMu`），且
-  `hls.Active() || directPlaying()` 时先等待——播放/转码进行中让路，不抢磁盘。
-- 直链 Range 请求 → `markVideoRead()`：预热/缩略图/重封装 10s 窗口内让路。
+- 浏览器 `<video src="/api/file?path=...">`，Range 断点续传。
+- 直链 Range 请求 → `markVideoRead()`：moov 预热/缩略图抽帧在 10s 窗口内让路。
+- 需要**永久规整** MP4（moov 前置 / mdat 合并）请用独立项目
+  [mp4norm](https://github.com/YLing2024/mp4norm)——FileServer 不再做 faststart
+  重封装，也不改写用户原文件。
 
 ## 3. HLS 会话（`hls.go`）
 
@@ -84,15 +79,15 @@ copy（ffmpeg 建索引虽慢但稳定流式），未开启时仍 direct（Chrom
 3. **direct-first**：浏览器能原生解码的文件（H.264 MP4/WebM 等）不经过 ffmpeg，
    浏览器直链即点即播——不再按 moov 位置决定是否转封装。
 4. **播放绝对优先**：点开视频瞬间，前端中止在途抽帧（thumb-src 读取全部
-   释放）+ 预热/重封装让路——磁盘 IO 全部让给播放。
-5. **缓存复用**：HLS 完整转码缓存 3 天、faststart 缓存 7 天。
+   释放）+ 预热让路——磁盘 IO 全部让给播放。
+5. **缓存复用**：HLS 完整转码缓存 3 天，二次点开直接读。
 
 ## 5. 实测数据（目标环境：5400rpm 机械盘 + 碎片化怪封装大文件）
 
 | 场景 | 耗时 |
 |---|---|
 | 大目录（146 视频）浏览中，抽帧正忙时点开视频起播 | 1.0~1.1s |
-| 同文件二次打开（faststart 缓存命中） | 1.1~1.9s |
+| 同文件二次打开（HLS 缓存命中） | 1.1~1.9s |
 | 首次冷打开（无任何缓存，moov 在头部） | ~2~10s（取决于 moov 冷读） |
 | HLS 冷转码（moov 在中/尾） | 首片 3~20s（视 ffmpeg 索引耗时） |
 | 浏览器抽帧（thumb-src 截短源，3 路并发） | 首张 ~1s，2 秒 15 张，48 张约 18s |

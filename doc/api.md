@@ -45,21 +45,19 @@
 - 响应为 200 整段流（不处理 Range——抽帧元素会缓冲全部 ≤16MB，seek 在缓冲内完成）；
 - MP4 顶层布局带 1 小时缓存（`mp4LayoutCached`，避免 moov 尾部扫描的反复寻道）。
 
-## GET /api/file?path=&dl=1&fs=1
+## GET /api/file?path=&dl=1
 
 文件下载/直链预览，支持 Range 断点续传（`http.ServeContent`）。
 - `dl=1`：强制附件下载。
-- `fs=1`：faststart 重封装缓存存在时读缓存（起播最快）；未就绪回退原文件。
-  缓存由 `/api/video-info` 触发后台重封装生成（见下）。
 - 视频/音频 Range 请求会触发 `markVideoRead()`（直链播放活动跟踪，
-  预热/重封装据此让路）。
+  moov 预热/缩略图抽帧据此让路）。
 - HTML/SVG/JS 等可执行扩展名强制 attachment（防 XSS 渲染）。
 
 ## GET /api/video-info?path=
 
 播放决策，**毫秒级返回，绝不等待 ffprobe**。
 
-响应：`{mode, mime, faststart?, duration?, ...}`
+响应：`{mode, mime, duration?, width?, height?}`
 
 `mode` 默认 `direct`；仅当**开启 `--ffmpeg`**（且找到 ffmpeg）且该扩展名浏览器
 不能原生播放时才置 `hls`（详见 video-pipeline.md）：
@@ -74,14 +72,11 @@
 | 开启 `--ffmpeg`：音频 / `.ogv` | direct |
 | 开启 `--ffmpeg`：其他容器（MKV/AVI/RMVB/…） | hls |
 
-直链 MP4（`.mp4/.m4v/.mov`、非 HEVC、原文件 moov 不在头部、尚无缓存）会**后台
-触发一次 faststart 重封装预热**（`warmFaststart`，best-effort，失败只记日志）：
-本次播放用原文件，二次打开 `/api/file?fs=1` 命中缓存秒开。预热受单飞（同一文件
-不重复）与「播放/转码进行中让路」约束；缓存已就绪时响应带 `"faststart": true`。
-该触发只要求本机找到 ffmpeg，不依赖 `--ffmpeg` 开关。
-
 元数据：内存缓存命中直接返回完整信息；未命中后台 ffprobe（2s 超时），
 前端 2 秒后二次查询补时长。
+
+> MP4 的 faststart 重封装已移除；需要永久规整（moov 前置 / mdat 合并）请用独立
+> 项目 [mp4norm](https://github.com/YLing2024/mp4norm)。
 
 ## GET /api/hls?path=&f=index.m3u8|seg_000001.m4s
 

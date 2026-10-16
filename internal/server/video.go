@@ -52,18 +52,6 @@ func (s *Server) handleVideoInfo(w http.ResponseWriter, r *http.Request) {
 		resp["mode"] = "hls"
 	}
 
-	// MP4 家族：直链且尚未 faststart（moov 不在头部）时，后台预热重封装缓存——
-	// 本次播放用原文件（best-effort，绝不影响播放），二次打开走 fs=1 缓存秒开，
-	// 抽帧源也优先命中（见 thumb.go）。已有缓存则在响应里标记 faststart。
-	// 单飞防重复与「播放中让路」语义全部封装在 warmFaststart 内，这里只做触发判定。
-	if ext == ".mp4" || ext == ".m4v" || ext == ".mov" {
-		if s.faststartCachePath(abs, fi) != "" {
-			resp["faststart"] = true
-		} else if resp["mode"] == "direct" {
-			s.maybeWarmFaststart(abs, fi)
-		}
-	}
-
 	// 元数据：优先内存缓存（命中即返回完整信息）；
 	// 未命中则后台探测（不阻塞本次响应），前端稍后二次查询获得 duration 等。
 	if s.deps.ff != nil {

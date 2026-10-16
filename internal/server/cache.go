@@ -1,7 +1,6 @@
 package server
 
 import (
-	"os"
 	"sync"
 	"time"
 )
@@ -56,42 +55,6 @@ func (c *listCache) put(key string, dirMod time.Time, entries []Entry) {
 	// 深拷贝一份避免共享底层数组被后续 fillStats 修改
 	cp := append([]Entry(nil), entries...)
 	c.items[key] = &listCacheEntry{dirMod: dirMod, fetched: time.Now(), entries: cp}
-}
-
-// busySet 键控的「进行中」标记集合：同一 key 同时只允许一个执行者。
-type busySet struct {
-	mu sync.Mutex
-	m  map[string]bool
-}
-
-// tryAcquire 尝试占用 key：已被占用返回 false。
-func (b *busySet) tryAcquire(key string) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.m == nil {
-		b.m = make(map[string]bool)
-	}
-	if b.m[key] {
-		return false
-	}
-	b.m[key] = true
-	return true
-}
-
-// release 释放 key。
-func (b *busySet) release(key string) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	delete(b.m, key)
-}
-
-// faststartState faststart 重封装缓存状态：缓存目录 + 单飞防重 + 仅测试注入的钩子。
-type faststartState struct {
-	dir  string // 小文件 faststart 重封装缓存目录
-	busy busySet
-	// hook 仅测试注入：非 nil 时替代 go warmFaststart，
-	// 用于断言“预热被触发”而不依赖真实 ffmpeg。生产路径恒为 nil。
-	hook func(abs string, fi os.FileInfo)
 }
 
 // layoutEntry MP4 顶层布局缓存条目（moov 尾部扫描要遍历全部 mdat 头，

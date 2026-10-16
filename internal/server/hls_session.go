@@ -171,7 +171,7 @@ func (m *HlsManager) run(ctx context.Context, s *hlsSession, ff *Ffmpeg, fi os.F
 			return fmt.Errorf("转码已取消")
 		}
 		// copy（磁盘速任务）与转码（长任务）分开限流：
-		// 点开一个非 faststart MP4 不会被正在跑的 4K 转码长任务挡住
+		// 点开一个 MP4 不会被正在跑的 4K 转码长任务挡住
 		sem := m.transSem
 		if spec.copyMode {
 			sem = m.copySem

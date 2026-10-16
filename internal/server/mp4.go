@@ -130,10 +130,3 @@ func mp4MoovOffset(f *os.File, size int64) int64 {
 	}
 	return -1
 }
-
-// mp4IsFastStart 判断 MP4 是否已 faststart（moov 在文件头部，浏览器可直接起播）。
-func mp4IsFastStart(abs string) bool {
-	l := mp4LayoutOf(abs)
-	// moov 在开头 256KB 内视为已 faststart（正常情况 moov 紧跟 ftyp，几十 KB 内）
-	return l.moovOffset >= 0 && l.moovOffset <= 256*1024
-}

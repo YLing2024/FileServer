@@ -26,16 +26,18 @@
 ## 2. 子进程管理（`runFFmpeg`）
 
 - `exec.CommandContext`：ctx 取消即 Kill。
-- Windows 低优先级：`CreationFlags = BELOW_NORMAL_PRIORITY_CLASS (0x4000)`
-  （大文件 faststart 重封装）。
-- **防孤儿**（`platform.KillOnParentExit`）：
-  - 子进程挂入 Job Object，`KILL_ON_JOB_CLOSE`——服务进程退出时连带终止；
-  - Job 句柄**不可继承**（`bInheritHandle=0`），避免句柄泄漏导致 Job 永不关闭；
-  - 兜底：ctx.Done() 后等 5s 仍未退出才 `taskkill /F /T`（盲目 5s 强杀会误杀
+- 低优先级（Windows）：`CreationFlags = BELOW_NORMAL_PRIORITY_CLASS (0x4000)`。
+- **防孤儿**（`platform.KillOnParentExit` + 平台进程终止函数）：
+  - Windows：子进程挂入 Job Object，`KILL_ON_JOB_CLOSE`——服务进程退出时连带终止；
+    Job 句柄**不可继承**（`bInheritHandle=0`），避免句柄泄漏导致 Job 永不关闭。
+  - POSIX：子进程以 `Setpgid` 独立成组（`platform.SetProcessGroup`），终止时
+    `kill(-pgid, SIGKILL)` 带走整组（`platform.TerminateTree`）；服务被强杀
+    （信号处理来不及跑）时，遗留进程由**下次启动清理**（进程组登记在
+    `.FileServer/procs.pids`，启动时按 `ps` 可执行名核验后强杀）。
+  - 兜底：ctx.Done() 后等 5s 仍未退出才强杀整棵进程树（盲目 5s 强杀会误杀
     正常慢任务——历史 bug）。
 - 使用场景（**视频缩略图已 100% 浏览器抽帧，服务端不再用 ffmpeg 抽帧**）：
   - HLS copy/转码（GPU 优先，长任务）；
-  - faststart 重封装（大文件低优先级、10 分钟超时）；
   - 媒体探测（ffprobe JSON，2s 超时，绝不阻塞播放链路）。
 
 ## 3. 视频缩略图：已废弃服务端方案
@@ -58,17 +60,17 @@
    跑一段 0.5s 的真实编码（testsrc2 源），成功才启用——仅列出不等于可用；
 3. 同时探测 zscale/tonemap 滤镜（HDR→SDR 色调映射）。
 
-## 5. faststart 重封装（`Faststart`）
-
-- copy 级重封装：`-c copy -movflags +faststart`（moov 移到文件头）。
-- 分级：≤32MB 小文件 30s 超时、正常优先级；大文件 10 分钟超时、低优先级。
-- 单飞（`fsBusy` map）防重复；输出写 `.tmp` 后原子改名。
-- 播放进行时等待（播放绝对优先）。
-- 缓存路径：`.FileServer\faststart\<mediaKey>.mp4`，7 天清理（见 cache.md）。
-
-## 6. 媒体探测（`ProbeMedia`）
+## 5. 媒体探测（`ProbeMedia`）
 
 - ffprobe JSON：时长、视频编码、分辨率、像素格式、音频编码。
 - 2s 超时 + 内存缓存（4096 条）+ 单飞（同文件并发探测共享结果）。
 - 只在**后台**触发（video-info 未命中时），绝不阻塞播放链路；
   前端 2s 后二次查询补时长。
+
+## 6. MP4 规整化已移除
+
+历史版本的 faststart 重封装（`-c copy -movflags +faststart`，moov 前置）已删除。
+MP4 若需**永久规整**（mdat 合并 / moov 前置），请使用独立项目
+[mp4norm](https://github.com/YLing2024/mp4norm)；FileServer 只保留 MP4 顶层布局
+**判定**（`mp4.go`：碎片化 mdat / moov 位置），服务于「怪封装走 HLS copy」的
+播放决策，不再改写用户文件。

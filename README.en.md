@@ -87,7 +87,6 @@ The browser loads the truncated frame-extraction source returned by `/api/thumb-
 <served directory>\.FileServer\
 ├── thumb\      image thumbnails + server-side frame thumbnails for less common formats (jpg, cleaned after 7 days)
 ├── hls\        HLS transcode/remux sessions (index.m3u8 + seg_*.m4s, cleaned after 3 days)
-├── faststart\  MP4 moov-front remux cache (cleaned after 7 days)
 └── backup\     historical backups (legacy from the old normalization; can still be restored manually, or handled with mp4norm)
 ```
 

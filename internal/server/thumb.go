@@ -282,12 +282,7 @@ func (s *Server) serveThumbSrc(w http.ResponseWriter, r *http.Request) {
 	}
 	ext := strings.ToLower(filepath.Ext(fi.Name()))
 
-	// 优先 faststart 缓存文件（moov 前置、无碎片，顺序读最快）；无缓存用原文件
-	src := abs
-	if fp := s.faststartCachePath(abs, fi); fp != "" {
-		src = fp
-	}
-	f, err := os.Open(src)
+	f, err := os.Open(abs)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, "打开文件失败")
 		return
@@ -314,7 +309,7 @@ func (s *Server) serveThumbSrc(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	layout := s.mp4LayoutCached(src, size)
+	layout := s.mp4LayoutCached(abs, size)
 	switch {
 	case layout.moovOffset < 0 || layout.moovSize < 8:
 		http.ServeContent(w, r, fi.Name(), fi.ModTime(), f) // 解析失败：整段兜底

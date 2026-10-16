@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -34,19 +33,6 @@ func mp4Box64(typ string, payload []byte, largeSize uint64) []byte {
 	binary.BigEndian.PutUint64(b[8:16], largeSize)
 	copy(b[16:], payload)
 	return b
-}
-
-func writeMP4(t *testing.T, name string, boxes ...[]byte) string {
-	t.Helper()
-	p := filepath.Join(t.TempDir(), name)
-	var buf bytes.Buffer
-	for _, b := range boxes {
-		buf.Write(b)
-	}
-	if err := os.WriteFile(p, buf.Bytes(), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return p
 }
 
 func mp4File(t *testing.T, name string, data []byte) *os.File {
@@ -124,51 +110,6 @@ func TestMP4MoovOffset(t *testing.T) {
 		f := mp4File(t, "short.mp4", []byte{0, 0, 0, 8})
 		if got := mp4MoovOffset(f, 4); got != -1 {
 			t.Errorf("短文件应为 -1, 得到 %d", got)
-		}
-	})
-}
-
-// TestMP4IsFastStart moov 位置决定浏览器是否可直链即时起播
-func TestMP4IsFastStart(t *testing.T) {
-	moov := mp4Box("moov", []byte("xxxx"))
-	ftyp := mp4Box("ftyp", make([]byte, 8))
-
-	t.Run("文件过小不算 faststart", func(t *testing.T) {
-		p := writeMP4(t, "tiny.mp4", []byte{0, 0, 0, 8, 'f', 't', 'y', 'p'})
-		if mp4IsFastStart(p) {
-			t.Error("小于 1KB 的文件不应判定为 faststart")
-		}
-	})
-
-	t.Run("moov 在开头即 faststart", func(t *testing.T) {
-		data := append(append([]byte{}, ftyp...), moov...)
-		p := writeMP4(t, "ok.mp4", data)
-		buf := make([]byte, 1200)
-		copy(buf, data)
-		if err := os.WriteFile(p, buf, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if !mp4IsFastStart(p) {
-			t.Error("moov 在前部应判定为 faststart")
-		}
-	})
-
-	t.Run("moov 在尾部不是 faststart", func(t *testing.T) {
-		pad := make([]byte, 300*1024)
-		copy(pad, ftyp)
-		data := append(pad, moov...)
-		p := writeMP4(t, "tail.mp4", data)
-		if mp4IsFastStart(p) {
-			t.Error("moov 在尾部不应判定为 faststart")
-		}
-	})
-
-	t.Run("无 moov 不是 faststart", func(t *testing.T) {
-		pad := make([]byte, 1200)
-		copy(pad, append(append([]byte{}, ftyp...), mp4Box("mdat", make([]byte, 64))...))
-		p := writeMP4(t, "nomoov.mp4", pad)
-		if mp4IsFastStart(p) {
-			t.Error("无 moov 不应判定为 faststart")
 		}
 	})
 }
@@ -379,9 +320,9 @@ func TestHlsManagerIntegration(t *testing.T) {
 	}
 }
 
-// TestVideoInfoDecision 验证 /api/video-info 的 direct/hls 决策与直链 MP4 的
-// 后台 faststart 预热触发：未开启 --ffmpeg 时一律 direct（浏览器原生解码直链），
-// MKV/HEVC 也保持 direct 由前端提示不可在线播放。
+// TestVideoInfoDecision 验证 /api/video-info 的 direct/hls 决策：
+// 未开启 --ffmpeg 时一律 direct（浏览器原生解码直链），MKV/HEVC 也保持
+// direct 由前端提示不可在线播放；开启后冷门格式转 hls。
 func TestVideoInfoDecision(t *testing.T) {
 	ff := FindFfmpeg()
 	if ff == nil {
@@ -402,10 +343,9 @@ func TestVideoInfoDecision(t *testing.T) {
 		return p
 	}
 	mkVideo("fast.mp4", "-movflags", "+faststart")
-	// 小非 faststart MP4（<32MB）→ direct，并触发后台 faststart 预热
+	// moov 在尾部（未规整）的小 MP4：仍 direct（浏览器顺序下载 moov 后即可解析）
 	mkVideo("smallslow.mp4", "-movflags", "-faststart")
-	// 非 faststart 且 >32MB，覆盖「大文件也先直链、后台预热」路径：
-	// 1280x720 15s @20Mbps ≈ 37MB，ultrafast 生成快
+	// moov 在尾部且 >32MB，覆盖大文件直链路径
 	slow := filepath.Join(root, "slow.mp4")
 	slowGen := exec.Command(ff.ffmpegPath, "-hide_banner", "-loglevel", "error", "-y",
 		"-f", "lavfi", "-i", "testsrc2=s=1280x720:d=15:r=30",
@@ -437,9 +377,9 @@ func TestVideoInfoDecision(t *testing.T) {
 		maxDur float64
 	}{
 		// 播放决策：未开启冷门格式支持时一律 direct（浏览器原生解码直链）。
-		{"faststart mp4 → direct", "/fast.mp4", "direct", 1.5, 2.5},
-		{"小非 faststart mp4 → direct", "/smallslow.mp4", "direct", 1.5, 2.5},
-		{"非 faststart 大 mp4 → direct", "/slow.mp4", "direct", 14, 16},
+		{"moov 头部 mp4 → direct", "/fast.mp4", "direct", 1.5, 2.5},
+		{"moov 尾部小 mp4 → direct", "/smallslow.mp4", "direct", 1.5, 2.5},
+		{"moov 尾部大 mp4 → direct", "/slow.mp4", "direct", 14, 16},
 		{"mkv → direct", "/x.mkv", "direct", 1.5, 2.5},
 		{"hevc mp4 → direct", "/hevc.mp4", "direct", 1.5, 2.5},
 	}

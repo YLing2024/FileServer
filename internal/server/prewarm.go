@@ -35,7 +35,7 @@ type prewarmReq struct {
 
 // playbackState 直链播放活动跟踪：浏览器直链播放（direct 模式）时发出连续的
 // Range 请求，服务端记录最近一次活动时间。机械硬盘上任何并行的顺序读者
-// （moov 预热/缩略图抽帧/faststart 重封装）都会与播放抢磁头，把起播拖慢甚至
+// （moov 预热/缩略图抽帧）都会与播放抢磁头，把起播拖慢甚至
 // 卡死——播放绝对优先，其余任务一律让路。
 type playbackState struct {
 	mu         sync.Mutex

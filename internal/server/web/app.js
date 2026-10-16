@@ -19,8 +19,8 @@ const dec = decodeURIComponent;
 const pathParam = (p) => enc(p);
 
 // 所有 API 端点统一从这里构造 URL
-// dl=1：强制附件下载原始文件；fs=1：小文件 faststart 化后的直链播放
-const fileURL = (p, dl, fs) => '/api/file?path=' + pathParam(p) + (dl ? '&dl=1' : '') + (fs ? '&fs=1' : '');
+// dl=1：强制附件下载原始文件
+const fileURL = (p, dl) => '/api/file?path=' + pathParam(p) + (dl ? '&dl=1' : '');
 const thumbURL = (p, w, h) => `/api/thumb?path=${pathParam(p)}&w=${w || 256}&h=${h || 256}`;
 const zipURL = (p) => '/api/zip?path=' + pathParam(p);
 const listURL = (p, sort, order, limit, offset) => `/api/list?path=${pathParam(p)}&sort=${sort}&order=${order}&limit=${limit || ''}&offset=${offset || 0}`;

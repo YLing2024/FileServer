@@ -18,9 +18,9 @@ FileServer 是一个面向局域网的单文件文件服务器，核心场景是
 ```
 cmd/fileserver/main.go      入口：参数解析、单实例、启动
 internal/server/
-├── server.go       HTTP 路由、目录列表/文件下载/zip/搜索、视频播放决策、冷门格式开关、faststart 缓存
+├── server.go       HTTP 路由、目录列表/文件下载/zip/搜索、视频播放决策、冷门格式开关
 ├── hls.go          HLS 会话管理（copy/转码、分片、EVENT→VOD、abandon、进程强杀）
-├── ffmpeg.go       ffmpeg 查找、GPU 编码器探测、服务端抽帧、faststart 重封装、媒体探测
+├── ffmpeg.go       ffmpeg 查找、GPU 编码器探测、服务端抽帧、媒体探测
 ├── thumb.go        缩略图缓存（内存 LRU + 磁盘 + 失败记忆 + 忙碌计数）、冷门格式服务端抽帧
 └── web/            内嵌前端（原生 HTML/CSS/JS，无构建；Go embed.FS）
 internal/platform/  Windows 平台设施（Job Object 防孤儿进程）
@@ -33,10 +33,9 @@ internal/qrcode/    终端二维码
 - ffmpeg/ffprobe 以子进程方式按需启动：
   - 冷门格式缩略图抽帧：`BELOW_NORMAL_PRIORITY_CLASS` 低优先级，20s 超时；
   - HLS 转码：GPU 编码器优先（nvenc/amf/qsv 启动时实测），CPU 兜底；
-  - faststart 重封装：大文件低优先级、10 分钟超时；
-  - **防孤儿**：子进程挂到 Windows Job Object（`KillOnParentExit`，句柄不可继承），
-    服务退出即连带终止；异常情况再以 `taskkill /F /T` 兜底（仅 ctx 取消后 5s 未退时，
-    或 abandon 时立即强杀）。
+  - **防孤儿**：Windows 侧子进程挂到 Job Object（`KillOnParentExit`，句柄不可继承），
+    服务退出即连带终止；POSIX 侧子进程独立成进程组，终止时整组 `kill(-pgid)`，
+    并在服务启动时清理上次异常退出遗留的孤儿（见 platform 与 `procs.go`）。
 - 单实例：端口占用失败即提示退出（端口默认 8080，被占用自动 +1 递增）。
 
 ## 4. 请求数据流
@@ -47,7 +46,7 @@ internal/qrcode/    终端二维码
  ├─ GET /api/thumb-src?path=   视频抽帧源（截短的合法 MP4：moov+样本区，≤16MB）
  ├─ GET /api/thumb?path=..     图片缩略图 + 冷门格式服务端抽帧 JPEG
  ├─ GET /api/video-info?path=  播放决策（毫秒级，不碰 ffprobe）
- ├─ GET /api/file?path=&fs=1   直链播放（Range 断点续传）
+ ├─ GET /api/file?path=&dl=1   直链播放（Range 断点续传）
  ├─ GET /api/hls?path=&f=...   HLS 分片（copy/转码，EVENT→VOD）
  ├─ POST /api/settings/ffmpeg  冷门格式支持动态开关（前端工具栏按钮）
  └─ GET /api/zip?path=         目录打包下载
@@ -63,7 +62,6 @@ internal/qrcode/    终端二维码
 | HLS 转码/分片 | copy 4 / 转码 2 | 最高优先级 |
 | 视频缩略图（常规 MP4/WebM 浏览器抽帧） | 浏览器内 3 路 | 点开视频瞬间前端中止在途抽帧 + 暂停新任务 |
 | 冷门格式服务端抽帧 | 2 路（低优先级） | 不抢播放 |
-| faststart 重封装 | 每文件单飞 | 播放进行时等待 |
 | 图片缩略图（Go 原生解码） | 4 路 | — |
 
 实现要点：
@@ -91,7 +89,7 @@ internal/qrcode/    终端二维码
 4. **缩略图分工**：常规 MP4/WebM 用浏览器抽帧（零服务端成本）；冷门格式在开启
    冷门格式支持时由服务端 ffmpeg 抽帧（低优先级、2 路并发、磁盘缓存），
    关闭时保持图标（不下载、不占资源）。
-5. **缓存全在服务目录内**：`.FileServer\`（thumb/ hls/ faststart/），不写系统目录。
+5. **缓存全在服务目录内**：`.FileServer\`（thumb/ hls/），不写系统目录。
    旧版本遗留的 `.FileServer\backup\` 为历史原文件备份，FileServer 不再写入或清理，
    请用 mp4norm 处理或手工恢复。
 6. **前端无构建**：原生 JS + embed.FS，改前端即改 Go 代码重新编译。

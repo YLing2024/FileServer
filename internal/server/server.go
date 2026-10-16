@@ -45,12 +45,11 @@ type Server struct {
 	deps deps       // 组件句柄（缩略图缓存 / ffmpeg / HLS 管理器）
 	sem  semaphores // 并发信号量
 
-	list      listCache      // 目录列表短缓存（返回/翻页秒开）
-	layouts   layoutCache    // MP4 顶层布局缓存（thumb-src 抽帧源用）
-	faststart faststartState // 小文件 faststart 重封装：缓存目录 + 单飞防重 + 测试钩子
+	list    listCache   // 目录列表短缓存（返回/翻页秒开）
+	layouts layoutCache // MP4 顶层布局缓存（thumb-src 抽帧源用）
 
 	pw      *prewarmState  // moov 预读预热（机械硬盘冷读提速）
-	pb      *playbackState // 直链播放活动跟踪（预热/重封装据此让路）
+	pb      *playbackState // 直链播放活动跟踪（预热据此让路）
 	started time.Time
 }
 
@@ -82,9 +81,6 @@ func New(root string, opts Options) *Server {
 		base = filepath.Join(os.TempDir(), "FileServer")
 		_ = os.MkdirAll(base, 0o755)
 	}
-	fsDir := filepath.Join(base, "faststart")
-	_ = os.MkdirAll(fsDir, 0o755)
-	go cleanupOldFiles(fsDir, 7*24*time.Hour) // 清理 7 天前的重封装缓存
 
 	// 进程组跟踪：清理上次异常退出遗留的 ffmpeg/ffprobe 孤儿（POSIX）。
 	procs := newProcTracker(base)
@@ -114,31 +110,12 @@ func New(root string, opts Options) *Server {
 			img:     make(chan struct{}, thumbImgMaxConc),
 			ffThumb: make(chan struct{}, ffThumbMaxConc),
 		},
-		faststart: faststartState{dir: fsDir},
-		started:   time.Now(),
-		pw:        &prewarmState{warmed: make(map[string]time.Time)},
-		pb:        &playbackState{},
+		started: time.Now(),
+		pw:      &prewarmState{warmed: make(map[string]time.Time)},
+		pb:      &playbackState{},
 	}
 	srv.cfg.transcodeEnabled.Store(opts.FFmpeg && ff != nil && ff.Available())
 	return srv
-}
-
-// cleanupOldFiles 删除 dir 下超过 maxAge 的文件（启动时调用一次）
-func cleanupOldFiles(dir string, maxAge time.Duration) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-	cutoff := time.Now().Add(-maxAge)
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		p := filepath.Join(dir, e.Name())
-		if info, err := e.Info(); err == nil && info.ModTime().Before(cutoff) {
-			_ = os.Remove(p)
-		}
-	}
 }
 
 // Close 释放资源（终止 HLS 转码进程）
