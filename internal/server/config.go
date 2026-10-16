@@ -10,6 +10,8 @@ type config struct {
 	auth    string // 可选口令 "user:pass"
 	verbose bool
 
+	textMaxBytes int64 // 可编辑文本大小上限（字节）
+
 	// transcodeEnabled：冷门格式（MKV/RMVB/HEVC 等）在线转码播放 + 服务端抽帧缩略图。
 	// 默认跟随 --ffmpeg 参数，可在前端设置面板动态切换（POST /api/settings/ffmpeg）。
 	transcodeEnabled atomic.Bool

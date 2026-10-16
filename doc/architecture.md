@@ -49,6 +49,7 @@ internal/qrcode/    终端二维码
  ├─ GET /api/file?path=&dl=1   直链播放（Range 断点续传）
  ├─ GET /api/hls?path=&f=...   HLS 分片（copy/转码，EVENT→VOD）
  ├─ POST /api/settings/ffmpeg  冷门格式支持动态开关（前端工具栏按钮）
+ ├─ GET/POST /api/text[/new]   文本预览/编辑保存/新建（白名单 + 原子写 + 版本校验）
  └─ GET /api/zip?path=         目录打包下载
 ```
 

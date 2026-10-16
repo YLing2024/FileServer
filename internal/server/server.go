@@ -55,10 +55,11 @@ type Server struct {
 
 // Options 服务器选项
 type Options struct {
-	Hidden  bool
-	Auth    string
-	Verbose bool
-	FFmpeg  bool // 开启冷门格式（MKV/RMVB/HEVC 等）的在线转码播放 + 服务端缩略图
+	Hidden       bool
+	Auth         string
+	Verbose      bool
+	FFmpeg       bool  // 开启冷门格式（MKV/RMVB/HEVC 等）的在线转码播放 + 服务端缩略图
+	TextMaxBytes int64 // 可编辑文本大小上限（0 用默认 2 MiB）
 }
 
 // New 创建文件服务器
@@ -96,10 +97,11 @@ func New(root string, opts Options) *Server {
 
 	srv := &Server{
 		cfg: config{
-			root:    root,
-			hidden:  opts.Hidden,
-			auth:    opts.Auth,
-			verbose: opts.Verbose,
+			root:         root,
+			hidden:       opts.Hidden,
+			auth:         opts.Auth,
+			verbose:      opts.Verbose,
+			textMaxBytes: opts.TextMaxBytes,
 		},
 		deps: deps{
 			thumbs: NewThumbCache(root),
@@ -115,6 +117,9 @@ func New(root string, opts Options) *Server {
 		pb:      &playbackState{},
 	}
 	srv.cfg.transcodeEnabled.Store(opts.FFmpeg && ff != nil && ff.Available())
+	if srv.cfg.textMaxBytes <= 0 {
+		srv.cfg.textMaxBytes = textMaxDefaultBytes
+	}
 	return srv
 }
 
@@ -139,6 +144,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/prewarm", s.handlePrewarm)
 	mux.HandleFunc("GET /api/zip", s.handleZip)
 	mux.HandleFunc("GET /api/search", s.handleSearch)
+	mux.HandleFunc("GET /api/text", s.handleTextGet)
+	mux.HandleFunc("POST /api/text", s.handleTextSave)
+	mux.HandleFunc("POST /api/text/new", s.handleTextNew)
 	mux.HandleFunc("POST /api/settings/ffmpeg", s.handleSetFFmpeg)
 	// 根路径兜底注册为任意方法：SPA 仅需 GET，但这样未匹配的旧 POST 接口
 	// 会落到前端文件服务并返回 404，而不是被 net/http 以「方法不允许」回成 405。

@@ -101,6 +101,37 @@ moov 预读预热：把 MP4 头部/尾部最多 8MB 顺序读进 OS 缓存（512
 - 目录搜索范围 = 当前目录及子目录；条目带 `_searchPath` 供前端定位。
 - 前端 320ms 防抖后调用。
 
+## GET /api/text?path=
+
+读取文本内容与版本标识，供编辑态使用。仅对白名单扩展名开放。
+
+- 白名单（小写，含点）与大小上限由 `/api/info` 的 `text_exts` / `text_max_bytes` 下发；
+  默认上限 2 MiB（`--text-max-bytes` 可配）。
+- 成功（可编辑）：`{path, content, size, mtime, version, editable:true, max_bytes}`
+- 超过上限：`200 {editable:false, reason:"too_large", size, max_bytes}`（不返回内容）。
+- 扩展名不在白名单：`403`；路径不存在/隐藏：`404`。
+- `version` = `mtime(ns)-size`，写请求必须回传，用于并发防覆盖。
+
+## POST /api/text
+
+保存已有文本文件（原子写 + 版本校验）。
+
+- 请求体：`{path, content, version}`。
+- 成功：`200 {path, size, mtime, version}`。
+- 版本不匹配（他人已改动）：`409`；扩展名不在白名单：`403`。
+- 目录/文件只读（无写权限位）：`403`；内容超上限：`413`。
+- 副作用：原子替换目标文件（同目录临时文件 + rename），保留原权限位；
+  失败不留临时文件残留；成功后失效目录列表缓存。
+
+## POST /api/text/new
+
+在指定目录内新建文本文件，不覆盖已存在文件。
+
+- 请求体：`{dir, name, content}`；`name` 不得含路径分隔符或 `..`。
+- 成功：`200 {path, size, mtime, version}`；扩展名不在白名单：`403`。
+- 同名文件已存在：`409`；目录只读：`403`；内容超上限：`413`。
+- 副作用：`O_EXCL` 占位确保不覆盖，再原子写入。
+
 ## GET /api/zip?path=
 
 目录打包下载（zip 流式，含子目录）。

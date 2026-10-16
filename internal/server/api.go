@@ -30,13 +30,15 @@ func (s *Server) handleSetFFmpeg(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 	ffavail := s.deps.ff != nil && s.deps.ff.Available()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"name":         "FileServer",
-		"ffmpeg":       ffavail,
-		"hls":          s.cfg.transcodeEnabled.Load(), // 冷门格式在线转码播放（可前端动态开关）
-		"version":      version.Version,
-		"kinds":        kindExtMap(), // 统一扩展名→类型映射（前端不再自维护）
-		"search_limit": searchMaxLimit,
-		"list_limit":   listMaxLimit,
+		"name":           "FileServer",
+		"ffmpeg":         ffavail,
+		"hls":            s.cfg.transcodeEnabled.Load(), // 冷门格式在线转码播放（可前端动态开关）
+		"version":        version.Version,
+		"kinds":          kindExtMap(), // 统一扩展名→类型映射（前端不再自维护）
+		"search_limit":   searchMaxLimit,
+		"list_limit":     listMaxLimit,
+		"text_exts":      editableExtList(),  // 可新建/编辑的文本扩展名白名单
+		"text_max_bytes": s.cfg.textMaxBytes, // 可编辑文本大小上限
 	})
 }
 

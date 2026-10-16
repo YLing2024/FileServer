@@ -77,7 +77,7 @@ func main() {
 		ips = server.LanIPs()
 	}
 
-	srv := server.New(rootAbs, server.Options{Hidden: cfg.Hidden, Auth: cfg.Auth, Verbose: cfg.Verbose, FFmpeg: cfg.FFmpeg})
+	srv := server.New(rootAbs, server.Options{Hidden: cfg.Hidden, Auth: cfg.Auth, Verbose: cfg.Verbose, FFmpeg: cfg.FFmpeg, TextMaxBytes: cfg.TextMax})
 	handler := srv.Handler()
 
 	// ---- 控制台输出 ----

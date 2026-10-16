@@ -18,6 +18,7 @@ type Config struct {
 	Hidden  bool   // FILESERVER_HIDDEN
 	FFmpeg  bool   // FILESERVER_FFMPEG
 	Auth    string // FILESERVER_AUTH
+	TextMax int64  // FILESERVER_TEXT_MAX_BYTES
 	Verbose bool
 	NoQR    bool
 	Version bool
@@ -41,6 +42,8 @@ func parseConfig(args []string) *Config {
 		"开启冷门格式（MKV/RMVB/HEVC 等）在线转码播放与服务端缩略图（需 exe 旁 ffmpeg；有性能代价；环境变量 FILESERVER_FFMPEG）")
 	fs.StringVar(&cfg.Auth, "auth", os.Getenv("FILESERVER_AUTH"),
 		"可选访问口令 user:pass（环境变量 FILESERVER_AUTH）")
+	fs.Int64Var(&cfg.TextMax, "text-max-bytes", envInt64("FILESERVER_TEXT_MAX_BYTES", 0),
+		"可编辑文本大小上限（字节，默认 2097152=2MiB；环境变量 FILESERVER_TEXT_MAX_BYTES）")
 	fs.BoolVar(&cfg.Verbose, "v", false, "详细访问日志")
 	fs.BoolVar(&cfg.NoQR, "no-qr", false, "不在终端显示地址二维码")
 	fs.BoolVar(&cfg.Version, "version", false, "打印版本信息后退出")
@@ -69,6 +72,19 @@ func envBool(name string) bool {
 	default:
 		return false
 	}
+}
+
+// envInt64 读取 64 位整型环境变量，未设置/非法时用默认值。
+func envInt64(name string, def int64) int64 {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return def
+	}
+	return n
 }
 
 // envString 读取环境变量并去除首尾空白，未设置为空串。

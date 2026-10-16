@@ -494,6 +494,43 @@ tr:hover .row-act { opacity: 1; }
 .pv-hint { text-align: center; padding: 60px 20px; color: var(--text-3); font-size: 14px; }
 .pv-hint .btn { margin-top: 16px; }
 
+/* 文本编辑（可编辑白名单） */
+.pv-tools { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.pv-tools .pv-status { color: var(--text-3); font-size: 13px; margin-right: auto; }
+.pv-editor {
+  width: 100%; min-height: 70vh; resize: vertical;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 20px 24px;
+  font-family: var(--mono); font-size: 13px; line-height: 1.65;
+  color: var(--text); outline: none;
+}
+.pv-editor:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+/* ============ 通用对话框（新建文本等） ============ */
+
+.modal {
+  position: fixed; inset: 0; z-index: 110;
+  background: var(--lb-bg); backdrop-filter: blur(4px);
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.modal-box {
+  width: min(560px, 100%); background: var(--bg-soft);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 22px 24px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.modal-box h3 { margin: 0; font-size: 16px; color: var(--text); }
+.modal-field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--text-3); }
+.modal-field input, .modal-box textarea {
+  font-family: var(--mono); font-size: 13.5px; color: var(--text);
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 8px; padding: 9px 12px; outline: none;
+}
+.modal-box textarea { min-height: 160px; resize: vertical; }
+.modal-field input:focus, .modal-box textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.modal-actions { display: flex; justify-content: flex-end; gap: 10px; }
+.modal-error { margin: 0; color: var(--danger); font-size: 13px; }
+
 /* ============ 灯箱 ============ */
 
 .lightbox {

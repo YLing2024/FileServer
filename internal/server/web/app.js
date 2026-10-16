@@ -93,6 +93,8 @@ const state = {
   hls: false,         // 服务端是否支持 HLS 转码（决定 hls.js 预加载）
   kinds: null,        // 服务端下发的扩展名→类型映射（4.1，前端不再各自维护）
   searchLimit: 1000,  // 搜索条数上限（4.5，从 /api/info 取服务端值）
+  textExts: null,     // 可新建/编辑的文本扩展名集合（Set，从 /api/info 取）
+  textMaxBytes: 2 * 1024 * 1024, // 可编辑文本大小上限（从 /api/info 取）
   hasMore: false,     // 目录列表是否还有更多页（服务端分页 3.1）
   listSeq: 0,         // 列表加载序列号（竞态保护）
 };
@@ -870,34 +872,168 @@ function renderPreview(path, entry) {
   } else if (kind === 'pdf') {
     main.innerHTML = `<embed class="pv-embed" src="${esc(fileURL(path))}" type="application/pdf">`;
   } else if (kind === 'text' || kind === 'code') {
-    // 深链/刷新时 entry.size 为 0（未知），先经 /api/list 取真实 size 再决定，
-    // 避免 >2MB 的大文本被绕过防护全量拉取（2.11）
-    const doPreview = (size) => {
-      // size<=0（未获取到/目录超限查不到）视为不可预览，走下载提示：
-      // 避免「未获取到 → -1 → -1>2MB 为假 → 绕过 2MB 防护全量拉取大文本」。
-      if (size <= 0 || size > 2 * 1024 * 1024) {
-        pvHint(main, size <= 0 ? '无法确定文件大小，不进行在线预览' : '文件较大（超过 2MB），不进行在线预览', path, entry.name);
-      } else {
-        main.innerHTML = '<pre class="pv-text">加载中…</pre>';
-        const seq = pvSeq; // 预览序号：迟到响应不覆盖新预览内容
-        fetch(fileURL(path))
-          .then((r) => r.text())
-          .then((t) => {
-            if (seq !== pvSeq) return; // 已打开其他预览，丢弃
-            const el = main.querySelector('.pv-text');
-            if (el) el.textContent = t;
-          })
-          .catch(() => {
-            if (seq !== pvSeq) return;
-            main.innerHTML = '<div class="pv-hint">文本加载失败</div>';
-          });
-      }
-    };
-    if (entry.size > 0) doPreview(entry.size);
-    else getEntrySize(path).then(doPreview);
+    renderTextPreview(main, path, entry);
   } else {
     pvHint(main, '该文件类型不支持在线预览', path, entry.name);
   }
+}
+
+// textExtOf 返回小写扩展名（含点）；无扩展名返回空串。
+function textExtOf(name) {
+  const dot = name.lastIndexOf('.');
+  return dot > 0 ? name.slice(dot).toLowerCase() : '';
+}
+
+// textEditableExt 该文件是否在服务端下发的可编辑白名单内。
+function textEditableExt(name) {
+  return !!(state.textExts && state.textExts.has(textExtOf(name)));
+}
+
+// renderTextPreview 文本/代码预览：白名单内且未超限时提供「编辑」；否则只读预览。
+function renderTextPreview(main, path, entry) {
+  const seq = pvSeq;
+  if (textEditableExt(entry.name)) {
+    main.innerHTML = '<pre class="pv-text">加载中…</pre>';
+    fetch('/api/text?path=' + pathParam(path))
+      .then((r) => r.json().then((j) => ({ ok: r.ok, j })))
+      .then(({ ok, j }) => {
+        if (seq !== pvSeq) return;
+        if (!ok) {
+          main.innerHTML = '';
+          pvHint(main, j.error || '无法编辑该文件', path, entry.name);
+          return;
+        }
+        if (!j.editable) {
+          // 超过大小上限：只做只读预览，不进入编辑态
+          renderReadonlyText(main, path, entry, seq, '文件较大（超过 ' + fmtSize(j.max_bytes) + '），仅可预览');
+          return;
+        }
+        renderTextEditor(main, path, entry, j);
+      })
+      .catch(() => {
+        if (seq !== pvSeq) return;
+        main.innerHTML = '<div class="pv-hint">文本加载失败</div>';
+      });
+  } else {
+    renderReadonlyText(main, path, entry, seq, '');
+  }
+}
+
+// renderReadonlyText 只读文本预览：经 /api/file 拉取（沿用既有 2MB 预览防护）。
+function renderReadonlyText(main, path, entry, seq, note) {
+  const doPreview = (size) => {
+    if (seq !== pvSeq) return;
+    if (size <= 0 || size > 2 * 1024 * 1024) {
+      pvHint(main, size <= 0 ? '无法确定文件大小，不进行在线预览' : '文件较大（超过 2MB），不进行在线预览', path, entry.name);
+      return;
+    }
+    if (note) {
+      const tip = document.createElement('div');
+      tip.className = 'pv-status';
+      tip.textContent = note;
+      main.innerHTML = '';
+      main.appendChild(tip);
+    } else {
+      main.innerHTML = '<pre class="pv-text">加载中…</pre>';
+    }
+    fetch(fileURL(path))
+      .then((r) => r.text())
+      .then((t) => {
+        if (seq !== pvSeq) return;
+        const pre = document.createElement('pre');
+        pre.className = 'pv-text';
+        pre.textContent = t;
+        main.appendChild(pre);
+      })
+      .catch(() => {
+        if (seq !== pvSeq) return;
+        main.innerHTML = '<div class="pv-hint">文本加载失败</div>';
+      });
+  };
+  if (entry.size > 0) doPreview(entry.size);
+  else getEntrySize(path).then(doPreview);
+}
+
+// renderTextEditor 可编辑文本：查看/编辑切换 + 保存（带版本校验，409 时载入最新内容）。
+function renderTextEditor(main, path, entry, info) {
+  main.innerHTML = '';
+  const bar = document.createElement('div');
+  bar.className = 'pv-tools';
+  const status = document.createElement('span');
+  status.className = 'pv-status';
+  const btnEdit = document.createElement('button');
+  btnEdit.className = 'btn primary';
+  const view = document.createElement('pre');
+  view.className = 'pv-text';
+  let ta = null;
+  let editing = false;
+
+  const baseStatus = () => fmtSize(info.size) + (info.mtime ? ' · ' + fmtTime(info.mtime) : '');
+  const showView = () => {
+    editing = false;
+    if (ta) { ta.remove(); ta = null; }
+    view.style.display = '';
+    view.textContent = info.content;
+    btnEdit.textContent = '编辑';
+    btnEdit.classList.add('primary');
+    status.textContent = baseStatus();
+  };
+  const showEdit = () => {
+    editing = true;
+    view.style.display = 'none';
+    ta = document.createElement('textarea');
+    ta.className = 'pv-editor';
+    ta.value = info.content;
+    ta.spellcheck = false;
+    main.appendChild(ta);
+    ta.focus();
+    btnEdit.textContent = '保存';
+    btnEdit.classList.remove('primary');
+    status.textContent = '编辑中 · 原文件 ' + baseStatus();
+  };
+
+  const reload = async () => {
+    try {
+      const j = await (await fetch('/api/text?path=' + pathParam(path))).json();
+      if (j && j.editable) {
+        info.content = j.content; info.version = j.version; info.size = j.size; info.mtime = j.mtime;
+      }
+    } catch (_) { /* 重新拉取失败时保留本地内容 */ }
+  };
+
+  btnEdit.addEventListener('click', async () => {
+    if (!editing) { showEdit(); return; }
+    btnEdit.disabled = true;
+    try {
+      const r = await fetch('/api/text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path, content: ta.value, version: info.version }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { const e = new Error(j.error || '保存失败'); e.status = r.status; throw e; }
+      info.content = ta.value; info.version = j.version; info.size = j.size; info.mtime = j.mtime;
+      toast('已保存', false);
+      showView();
+    } catch (e) {
+      if (e.status === 409) {
+        toast('文件已被其他人修改，请刷新后重试', true);
+        await reload();
+        if (ta) ta.value = info.content;
+        status.textContent = '检测到他人修改，已载入最新内容，请重新编辑';
+      } else {
+        toast(e.message, true);
+      }
+    } finally {
+      btnEdit.disabled = false;
+    }
+  });
+
+  bar.appendChild(status);
+  bar.appendChild(btnEdit);
+  main.appendChild(bar);
+  main.appendChild(view);
+  showView();
 }
 
 // pvHint 提示 + 下载按钮（动态绑定事件，避免文件名注入 inline onclick）
@@ -1477,6 +1613,50 @@ $('btnFFmpeg').addEventListener('click', async () => {
   }
 });
 
+/* ---------- 新建文本文件 ---------- */
+
+function showNewFileError(msg) {
+  const el = $('nfError');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+function closeNewFile() { $('newFile').classList.add('hidden'); }
+
+$('btnNewText').addEventListener('click', () => {
+  $('nfError').classList.add('hidden');
+  $('nfName').value = '';
+  $('nfContent').value = '';
+  $('newFile').classList.remove('hidden');
+  $('nfName').focus();
+});
+$('nfCancel').addEventListener('click', closeNewFile);
+$('newFile').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeNewFile();
+});
+$('nfCreate').addEventListener('click', async () => {
+  const name = $('nfName').value.trim();
+  if (!name) { showNewFileError('请输入文件名'); return; }
+  const btn = $('nfCreate');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/text/new', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dir: state.path, name, content: $('nfContent').value }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || '创建失败');
+    closeNewFile();
+    toast('已创建 ' + name, false);
+    if (state.searching) exitSearch();
+    else loadList(state.path);
+  } catch (e) {
+    showNewFileError(e.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 let loadMoreBusy = false; // 加载更多 in-flight 保护：防双击并发同 offset 重复条目
 $('btnLoadMore').addEventListener('click', async () => {
   if (state.searching || loadMoreBusy) return;
@@ -1569,6 +1749,8 @@ window.addEventListener('popstate', () => {
     .then((info) => {
       if (info.kinds) state.kinds = info.kinds; // 统一扩展名映射（4.1）
       if (info.search_limit) state.searchLimit = info.search_limit; // 搜索上限（4.5）
+      if (Array.isArray(info.text_exts)) state.textExts = new Set(info.text_exts); // 可编辑白名单
+      if (info.text_max_bytes) state.textMaxBytes = info.text_max_bytes; // 可编辑上限
       const ffavail = !!info.ffmpeg;
       // 用户上次的开关选择（localStorage）优先于服务端默认（--ffmpeg 参数）
       const saved = localStorage.getItem('fs.hls');
