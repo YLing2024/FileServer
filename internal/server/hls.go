@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/YLing2024/FileServer/internal/platform"
 )
 
 // ============================================================
@@ -58,6 +60,7 @@ type HlsManager struct {
 	copySem  chan struct{}          // copy 重封装并发（磁盘速任务，秒级完成）
 	transSem chan struct{}          // 转码并发（GPU/CPU 长任务）
 	closed   bool
+	procs    *procTracker // 子进程组跟踪（可为 nil）
 }
 
 type hlsSession struct {
@@ -154,13 +157,20 @@ func (m *HlsManager) cleanupLoop() {
 func (m *HlsManager) Close() {
 	m.mu.Lock()
 	m.closed = true
+	sessions := make([]*hlsSession, 0, len(m.sessions))
 	for _, s := range m.sessions {
+		sessions = append(sessions, s)
 		if s.cancel != nil && !s.stopped {
 			s.stopped = true
 			s.cancel()
 		}
 	}
 	m.mu.Unlock()
+	// 取消（CommandContext Kill）是针对单进程的；这里再对每个会话的进程组
+	// 补一刀，确保 ffmpeg 派生的子进程一并退出，服务退出后不留孤儿。
+	for _, s := range sessions {
+		platform.TerminateTree(s.cmd)
+	}
 }
 
 // Active 是否有正在运行的转码会话（预热 IO 让路判定用）
@@ -197,11 +207,9 @@ func (m *HlsManager) Abandon(key string) {
 		s.cancel()
 	}
 	// 立即强杀该会话的 ffmpeg 进程（GPU 转码偶发卡死时 Kill 不生效，
-	// 若等 runOnce 内的 5s taskkill 兜底，期间进程持续占资源；
+	// 若等 runOnce 内的 5s 兜底，期间进程持续占资源；
 	// 且 fallback 可能已起第二个进程——一并清理防残留）。
 	cmd := s.cmd
 	m.mu.Unlock()
-	if cmd != nil && cmd.Process != nil {
-		_ = exec.Command("taskkill", "/F", "/T", "/PID", strconvItoa(cmd.Process.Pid)).Run()
-	}
+	platform.TerminateTree(cmd)
 }

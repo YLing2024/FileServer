@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"time"
 
@@ -15,22 +14,28 @@ import (
 
 // runFFmpeg 启动 ffmpeg 并等待结束；子进程随主进程终止（防孤儿）。
 // lowPriority=true 时以低于正常优先级启动（缩略图抽帧等后台任务，
-// 避免与用户点开的播放/转码链路抢 CPU/IO）。
-func runFFmpeg(ctx context.Context, path string, args []string, lowPriority bool) error {
+// 避免与用户点开的播放/转码链路抢 CPU/IO）。procs 可为 nil。
+func runFFmpeg(ctx context.Context, path string, args []string, lowPriority bool, procs *procTracker) error {
 	cmd := exec.CommandContext(ctx, path, args...)
 	if lowPriority {
 		// 平台差异隔离在 internal/platform：Windows 上设 BELOW_NORMAL，
 		// 其余平台为 no-op（见 platform.SetLowPriority）。
 		platform.SetLowPriority(cmd)
 	}
+	// POSIX 上让子进程独立成组，便于取消/超时后整组终止（Windows 无操作）。
+	platform.SetProcessGroup(cmd)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("启动失败: %v", err)
 	}
 	platform.KillOnParentExit(cmd)
+	if procs != nil && cmd.Process != nil {
+		procs.register(cmd.Process.Pid)
+		defer procs.unregister(cmd.Process.Pid)
+	}
 	// 超时/取消后 CommandContext 会 Kill；个别情况 Kill 不生效，
-	// 待 ctx 取消后再等 5 秒仍未退出才 taskkill /F /T 强制终止（防孤儿抽帧占盘）。
+	// 待 ctx 取消后再等 5 秒仍未退出才强杀整棵进程树（防孤儿抽帧占盘）。
 	// 注意：兜底必须在 ctx.Done() 之后——盲目 5 秒强杀会把正常慢文件误杀。
 	waitCh := make(chan error, 1)
 	go func() { waitCh <- cmd.Wait() }()
@@ -41,9 +46,7 @@ func runFFmpeg(ctx context.Context, path string, args []string, lowPriority bool
 		select {
 		case waitErr = <-waitCh:
 		case <-time.After(5 * time.Second):
-			if cmd.Process != nil {
-				_ = exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(cmd.Process.Pid)).Run()
-			}
+			platform.TerminateTree(cmd)
 			waitErr = <-waitCh
 		}
 	}
@@ -74,7 +77,7 @@ func (f *Ffmpeg) ExtractFrame(ctx context.Context, src, dst string) error {
 		"-q:v", "4",
 		"-f", "image2", dst,
 	}
-	if err := runFFmpeg(ctx, f.ffmpegPath, args, true); err != nil {
+	if err := runFFmpeg(ctx, f.ffmpegPath, args, true, f.procs); err != nil {
 		_ = os.Remove(dst)
 		return err
 	}
@@ -107,7 +110,7 @@ func (f *Ffmpeg) Faststart(ctx context.Context, src, dst string, size int64) err
 		"-movflags", "+faststart",
 		"-f", "mp4", tmp,
 	}
-	if err := runFFmpeg(cctx, f.ffmpegPath, args, lowPri); err != nil {
+	if err := runFFmpeg(cctx, f.ffmpegPath, args, lowPri, f.procs); err != nil {
 		_ = os.Remove(tmp)
 		return err
 	}

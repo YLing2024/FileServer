@@ -12,6 +12,7 @@ import (
 // 内置默认与既有版本完全一致（端口 8080 起自增、口令关、ffmpeg 关、二维码开）。
 type Config struct {
 	Port    int    // FILESERVER_PORT
+	Host    string // FILESERVER_HOST
 	Dir     string // FILESERVER_DIR
 	Browser bool
 	Hidden  bool   // FILESERVER_HIDDEN
@@ -28,6 +29,8 @@ func parseConfig(args []string) *Config {
 	fs := flag.NewFlagSet("FileServer", flag.ExitOnError)
 	fs.IntVar(&cfg.Port, "port", envInt("FILESERVER_PORT", 0),
 		"监听端口（默认 8080，被占用自动递增；环境变量 FILESERVER_PORT）")
+	fs.StringVar(&cfg.Host, "host", envString("FILESERVER_HOST", ""),
+		"监听地址（默认 0.0.0.0，局域网可访问；设为 127.0.0.1 时仅本机/反代可访问；环境变量 FILESERVER_HOST）")
 	fs.StringVar(&cfg.Dir, "dir", os.Getenv("FILESERVER_DIR"),
 		"服务目录（默认 exe 所在目录；环境变量 FILESERVER_DIR）")
 	fs.BoolVar(&cfg.Browser, "browser", false,
@@ -66,4 +69,12 @@ func envBool(name string) bool {
 	default:
 		return false
 	}
+}
+
+// envString 读取环境变量并去除首尾空白，未设置为空串。
+func envString(name, def string) string {
+	if v := strings.TrimSpace(os.Getenv(name)); v != "" {
+		return v
+	}
+	return def
 }

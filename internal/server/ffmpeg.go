@@ -19,6 +19,7 @@ import (
 type Ffmpeg struct {
 	ffmpegPath  string
 	ffprobePath string
+	procs       *procTracker // 子进程组跟踪（服务异常退出后的孤儿清理，可为 nil）
 
 	durMu     sync.RWMutex
 	durations map[string]float64 // 时长元数据缓存：键 = 路径|大小|mtime 的 SHA1

@@ -6,6 +6,7 @@ package platform
 import (
 	"os/exec"
 	"runtime"
+	"strconv"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -133,4 +134,25 @@ func SetLowPriority(cmd *exec.Cmd) {
 		return
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x00004000}
+}
+
+// SetProcessGroup Windows 平台无操作：子进程树的生命周期由 Job Object 统一管理
+// （见 KillOnParentExit），无需进程组。
+func SetProcessGroup(cmd *exec.Cmd) {}
+
+// KillProcessGroup 在 Windows 上终止以 pid 为根的进程树
+// （taskkill /F /T 等价于 POSIX 的 kill(-pgid)）。
+func KillProcessGroup(pid int) error {
+	if pid <= 0 {
+		return nil
+	}
+	return exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(pid)).Run()
+}
+
+// TerminateTree 强杀 cmd 及其子进程树（POSIX 用进程组，Windows 用 taskkill /T）。
+func TerminateTree(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	_ = KillProcessGroup(cmd.Process.Pid)
 }

@@ -14,6 +14,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -52,14 +54,27 @@ func main() {
 		log.Fatalf("服务目录无效: %s", rootAbs)
 	}
 
+	// 监听地址（--host 默认 0.0.0.0：局域网扫码即用；127.0.0.1 时仅本机/反代可达）
+	host := cfg.Host
+	if host == "" {
+		host = "0.0.0.0"
+	}
 	// 监听端口（占用自动递增）
 	startPort := cfg.Port
 	if startPort <= 0 {
 		startPort = 8080
 	}
-	ln, actualPort, err := listenLoop(startPort)
+	ln, actualPort, err := listenLoop(host, startPort)
 	if err != nil {
 		log.Fatalf("无法监听端口: %v", err)
+	}
+
+	// 仅通配地址才枚举局域网网卡；绑定具体地址时只公布该地址，
+	// 避免打印一堆实际并未监听的地址。
+	wildcard := isWildcardHost(host)
+	var ips []string
+	if wildcard {
+		ips = server.LanIPs()
 	}
 
 	srv := server.New(rootAbs, server.Options{Hidden: cfg.Hidden, Auth: cfg.Auth, Verbose: cfg.Verbose, FFmpeg: cfg.FFmpeg})
@@ -70,29 +85,45 @@ func main() {
 	fmt.Println("│  文件服务器 FileServer                         │")
 	fmt.Println("└──────────────────────────────────────────────┘")
 	fmt.Printf("服务目录: %s\n", rootAbs)
-	fmt.Printf("本机访问: http://127.0.0.1:%d\n", actualPort)
-	ips := server.LanIPs()
-	if len(ips) == 0 {
-		fmt.Println("局域网访问: 未检测到局域网 IP（请检查网络连接）")
-	} else {
-		fmt.Println("局域网访问:")
-		for _, ip := range ips {
-			fmt.Printf("  →  http://%s:%d\n", ip, actualPort)
+	if wildcard {
+		fmt.Printf("本机访问: %s\n", httpURL("127.0.0.1", actualPort))
+		if len(ips) == 0 {
+			fmt.Println("局域网访问: 未检测到局域网 IP（请检查网络连接）")
+		} else {
+			fmt.Println("局域网访问:")
+			for _, ip := range ips {
+				fmt.Printf("  →  %s\n", httpURL(ip, actualPort))
+			}
 		}
+	} else {
+		fmt.Printf("监听地址: %s\n", host)
+		fmt.Printf("访问地址: %s\n", httpURL(host, actualPort))
 	}
 	fmt.Println("------------------------------------------------------------------")
 	fmt.Println("  手机/其他电脑连接同一 WiFi 后，在浏览器打开上面的局域网地址即可")
-	fmt.Println("  首次运行如弹出 Windows 防火墙提示，请勾选“专用网络”并允许")
+	if runtime.GOOS == "windows" {
+		fmt.Println("  首次运行如弹出 Windows 防火墙提示，请勾选“专用网络”并允许")
+	} else if runtime.GOOS == "darwin" {
+		fmt.Println("  首次运行如弹出“允许传入连接”防火墙提示，请点击允许")
+	}
 	fmt.Println("  按 Ctrl+C 或关闭本窗口即可停止服务")
 	fmt.Println("------------------------------------------------------------------")
 
 	// ---- 终端二维码 ----
 	if !cfg.NoQR {
-		printQRs(actualPort, ips)
+		qrHost := browserHost(host)
+		var addrs []qrAddr
+		addrs = append(addrs, qrAddr{"本机", httpURL(qrHost, actualPort)})
+		if wildcard {
+			for _, ip := range ips {
+				addrs = append(addrs, qrAddr{"局域网 " + ip, httpURL(ip, actualPort)})
+			}
+		}
+		printQRs(addrs)
 	}
 
 	if cfg.Browser {
-		go platform.OpenBrowser(fmt.Sprintf("http://127.0.0.1:%d", actualPort))
+		go platform.OpenBrowser(httpURL(browserHost(host), actualPort))
 	}
 
 	slog.Info("服务已启动", "dir", rootAbs, "port", actualPort)
@@ -135,10 +166,10 @@ func setupLogger(verbose bool) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 }
 
-// listenLoop 从 startPort 开始尝试监听，被占用则递增
-func listenLoop(startPort int) (net.Listener, int, error) {
+// listenLoop 在 host 上从 startPort 开始尝试监听，被占用则递增
+func listenLoop(host string, startPort int) (net.Listener, int, error) {
 	for i := 0; i < 20; i++ {
-		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", startPort+i))
+		ln, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(startPort+i)))
 		if err == nil {
 			return ln, startPort + i, nil
 		}
@@ -146,22 +177,40 @@ func listenLoop(startPort int) (net.Listener, int, error) {
 	return nil, 0, fmt.Errorf("%d-%d 端口均被占用", startPort, startPort+19)
 }
 
-// printQRs 为每个访问地址在终端渲染二维码（本机 + 所有局域网地址）。
-// 使用 Unicode 半块字符，手机扫屏即可打开对应地址。
-func printQRs(port int, ips []string) {
-	type addr struct {
-		label string
-		url   string
+// isWildcardHost 是否绑定到全部网卡（此时才枚举并公布局域网地址）。
+func isWildcardHost(host string) bool {
+	switch host {
+	case "", "0.0.0.0", "::", "[::]":
+		return true
 	}
-	var list []addr
-	list = append(list, addr{"本机", fmt.Sprintf("http://127.0.0.1:%d", port)})
-	for _, ip := range ips {
-		list = append(list, addr{"局域网 " + ip, fmt.Sprintf("http://%s:%d", ip, port)})
-	}
+	return false
+}
 
+// browserHost 供浏览器/二维码使用的可达主机：通配地址回落到回环。
+func browserHost(host string) string {
+	if isWildcardHost(host) {
+		return "127.0.0.1"
+	}
+	return host
+}
+
+// httpURL 拼接 http URL；IPv6 字面量交由 net.JoinHostPort 加方括号。
+func httpURL(host string, port int) string {
+	return "http://" + net.JoinHostPort(host, strconv.Itoa(port))
+}
+
+// qrAddr 控制台二维码的一个地址条目。
+type qrAddr struct {
+	label string
+	url   string
+}
+
+// printQRs 为每个访问地址在终端渲染二维码。
+// 使用 Unicode 半块字符，手机扫屏即可打开对应地址。
+func printQRs(addrs []qrAddr) {
 	fmt.Println()
 	fmt.Println("  ── 地址二维码（手机相机扫一扫即可打开） ──")
-	for _, a := range list {
+	for _, a := range addrs {
 		m, err := qrcode.Encode([]byte(a.url), qrcode.Medium)
 		if err != nil {
 			fmt.Printf("  [%s] 二维码生成失败: %v\n", a.label, err)

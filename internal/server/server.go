@@ -86,7 +86,17 @@ func New(root string, opts Options) *Server {
 	_ = os.MkdirAll(fsDir, 0o755)
 	go cleanupOldFiles(fsDir, 7*24*time.Hour) // 清理 7 天前的重封装缓存
 
+	// 进程组跟踪：清理上次异常退出遗留的 ffmpeg/ffprobe 孤儿（POSIX）。
+	procs := newProcTracker(base)
+	procs.reap()
+
 	ff := FindFfmpeg()
+	if ff != nil {
+		ff.procs = procs
+	}
+
+	hlsMgr := NewHlsManager(root)
+	hlsMgr.procs = procs
 
 	srv := &Server{
 		cfg: config{
@@ -98,7 +108,7 @@ func New(root string, opts Options) *Server {
 		deps: deps{
 			thumbs: NewThumbCache(root),
 			ff:     ff,
-			hls:    NewHlsManager(root),
+			hls:    hlsMgr,
 		},
 		sem: semaphores{
 			img:     make(chan struct{}, thumbImgMaxConc),

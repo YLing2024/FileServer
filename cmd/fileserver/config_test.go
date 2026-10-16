@@ -5,7 +5,7 @@ import "testing"
 func clearEnv(t *testing.T) {
 	t.Helper()
 	for _, k := range []string{
-		"FILESERVER_PORT", "FILESERVER_DIR", "FILESERVER_AUTH",
+		"FILESERVER_PORT", "FILESERVER_HOST", "FILESERVER_DIR", "FILESERVER_AUTH",
 		"FILESERVER_FFMPEG", "FILESERVER_HIDDEN",
 	} {
 		t.Setenv(k, "")
@@ -25,13 +25,14 @@ func TestParseConfigDefaults(t *testing.T) {
 // TestParseConfigEnvOverrides 断言环境变量作为默认值生效。
 func TestParseConfigEnvOverrides(t *testing.T) {
 	t.Setenv("FILESERVER_PORT", "9001")
+	t.Setenv("FILESERVER_HOST", "127.0.0.1")
 	t.Setenv("FILESERVER_DIR", "/srv/data")
 	t.Setenv("FILESERVER_AUTH", "user:pass")
 	t.Setenv("FILESERVER_FFMPEG", "true")
 	t.Setenv("FILESERVER_HIDDEN", "1")
 
 	cfg := parseConfig(nil)
-	if cfg.Port != 9001 || cfg.Dir != "/srv/data" || cfg.Auth != "user:pass" ||
+	if cfg.Port != 9001 || cfg.Host != "127.0.0.1" || cfg.Dir != "/srv/data" || cfg.Auth != "user:pass" ||
 		!cfg.FFmpeg || !cfg.Hidden {
 		t.Fatalf("环境变量未生效: %+v", cfg)
 	}

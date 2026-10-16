@@ -284,6 +284,8 @@ func (m *HlsManager) runOnce(ctx context.Context, s *hlsSession, ff *Ffmpeg, inf
 
 	cmd := exec.CommandContext(ctx, ff.ffmpegPath, args...)
 	cmd.Dir = s.dir
+	// POSIX：独立进程组，终止时整组带走（Windows 无操作，靠 Job Object）。
+	platform.SetProcessGroup(cmd)
 	s.cmd = cmd
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
@@ -326,8 +328,13 @@ func (m *HlsManager) runOnce(ctx context.Context, s *hlsSession, ff *Ffmpeg, inf
 	}
 	// 主进程被强杀（关窗口 X）时 ffmpeg 子进程一并终止，不留孤儿
 	platform.KillOnParentExit(cmd)
+	// POSIX：登记进程组，异常退出后的下次启动据此清理遗留孤儿。
+	if ff.procs != nil && cmd.Process != nil {
+		ff.procs.register(cmd.Process.Pid)
+		defer ff.procs.unregister(cmd.Process.Pid)
+	}
 	// 取消/超时后 CommandContext 会 Kill 子进程；个别情况（进程卡死磁盘 IO）
-	// Kill 可能不生效，待 ctx 取消后再等 5 秒仍未退出才 taskkill /F /T 强杀。
+	// Kill 可能不生效，待 ctx 取消后再等 5 秒仍未退出才强杀整棵进程树（平台函数）。
 	// 注意：兜底必须在 ctx.Done() 之后——转码是长任务，不能盲目限时。
 	waitCh := make(chan error, 1)
 	go func() { waitCh <- cmd.Wait() }()
@@ -338,9 +345,7 @@ func (m *HlsManager) runOnce(ctx context.Context, s *hlsSession, ff *Ffmpeg, inf
 		select {
 		case waitErr = <-waitCh:
 		case <-time.After(5 * time.Second):
-			if cmd.Process != nil {
-				_ = exec.Command("taskkill", "/F", "/T", "/PID", strconvItoa(cmd.Process.Pid)).Run()
-			}
+			platform.TerminateTree(cmd)
 			waitErr = <-waitCh
 		}
 	}
