@@ -201,3 +201,36 @@
 - 同步更新：`README.md`、`README.en.md`、`AGENTS.md`、`doc/*.md`（至少 architecture / api / security / cache / ffmpeg / video-pipeline / build-and-test）。
 - 不引入第三方依赖（现有 `golang.org/x/image` 是唯一例外）。
 - 完成后把「实现摘要 + §7 逐条自证原始输出 + 未做/存疑项」写入报告文件。
+
+---
+
+## 8. 复查发现的缺陷修复（2026-10-16 Hermes 独立验收，必须修）
+
+### F1 `password+totp` 引导页非原子提交（缺陷）
+
+- **现象（实测原始输出）**：`POST /api/auth/setup` 提交 `{"password":"<≥8位>","code":"000000"}`（错误验证码）→ 返回 `400 {"error":"验证码不正确"}`；
+  随后 `GET /api/auth/status` 变为 `configured=true, password_set=true, totp_bound=false, needs_setup=false`，
+  且此时 `POST /api/auth/login` **只带正确口令即返回 200**（TOTP 从未绑定，双因素实际未启用）。
+- **危害**：用户看到报错，却以为双因素已启用；引导页不再出现。
+- **要求**：引导提交必须**原子**——先校验全部必需因素（口令强度、验证码），全部通过后再一次性持久化（口令哈希 + TOTP 绑定 + 配置状态）。
+  任一步失败返回 `400`，**不得留下任何部分状态**：`status` 必须仍为 `needs_setup=true`，`password_set` 不得变 true，且后续仅凭口令登录必须 `401`。
+- **注意**：`--auth user:pass` / 环境变量预置口令的路径不受影响（那是预置，不是引导）。
+
+### F2 `/api/health` 需免鉴权（运维必需）
+
+- **现象**：`--auth-mode password` 下 `GET /api/health` 返回 `401`。
+- **危害**：外部探活（看门狗、nginx/反代健康检查、容器 healthcheck）无法匿名使用。
+- **要求**：认证开启时 `GET /api/health` 仍可**匿名**访问并返回 `200`（响应体维持现状字段，不得新增目录/文件/会话信息）。
+  其余 `/api/*`（含 `/api/info`、`/api/list`）维持现有 401 行为不变。
+
+### F3 引导绑定用过的验证码必须计入重放集合（缺陷）
+
+- **现象**：绑定 TOTP 成功时用的那个码，在同一 30 秒时间步内再次用于 `POST /api/auth/login` 仍返回 `200`。
+- **要求**：任何一次 TOTP 校验成功（引导绑定或登录）都必须把该时间步写入"已用"集合；同一步内同码再次使用一律 `401`。
+- **回归护栏**：窗口语义不得改变——当前步、±1 步可接受（未用过的码），±2 步拒绝。
+
+### 本轮纪律
+
+- `make check` 全绿；小步多次提交，英文 conventional commits；不得修改 git 身份或仓库级 git config；不引入第三方依赖。
+- 文档同步：`doc/api.md` 标注 `/api/health` 免鉴权；`doc/security.md` 说明引导的原子性与重放集合范围。
+- 完成后把「修复摘要 + F1/F2/F3 逐条实测原始输出（含 curl 状态码）」写入报告文件 `/tmp/oc-fs-v2-fixes-report.md` 并 `cat` 打印。
