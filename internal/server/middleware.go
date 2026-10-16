@@ -3,30 +3,12 @@ package server
 import (
 	"context"
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/hex"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 )
-
-// basicAuth 简单口令保护
-func (s *Server) basicAuth(next http.Handler) http.Handler {
-	user, pass, _ := strings.Cut(s.cfg.auth, ":")
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		u, p, ok := r.BasicAuth()
-		// 恒定时间比较，避免字符串比较的时序侧信道（局域网内可被测量）
-		if !ok ||
-			subtle.ConstantTimeCompare([]byte(u), []byte(user)) != 1 ||
-			subtle.ConstantTimeCompare([]byte(p), []byte(pass)) != 1 {
-			w.Header().Set("WWW-Authenticate", `Basic realm="FileServer"`)
-			httpError(w, http.StatusUnauthorized, "需要访问口令")
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
 
 // scriptableExt 可执行/可脚本化内容：直链访问强制附件下载（防源内存储型 XSS）。
 // 前端预览走 fetch + textContent 渲染，不受 Content-Disposition 影响。
@@ -81,14 +63,19 @@ func newRequestID() string {
 
 // accessLog 访问日志（-v 开启后级别为 Debug，故仅详细模式下打印）。
 // 使用 slog 的结构化字段，控制台仍是人类可读文本（非 JSON）。
+// /api/auth/* 只记录路径本身、不记录查询串，避免任何 token/凭据进入日志。
 func (s *Server) accessLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		next.ServeHTTP(w, r)
+		logPath := r.URL.RequestURI()
+		if strings.HasPrefix(r.URL.Path, "/api/auth/") {
+			logPath = r.URL.Path
+		}
 		slog.Debug("request",
 			"request_id", requestID(r.Context()),
 			"method", r.Method,
-			"path", r.URL.RequestURI(),
+			"path", logPath,
 			"remote", r.RemoteAddr,
 			"duration", time.Since(start).String(),
 		)

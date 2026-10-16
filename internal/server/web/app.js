@@ -1735,9 +1735,164 @@ window.addEventListener('popstate', () => {
   }
 });
 
+/* ---------- 认证（引导 / 登录 / 会话 / 登出） ---------- */
+
+function showAuthOverlay() { $('auth').classList.remove('hidden'); }
+function authError(msg) {
+  const el = $('authErr');
+  if (el) { el.textContent = msg; el.classList.remove('hidden'); }
+}
+
+// authModeLabel 认证形态的中文说明。
+function authModeLabel(mode) {
+  if (mode === 'totp') return '仅验证码（TOTP）';
+  if (mode === 'password') return '仅访问口令';
+  return '访问口令 + 验证码（双因素）';
+}
+
+// renderLogin 渲染登录表单：按服务端状态决定是否显示口令/验证码字段。
+function renderLogin(st) {
+  const needPw = st.password_set || st.mode === 'password' || st.mode === 'password+totp';
+  const needCode = !!st.totp_bound;
+  $('authBox').innerHTML = `
+    <h3 id="authTitle">登录</h3>
+    <p class="auth-hint">${esc(authModeLabel(st.mode))}</p>
+    ${needPw ? '<label class="modal-field">访问口令<input id="auPw" type="password" autocomplete="current-password"></label>' : ''}
+    ${needCode ? '<label class="modal-field">6 位验证码<input id="auCode" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code"></label>' : ''}
+    <label class="modal-field auth-remember"><input id="auRemember" type="checkbox"> 记住我（30 天内免登录）</label>
+    <p id="authErr" class="modal-error hidden"></p>
+    <div class="modal-actions"><button id="auSubmit" class="btn primary">登录</button></div>`;
+  $('auSubmit').addEventListener('click', submitLogin);
+  $('authBox').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitLogin(); });
+  const f = $('auPw') || $('auCode');
+  if (f) f.focus();
+}
+
+async function submitLogin() {
+  const body = {
+    password: $('auPw') ? $('auPw').value : '',
+    code: $('auCode') ? $('auCode').value.trim() : '',
+    remember: $('auRemember') ? $('auRemember').checked : false,
+  };
+  try {
+    const r = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || '登录失败');
+    location.reload();
+  } catch (e) {
+    authError(e.message);
+  }
+}
+
+// renderSetup 渲染首次引导：按需设置口令、扫码绑定 TOTP（password+totp 可跳过）。
+async function renderSetup(st) {
+  let setup = st;
+  if (st.need_totp) {
+    try { setup = Object.assign({}, st, await (await fetch('/api/auth/setup')).json()); } catch (_) { /* 保持基础状态 */ }
+  }
+  const canSkip = st.mode === 'password+totp' && setup.need_totp;
+  $('authBox').innerHTML = `
+    <h3 id="authTitle">首次设置</h3>
+    <p class="auth-hint">${esc(authModeLabel(st.mode))}。完成设置后即可访问。</p>
+    ${setup.need_password ? '<label class="modal-field">设置访问口令（至少 8 位）<input id="suPw" type="password" autocomplete="new-password"></label>' +
+      '<label class="modal-field">再次输入口令<input id="suPw2" type="password" autocomplete="new-password"></label>' : ''}
+    ${setup.need_totp ? '<div class="auth-qr"><img src="/api/auth/totp-qr" alt="TOTP 绑定二维码"></div>' +
+      '<p class="auth-hint">用认证器扫码，或手动输入密钥：</p><div class="auth-secret">' + esc(setup.totp_secret || '') + '</div>' +
+      '<label class="modal-field">输入认证器显示的 6 位验证码<input id="suCode" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code"></label>' : ''}
+    <p id="authErr" class="modal-error hidden"></p>
+    <div class="modal-actions">
+      ${canSkip ? '<button id="suSkip" class="btn">跳过 TOTP</button>' : ''}
+      <button id="suSubmit" class="btn primary">完成</button>
+    </div>`;
+  if (canSkip) $('suSkip').addEventListener('click', () => submitSetup(true));
+  $('suSubmit').addEventListener('click', () => submitSetup(false));
+}
+
+async function submitSetup(skip) {
+  const pw = $('suPw') ? $('suPw').value : '';
+  const pw2 = $('suPw2') ? $('suPw2').value : '';
+  if ($('suPw') && pw !== pw2) { authError('两次输入的口令不一致'); return; }
+  if ($('suPw') && pw.length < 8) { authError('口令长度至少 8 位'); return; }
+  const body = { password: pw, code: $('suCode') ? $('suCode').value.trim() : '', skip_totp: !!skip };
+  try {
+    const r = await fetch('/api/auth/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || '设置失败');
+    location.reload();
+  } catch (e) {
+    authError(e.message);
+  }
+}
+
+// bootstrap 先探测认证状态：需要引导/登录则先渲染认证页，否则进入主应用。
+async function bootstrap() {
+  let st = null;
+  try { st = await (await fetch('/api/auth/status')).json(); } catch (_) { /* 状态不可用时按无认证处理 */ }
+  if (st && st.enabled) {
+    if (st.unavailable) {
+      showAuthOverlay();
+      $('authBox').innerHTML = '<h3>认证不可用</h3><p class="auth-hint">服务端认证初始化失败，请检查 .FileServer/auth.json。</p>';
+      return;
+    }
+    if (st.needs_setup) { showAuthOverlay(); renderSetup(st); return; }
+    if (!st.authenticated) { showAuthOverlay(); renderLogin(st); return; }
+    $('btnLogout').classList.remove('hidden');
+    $('btnSessions').classList.remove('hidden');
+  }
+  startApp();
+}
+
+$('btnLogout').addEventListener('click', async () => {
+  try { await fetch('/api/auth/logout', { method: 'POST' }); } catch (_) { /* 忽略 */ }
+  location.reload();
+});
+
+$('btnSessions').addEventListener('click', async () => {
+  $('sessions').classList.remove('hidden');
+  const list = $('ssList');
+  list.textContent = '加载中…';
+  try {
+    const j = await (await fetch('/api/auth/sessions')).json();
+    list.innerHTML = '';
+    (j.sessions || []).forEach((s) => {
+      const row = document.createElement('div');
+      row.className = 'session-row';
+      const meta = document.createElement('div');
+      meta.className = 's-meta';
+      const b = document.createElement('b');
+      b.textContent = s.ua || '未知设备';
+      const info = document.createElement('span');
+      info.textContent = '登录于 ' + fmtTime(s.created) + (s.remember ? ' · 记住我' : '') + (s.ip ? ' · ' + s.ip : '');
+      meta.appendChild(b);
+      meta.appendChild(info);
+      row.appendChild(meta);
+      if (s.current) {
+        const badge = document.createElement('span');
+        badge.className = 's-badge';
+        badge.textContent = '当前';
+        row.appendChild(badge);
+      } else {
+        const btn = document.createElement('button');
+        btn.className = 'btn';
+        btn.textContent = '撤销';
+        btn.addEventListener('click', async () => {
+          await fetch('/api/auth/sessions/revoke', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: s.id }) });
+          $('btnSessions').click();
+        });
+        row.appendChild(btn);
+      }
+      list.appendChild(row);
+    });
+    if (!list.children.length) list.textContent = '暂无会话';
+  } catch (_) {
+    list.textContent = '加载失败';
+  }
+});
+$('ssClose').addEventListener('click', () => $('sessions').classList.add('hidden'));
+
 /* ---------- 启动 ---------- */
 
-(function init() {
+function startApp() {
   initTheme();
   document.documentElement.dataset.order = state.order;
   $('sortSelect').value = state.sort;
@@ -1781,4 +1936,6 @@ window.addEventListener('popstate', () => {
       // 服务端支持 HLS 时预热 hls.js：首个需要转码的视频点开时无需再等 400KB 脚本下载
       if (state.hls) ensureHls().catch(() => {});
     });
-})();
+}
+
+bootstrap();

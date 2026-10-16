@@ -20,6 +20,18 @@
 | `hls` | 是否支持 HLS 转码 |
 | `kinds` | 扩展名 → 类型映射（统一前端判断） |
 | `list_limit` / `search_limit` | 列表/搜索上限 |
+| `text_exts` | 可新建/编辑的文本扩展名白名单 |
+| `text_max_bytes` | 可编辑文本大小上限（字节） |
+
+## GET /api/health
+
+健康检查：返回进程存活与构建版本信息（version/commit/go/platform），
+供监控/部署脚本确认服务与版本。无鉴权以外的副作用。
+
+```bash
+curl -s http://127.0.0.1:8080/api/health
+# {"ok":true,"version":"dev","commit":"...","go":"go1.25.0","platform":"linux/amd64"}
+```
 
 ## GET /api/list?path=
 
@@ -137,3 +149,62 @@ moov 预读预热：把 MP4 头部/尾部最多 8MB 顺序读进 OS 缓存（512
 目录打包下载（zip 流式，含子目录）。
 - 隐藏文件（未开 `--hidden`）跳过。
 - 大目录流式写，不占内存。
+
+## POST /api/settings/ffmpeg
+
+动态开关冷门格式（MKV/RMVB/HEVC 等）在线转码播放 + 服务端抽帧缩略图。
+前端工具栏按钮调用并记忆到 localStorage。切换不影响已在进行中的转码会话。
+
+- 请求体：`{"enabled": true|false}`。
+- `enabled=true` 但服务端无 ffmpeg：`502`。
+- 成功：`200 {"hls": true|false}`；参数非法：`400`。
+- 副作用：改变 `transcodeEnabled` 运行时开关（进程内，不持久化）。
+
+## 认证端点
+
+认证默认关闭（`--auth-mode none`）。启用后，除 `/api/auth/*` 外的全部 `/api/*`
+接口都需要有效会话 cookie（`fs_session`），未认证返回 `401 {"error":"需要访问口令"}`。
+
+认证模式 `--auth-mode`：`none` / `totp` / `password` / `password+totp`。
+兼容用法 `--auth user:pass` 等价于 `password` 模式 + 预置口令。
+失败响应统一为 `401 访问凭据无效`（不区分原因）；触发限速返回 `429`。
+
+### GET /api/auth/status
+
+认证状态（公开）。响应字段：`enabled`、`mode`、`authenticated`、`needs_setup`、
+`configured`、`need_password`、`need_totp`、`password_set`、`totp_bound`。
+
+### GET /api/auth/setup
+
+引导页初始状态（公开）。未完成配置时返回 `{mode, need_password, need_totp,
+totp_secret, otpauth_url}`（`need_totp` 时生成待绑定密钥）；已完成返回 `409`。
+
+### POST /api/auth/setup
+
+完成引导：设置口令（如需，长度 ≥ 8）并绑定 TOTP（如需，`skip_totp=true` 可跳过；
+`totp` 模式不可跳过）。成功 `200 {"ok":true}`；弱口令/验证码错误 `400`；已完成 `409`。
+
+### GET /api/auth/totp-qr
+
+返回待绑定 TOTP 的二维码（`image/svg+xml`，服务端自研 qrcode 生成）。无需 TOTP
+绑定时 `404`。
+
+### POST /api/auth/login
+
+登录并下发会话 cookie。请求体 `{password, code, remember}`（按模式取用）。
+成功 `200 {"ok":true}` 并 `Set-Cookie: fs_session=...`（`HttpOnly`、`SameSite=Lax`、
+`Path=/`；请求为 https 或 `--cookie-secure` 时带 `Secure`；`remember=true` 时带
+`Max-Age`= `--remember-days` 天，否则为会话 cookie）。凭据错误 `401`；触发限速 `429`。
+
+### POST /api/auth/logout
+
+使当前会话 token 失效并清除 cookie。返回 `204`。
+
+### GET /api/auth/sessions
+
+列出已登录会话（不含 token 明文）：`{sessions:[{id,created,last_seen,expires,
+remember,current,ua,ip}]}`。需已登录。
+
+### POST /api/auth/sessions/revoke
+
+撤销指定会话：`{"id": "..."}`。成功 `200 {"ok":true}`；不存在 `404`。需已登录。

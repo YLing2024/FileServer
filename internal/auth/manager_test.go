@@ -1,0 +1,207 @@
+package auth
+
+import (
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func newTestManager(t *testing.T, mode Mode, preset string) *Manager {
+	t.Helper()
+	m, err := NewManager(Config{Mode: mode, Path: filepath.Join(t.TempDir(), "auth.json"), PresetPassword: preset, HasPreset: preset != ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+// TestPasswordModeFlow 覆盖纯口令模式的引导、登录、登出、记住我。
+func TestPasswordModeFlow(t *testing.T) {
+	m := newTestManager(t, ModePassword, "")
+	if !m.NeedsSetup() || !m.NeedPassword() || m.NeedTOTP() {
+		t.Fatalf("初始引导状态异常: setup=%v pw=%v totp=%v", m.NeedsSetup(), m.NeedPassword(), m.NeedTOTP())
+	}
+	if err := m.CompleteSetup("short", "", true); err != ErrWeakPassword {
+		t.Fatalf("弱口令应被拒绝, 得到 %v", err)
+	}
+	if err := m.CompleteSetup("password123", "", true); err != nil {
+		t.Fatalf("设置口令失败: %v", err)
+	}
+	if m.NeedsSetup() {
+		t.Fatal("设置口令后不应再需要引导")
+	}
+	// 错误口令
+	if _, _, err := m.Login("wrongpass", "", false, "ua", "1.1.1.1"); err != ErrInvalidCredentials {
+		t.Fatalf("错误口令应拒绝, 得到 %v", err)
+	}
+	// 正确口令 + 不勾记住我（会话 TTL 12h）
+	tok, exp, err := m.Login("password123", "", false, "ua", "1.1.1.1")
+	if err != nil {
+		t.Fatalf("登录失败: %v", err)
+	}
+	if d := time.Until(exp); d > 13*time.Hour || d < 11*time.Hour {
+		t.Errorf("会话有效期异常: %v", d)
+	}
+	if _, ok := m.Validate(tok); !ok {
+		t.Fatal("token 应有效")
+	}
+	// 勾选记住我（30 天）
+	tok2, exp2, _ := m.Login("password123", "", true, "ua", "1.1.1.1")
+	if d := time.Until(exp2); d < 29*24*time.Hour {
+		t.Errorf("记住我记得有效期应约 30 天, 得到 %v", d)
+	}
+	// 会话列表 + 撤销
+	list := m.Sessions(tok2)
+	if len(list) != 2 {
+		t.Fatalf("会话数 = %d, want 2", len(list))
+	}
+	m.RevokeToken(tok)
+	if _, ok := m.Validate(tok); ok {
+		t.Fatal("登出后 token 应失效")
+	}
+	if _, ok := m.Validate(tok2); !ok {
+		t.Fatal("未登出的 token 仍应有效")
+	}
+}
+
+// TestTOTPModeFlow 覆盖仅 TOTP 模式：必须绑定、登录只填验证码、重放拒绝。
+func TestTOTPModeFlow(t *testing.T) {
+	m := newTestManager(t, ModeTOTP, "")
+	fixed := time.Unix(1_700_000_000, 0)
+	m.now = func() time.Time { return fixed }
+
+	if !m.NeedsSetup() || m.NeedPassword() || !m.NeedTOTP() {
+		t.Fatalf("totp 模式初始状态异常")
+	}
+	secret, url, needPw, needTotp, err := m.BeginSetup()
+	if err != nil || secret == "" || needPw || !needTotp {
+		t.Fatalf("BeginSetup 异常: secret=%q err=%v", secret, err)
+	}
+	if url == "" {
+		t.Fatal("应返回 otpauth URL")
+	}
+	raw, err := decodeTOTPSecret(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 跳过 TOTP 必须被拒绝
+	if err := m.CompleteSetup("", "", true); err != ErrInvalidTOTP {
+		t.Fatalf("totp 模式不可跳过, 得到 %v", err)
+	}
+	// 错误验证码
+	if err := m.CompleteSetup("", "000000", false); err != ErrInvalidTOTP {
+		t.Fatalf("错误验证码应拒绝, 得到 %v", err)
+	}
+	// 正确验证码绑定
+	step := fixed.Unix() / totpPeriod
+	if err := m.CompleteSetup("", codeAt(raw, step), false); err != nil {
+		t.Fatalf("绑定 TOTP 失败: %v", err)
+	}
+	if m.NeedsSetup() {
+		t.Fatal("绑定后不应再需要引导")
+	}
+	// 登录只用验证码
+	code := codeAt(raw, step+1)
+	m.now = func() time.Time { return fixed.Add(30 * time.Second) }
+	if _, _, err := m.Login("", code, false, "ua", "2.2.2.2"); err != nil {
+		t.Fatalf("仅验证码登录失败: %v", err)
+	}
+	// 同一码重放
+	if _, _, err := m.Login("", code, false, "ua", "2.2.2.2"); err != ErrInvalidCredentials {
+		t.Fatalf("重放应被拒绝, 得到 %v", err)
+	}
+}
+
+// TestPasswordTOTPSkip 覆盖 password+totp 的跳过路径（退化为单因素）。
+func TestPasswordTOTPSkip(t *testing.T) {
+	m := newTestManager(t, ModePasswordTOTP, "")
+	if err := m.CompleteSetup("password123", "", true); err != nil {
+		t.Fatalf("跳过 TOTP 失败: %v", err)
+	}
+	if m.NeedsSetup() {
+		t.Fatal("设口令并跳过 TOTP 后视为配置完成")
+	}
+	if m.NeedTOTP() {
+		t.Fatal("跳过后不应再要求 TOTP")
+	}
+	if _, _, err := m.Login("password123", "", false, "ua", "3.3.3.3"); err != nil {
+		t.Fatalf("单因素登录失败: %v", err)
+	}
+}
+
+// TestLoginLimiterLadder 连续失败触发阶梯锁定（60s → 300s → 900s）。
+func TestLoginLimiterLadder(t *testing.T) {
+	m := newTestManager(t, ModeTOTP, "")
+	fixed := time.Unix(1_700_000_000, 0)
+	now := fixed
+	m.now = func() time.Time { return now }
+	secret, _, _, _, _ := m.BeginSetup()
+	raw, _ := decodeTOTPSecret(secret)
+	step := fixed.Unix() / totpPeriod
+	_ = m.CompleteSetup("", codeAt(raw, step), false)
+
+	ip := "9.9.9.9"
+	for i := 0; i < lockThreshold; i++ {
+		if _, _, err := m.Login("", "000000", false, "ua", ip); err != ErrInvalidCredentials {
+			t.Fatalf("第 %d 次失败应返回凭证错误, 得到 %v", i+1, err)
+		}
+	}
+	// 达阈值后应锁定，即使给正确码也拒绝
+	if _, _, err := m.Login("", codeAt(raw, step+1), false, "ua", ip); err != ErrLocked {
+		t.Fatalf("应被锁定, 得到 %v", err)
+	}
+	if d, locked := m.limiter.locked(ip, now); !locked || d > 60*time.Second {
+		t.Fatalf("首次锁定应为 60s, 得到 %v locked=%v", d, locked)
+	}
+	// 锁定过期后再次失败，进入第二级
+	now = now.Add(61 * time.Second)
+	for i := 0; i < lockThreshold; i++ {
+		m.Login("", "000000", false, "ua", ip)
+	}
+	if d, locked := m.limiter.locked(ip, now); !locked || d > 300*time.Second || d < 299*time.Second {
+		t.Fatalf("第二次锁定应为 300s, 得到 %v locked=%v", d, locked)
+	}
+	// 成功登录会清零
+	now = now.Add(301 * time.Second)
+	if _, _, err := m.Login("", codeAt(raw, now.Unix()/totpPeriod), false, "ua", ip); err != nil {
+		t.Fatalf("锁定过期后正确码应登录成功: %v", err)
+	}
+	if _, locked := m.limiter.locked(ip, now); locked {
+		t.Fatal("成功登录后不应仍锁定")
+	}
+}
+
+// TestResetTOTPAndAll 覆盖命令行自救：重置 TOTP 与重置全部凭据。
+func TestResetTOTPAndAll(t *testing.T) {
+	m := newTestManager(t, ModeTOTP, "")
+	fixed := time.Unix(1_700_000_000, 0)
+	m.now = func() time.Time { return fixed }
+	secret, _, _, _, _ := m.BeginSetup()
+	raw, _ := decodeTOTPSecret(secret)
+	if err := m.CompleteSetup("", codeAt(raw, fixed.Unix()/totpPeriod), false); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.ResetTOTP(); err != nil {
+		t.Fatal(err)
+	}
+	if !m.NeedsSetup() {
+		t.Fatal("重置 TOTP 后应回到引导")
+	}
+	if err := m.ResetAll(); err != nil {
+		t.Fatal(err)
+	}
+	if !m.NeedsSetup() {
+		t.Fatal("重置全部后应回到引导")
+	}
+}
+
+// TestPresetPassword --auth user:pass 等价于预置口令（无需引导）。
+func TestPresetPassword(t *testing.T) {
+	m := newTestManager(t, ModePassword, "sekret")
+	if m.NeedsSetup() {
+		t.Fatal("预置口令后无需引导")
+	}
+	if _, _, err := m.Login("sekret", "", false, "ua", "4.4.4.4"); err != nil {
+		t.Fatalf("预置口令登录失败: %v", err)
+	}
+}

@@ -230,22 +230,17 @@ func TestAPISearch(t *testing.T) {
 	}
 }
 
+// TestAPIAuth 认证启用时的门禁与登录流程见 auth_handlers_test.go；
+// 这里保留最小断言：未认证的 API 请求被拒绝。
 func TestAPIAuth(t *testing.T) {
-	srv := New(t.TempDir(), Options{Auth: "admin:secret"})
+	srv := New(t.TempDir(), Options{AuthMode: "password"})
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
 	resp := get(t, ts.URL+"/api/list")
 	resp.Body.Close()
 	if resp.StatusCode != 401 {
-		t.Fatalf("无凭证应 401, 得到 %d", resp.StatusCode)
-	}
-	req, _ := http.NewRequest("GET", ts.URL+"/api/list", nil)
-	req.SetBasicAuth("admin", "secret")
-	resp2, _ := http.DefaultClient.Do(req)
-	resp2.Body.Close()
-	if resp2.StatusCode != 200 {
-		t.Fatalf("正确凭证应 200, 得到 %d", resp2.StatusCode)
+		t.Fatalf("未认证应 401, 得到 %d", resp.StatusCode)
 	}
 }
 

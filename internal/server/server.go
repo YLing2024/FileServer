@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/YLing2024/FileServer/internal/auth"
 )
 
 //go:embed web
@@ -56,10 +58,15 @@ type Server struct {
 // Options 服务器选项
 type Options struct {
 	Hidden       bool
-	Auth         string
+	Auth         string // 兼容：--auth user:pass（等价 password 模式预置口令）
 	Verbose      bool
-	FFmpeg       bool  // 开启冷门格式（MKV/RMVB/HEVC 等）的在线转码播放 + 服务端缩略图
-	TextMaxBytes int64 // 可编辑文本大小上限（0 用默认 2 MiB）
+	FFmpeg       bool   // 开启冷门格式（MKV/RMVB/HEVC 等）的在线转码播放 + 服务端缩略图
+	TextMaxBytes int64  // 可编辑文本大小上限（0 用默认 2 MiB）
+	AuthMode     string // none|totp|password|password+totp（空视为 none）
+	RememberDays int    // 「记住我」持久 cookie 天数（0 用默认 30）
+	SessionHours int    // 不勾「记住我」的会话有效期小时数（0 用默认 12）
+	TrustProxy   bool   // 信任 X-Forwarded-For（取最左）
+	CookieSecure bool   // 强制 cookie Secure
 }
 
 // New 创建文件服务器
@@ -95,13 +102,53 @@ func New(root string, opts Options) *Server {
 	hlsMgr := NewHlsManager(root)
 	hlsMgr.procs = procs
 
+	// 认证模式解析：--auth user:pass 等价于 password 模式 + 预置口令。
+	mode := auth.Mode(opts.AuthMode)
+	if mode == "" {
+		mode = auth.ModeNone
+	}
+	hasPreset := opts.Auth != ""
+	preset := ""
+	if hasPreset {
+		_, preset, _ = strings.Cut(opts.Auth, ":")
+		if opts.AuthMode == "" {
+			mode = auth.ModePassword
+		}
+	}
+	authRequired := false
+	var authMan *auth.Manager
+	if mode != auth.ModeNone {
+		if !auth.ValidMode(string(mode)) {
+			slog.Warn("未知的 --auth-mode，已按不启用认证处理", "mode", opts.AuthMode)
+		} else {
+			// authRequired 标记「配置要求认证」：即便 Manager 初始化失败也要失败关闭
+			// （拒绝访问），绝不因为读不到 auth.json 而静默敞开。
+			authRequired = true
+			mgr, merr := auth.NewManager(auth.Config{
+				Mode:           mode,
+				Path:           filepath.Join(base, "auth.json"),
+				PresetPassword: preset,
+				HasPreset:      hasPreset,
+				SessionTTL:     time.Duration(opts.SessionHours) * time.Hour,
+				RememberDays:   opts.RememberDays,
+				TrustProxy:     opts.TrustProxy,
+			})
+			if merr != nil {
+				slog.Error("认证初始化失败，将拒绝所有访问（失败关闭）", "err", merr)
+			} else {
+				authMan = mgr
+			}
+		}
+	}
+
 	srv := &Server{
 		cfg: config{
 			root:         root,
 			hidden:       opts.Hidden,
-			auth:         opts.Auth,
 			verbose:      opts.Verbose,
 			textMaxBytes: opts.TextMaxBytes,
+			trustProxy:   opts.TrustProxy,
+			cookieSecure: opts.CookieSecure,
 		},
 		deps: deps{
 			thumbs: NewThumbCache(root),
@@ -117,6 +164,8 @@ func New(root string, opts Options) *Server {
 		pb:      &playbackState{},
 	}
 	srv.cfg.transcodeEnabled.Store(opts.FFmpeg && ff != nil && ff.Available())
+	srv.cfg.authRequired = authRequired
+	srv.cfg.auth = authMan
 	if srv.cfg.textMaxBytes <= 0 {
 		srv.cfg.textMaxBytes = textMaxDefaultBytes
 	}
@@ -130,24 +179,50 @@ func (s *Server) Close() {
 	}
 }
 
+// route 一条 API 路由（方法与 pattern）。集中登记便于 Handler 装配与
+// 「代码路由 ↔ doc/api.md」一致性机检（routes_docs_test.go）。
+type route struct {
+	method  string
+	pattern string
+	handler http.HandlerFunc
+}
+
+// apiRoutes 返回全部 API 路由（不含根路径前端兜底）。
+func (s *Server) apiRoutes() []route {
+	return []route{
+		{"GET", "/api/info", s.handleInfo},
+		{"GET", "/api/health", s.handleHealth},
+		{"GET", "/api/list", s.handleList},
+		{"GET", "/api/thumb", s.handleThumb},
+		{"GET", "/api/thumb-src", s.serveThumbSrc},
+		{"GET", "/api/file", s.handleFile},
+		{"GET", "/api/video-info", s.handleVideoInfo},
+		{"GET", "/api/hls", s.handleHls},
+		{"GET", "/api/prewarm", s.handlePrewarm},
+		{"GET", "/api/zip", s.handleZip},
+		{"GET", "/api/search", s.handleSearch},
+		{"GET", "/api/text", s.handleTextGet},
+		{"POST", "/api/text", s.handleTextSave},
+		{"POST", "/api/text/new", s.handleTextNew},
+		{"POST", "/api/settings/ffmpeg", s.handleSetFFmpeg},
+		// 认证：/api/auth/* 不受门禁
+		{"GET", "/api/auth/status", s.handleAuthStatus},
+		{"GET", "/api/auth/setup", s.handleAuthSetupGet},
+		{"POST", "/api/auth/setup", s.handleAuthSetupPost},
+		{"GET", "/api/auth/totp-qr", s.handleAuthTOTPQR},
+		{"POST", "/api/auth/login", s.handleAuthLogin},
+		{"POST", "/api/auth/logout", s.handleAuthLogout},
+		{"GET", "/api/auth/sessions", s.handleAuthSessions},
+		{"POST", "/api/auth/sessions/revoke", s.handleAuthSessionRevoke},
+	}
+}
+
 // Handler 返回完整 HTTP 处理器
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/info", s.handleInfo)
-	mux.HandleFunc("GET /api/health", s.handleHealth)
-	mux.HandleFunc("GET /api/list", s.handleList)
-	mux.HandleFunc("GET /api/thumb", s.handleThumb)
-	mux.HandleFunc("GET /api/thumb-src", s.serveThumbSrc)
-	mux.HandleFunc("GET /api/file", s.handleFile)
-	mux.HandleFunc("GET /api/video-info", s.handleVideoInfo)
-	mux.HandleFunc("GET /api/hls", s.handleHls)
-	mux.HandleFunc("GET /api/prewarm", s.handlePrewarm)
-	mux.HandleFunc("GET /api/zip", s.handleZip)
-	mux.HandleFunc("GET /api/search", s.handleSearch)
-	mux.HandleFunc("GET /api/text", s.handleTextGet)
-	mux.HandleFunc("POST /api/text", s.handleTextSave)
-	mux.HandleFunc("POST /api/text/new", s.handleTextNew)
-	mux.HandleFunc("POST /api/settings/ffmpeg", s.handleSetFFmpeg)
+	for _, rt := range s.apiRoutes() {
+		mux.HandleFunc(rt.method+" "+rt.pattern, rt.handler)
+	}
 	// 根路径兜底注册为任意方法：SPA 仅需 GET，但这样未匹配的旧 POST 接口
 	// 会落到前端文件服务并返回 404，而不是被 net/http 以「方法不允许」回成 405。
 	mux.Handle("/", s.frontendHandler())
@@ -159,8 +234,9 @@ func (s *Server) Handler() http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		mux.ServeHTTP(w, r)
 	})
-	if s.cfg.auth != "" {
-		h = s.basicAuth(h)
+	// 认证门禁：放在 mux 外层，未认证时拒绝 /api/*（登录/引导页经 /api/auth/* 放行）。
+	if s.cfg.authRequired {
+		h = s.requireAuth(h)
 	}
 	if s.cfg.verbose {
 		h = s.accessLog(h)
@@ -180,6 +256,10 @@ func (s *Server) frontendHandler() http.Handler {
 	fileSrv := http.FileServer(http.FS(sub))
 	// 禁用浏览器对前端静态资源的缓存：开发迭代/重新构建后必须拿到最新 JS/CSS，
 	// 否则旧缓存会让改动看似"无效"（用户点进去还是旧版行为）。
+	// 同时加严格安全响应头（登录/引导页与主应用同一入口）：
+	//   - CSP：脚本仅同源（含 hls.js 的 blob worker），禁外链/内联脚本/对象插件，
+	//     禁被嵌入（frame-ancestors），禁 base 改写；
+	//   - Referrer-Policy: no-referrer；Cache-Control: no-store。
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			w.Header().Set("Cache-Control", "no-store")
@@ -188,6 +268,24 @@ func (s *Server) frontendHandler() http.Handler {
 		}
 		w.Header().Set("Pragma", "no-cache")
 		w.Header().Set("Expires", "0")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Content-Security-Policy", contentSecurityPolicy)
 		fileSrv.ServeHTTP(w, r)
 	})
 }
+
+// contentSecurityPolicy 前端页面的严格 CSP：默认仅同源；脚本仅同源 + blob
+// （hls.js 的 Worker 由 blob 创建）；图片/媒体允许 data:/blob:（缩略图 dataURL、
+// MediaSource）；样式允许内联（布局用 CSS 变量在运行时写入）；PDF embed 走同源。
+const contentSecurityPolicy = "default-src 'self'; " +
+	"script-src 'self' blob:; " +
+	"style-src 'self' 'unsafe-inline'; " +
+	"img-src 'self' data: blob:; " +
+	"media-src 'self' data: blob:; " +
+	"connect-src 'self'; " +
+	"font-src 'self' data:; " +
+	"worker-src 'self' blob:; " +
+	"object-src 'self'; " +
+	"frame-ancestors 'none'; " +
+	"base-uri 'none'; " +
+	"form-action 'self'"

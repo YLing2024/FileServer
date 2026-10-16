@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/YLing2024/FileServer/internal/auth"
 	"github.com/YLing2024/FileServer/internal/platform"
 	"github.com/YLing2024/FileServer/internal/qrcode"
 	"github.com/YLing2024/FileServer/internal/server"
@@ -54,6 +55,26 @@ func main() {
 		log.Fatalf("服务目录无效: %s", rootAbs)
 	}
 
+	// 命令行自救：在服务未启动状态下清除认证凭据（丢失验证器/口令时使用）。
+	if cfg.ResetAuth || cfg.ResetTOTP {
+		authPath := filepath.Join(rootAbs, ".FileServer", "auth.json")
+		var rerr error
+		if cfg.ResetAuth {
+			rerr = auth.ResetAllFile(authPath)
+		} else {
+			rerr = auth.ResetTOTPFile(authPath)
+		}
+		if rerr != nil {
+			log.Fatalf("重置认证凭据失败: %v", rerr)
+		}
+		fmt.Println("已重置认证凭据；请重新启动服务并在浏览器完成引导。")
+		return
+	}
+
+	if cfg.AuthMode != "" && !auth.ValidMode(cfg.AuthMode) {
+		log.Fatalf("无效的 --auth-mode: %q（可选 none|totp|password|password+totp）", cfg.AuthMode)
+	}
+
 	// 监听地址（--host 默认 0.0.0.0：局域网扫码即用；127.0.0.1 时仅本机/反代可达）
 	host := cfg.Host
 	if host == "" {
@@ -77,7 +98,18 @@ func main() {
 		ips = server.LanIPs()
 	}
 
-	srv := server.New(rootAbs, server.Options{Hidden: cfg.Hidden, Auth: cfg.Auth, Verbose: cfg.Verbose, FFmpeg: cfg.FFmpeg, TextMaxBytes: cfg.TextMax})
+	srv := server.New(rootAbs, server.Options{
+		Hidden:       cfg.Hidden,
+		Auth:         cfg.Auth,
+		Verbose:      cfg.Verbose,
+		FFmpeg:       cfg.FFmpeg,
+		TextMaxBytes: cfg.TextMax,
+		AuthMode:     cfg.AuthMode,
+		RememberDays: cfg.RememberDays,
+		SessionHours: cfg.SessionHours,
+		TrustProxy:   cfg.TrustProxy,
+		CookieSecure: cfg.CookieSecure,
+	})
 	handler := srv.Handler()
 
 	// ---- 控制台输出 ----

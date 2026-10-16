@@ -55,6 +55,12 @@
         <svg class="icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/></svg>
         <svg class="icon-moon" viewBox="0 0 24 24"><path d="M20 13.5A8.5 8.5 0 0 1 10.5 4 8.5 8.5 0 1 0 20 13.5z"/></svg>
       </button>
+      <button id="btnSessions" class="icon-btn hidden" title="已登录设备/会话" aria-label="会话管理">
+        <svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="11" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
+      </button>
+      <button id="btnLogout" class="icon-btn hidden" title="退出登录" aria-label="退出登录">
+        <svg viewBox="0 0 24 24"><path d="M15 5H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h9"/><path d="M12 12h9m0 0l-3-3m3 3l-3 3"/></svg>
+      </button>
     </div>
   </header>
 
@@ -131,6 +137,20 @@
 </div>
 
 <div id="toast" class="toast hidden"></div>
+
+<!-- ============ 认证（引导/登录）覆盖层 ============ -->
+<div id="auth" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+  <div class="modal-box" id="authBox"></div>
+</div>
+
+<!-- ============ 会话管理 ============ -->
+<div id="sessions" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="ssTitle">
+  <div class="modal-box">
+    <h3 id="ssTitle">已登录设备/会话</h3>
+    <div id="ssList" class="session-list"></div>
+    <div class="modal-actions"><button id="ssClose" class="btn">关闭</button></div>
+  </div>
+</div>
 
 <!-- ============ 新建文本文件对话框 ============ -->
 <div id="newFile" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="nfTitle">

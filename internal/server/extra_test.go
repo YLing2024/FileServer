@@ -459,38 +459,29 @@ func TestSearchBoundaries(t *testing.T) {
 	}
 }
 
-// TestAuthPasswordColon pass 含 : 的认证（1.4、5.5）
+// TestAuthPasswordColon 兼容用法：--auth user:pass 且 pass 含 ':' 时等价于
+// password 模式预置口令（详细流程见 auth_handlers_test.go）。
 func TestAuthPasswordColon(t *testing.T) {
-	srv := New(t.TempDir(), Options{Auth: "admin:pa:ss"})
-	ts := httptest.NewServer(srv.Handler())
-	defer ts.Close()
+	ts, client := newAuthServer(t, Options{Auth: "admin:pa:ss"})
 
-	// 无凭证：401 且带 WWW-Authenticate
-	resp := get(t, ts.URL+"/api/list")
-	resp.Body.Close()
-	if resp.StatusCode != 401 {
-		t.Fatalf("应 401, 得到 %d", resp.StatusCode)
-	}
-	if resp.Header.Get("WWW-Authenticate") == "" {
-		t.Error("401 应带 WWW-Authenticate 头")
+	// 兼容用法：mode 视为 password 且无需引导
+	st := authStatus(t, ts.URL)
+	if !st.Enabled || st.NeedsSetup || st.Mode != "password" {
+		t.Fatalf("--auth 兼容语义异常: %+v", st)
 	}
 
 	// 错误口令：401
-	req, _ := http.NewRequest("GET", ts.URL+"/api/list", nil)
-	req.SetBasicAuth("admin", "wrong")
-	resp2, _ := http.DefaultClient.Do(req)
-	resp2.Body.Close()
-	if resp2.StatusCode != 401 {
-		t.Fatalf("错误口令应 401, 得到 %d", resp2.StatusCode)
+	if code := authLogin(t, client, ts.URL, "wrong", "", false); code != http.StatusUnauthorized {
+		t.Fatalf("错误口令应 401, 得到 %d", code)
 	}
-
-	// 正确口令（pass 含 :）：200
-	req3, _ := http.NewRequest("GET", ts.URL+"/api/list", nil)
-	req3.SetBasicAuth("admin", "pa:ss")
-	resp3, _ := http.DefaultClient.Do(req3)
-	resp3.Body.Close()
-	if resp3.StatusCode != 200 {
-		t.Fatalf("正确口令（含 :）应 200, 得到 %d", resp3.StatusCode)
+	// 正确口令（含 ':'）：200，之后可访问 API
+	if code := authLogin(t, client, ts.URL, "pa:ss", "", false); code != http.StatusOK {
+		t.Fatalf("正确口令应 200, 得到 %d", code)
+	}
+	r := getWithClient(t, client, ts.URL+"/api/list")
+	r.Body.Close()
+	if r.StatusCode != 200 {
+		t.Fatalf("登录后 /api/list 应 200, 得到 %d", r.StatusCode)
 	}
 }
 
