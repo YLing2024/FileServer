@@ -815,6 +815,7 @@ function lbShow() {
   lb.zoom = 1;
   lb.rotate = 0;
   $('lbName').textContent = it.name;
+  $('lbName').title = it.name; // 窄屏省略号时悬停可见完整名
   $('lbCount').textContent = `${lb.index + 1} / ${lb.images.length}`;
   $('lbPrev').classList.toggle('disabled', lb.images.length <= 1);
   $('lbNext').classList.toggle('disabled', lb.images.length <= 1);
@@ -965,6 +966,7 @@ function renderPreview(path, entry) {
   $('browse').classList.add('hidden');
   $('preview').classList.remove('hidden');
   $('pvName').textContent = entry.name;
+  $('pvName').title = entry.name; // 窄屏省略号时悬停可见完整名
   document.title = entry.name + ' - FileServer'; // 浏览器标签页显示文件名
   $('pvMeta').textContent = fmtSize(entry.size) + (entry.mtime ? ' · ' + fmtTime(entry.mtime) : '');
   $('btnPvDownload').onclick = () => triggerDownload(fileURL(path, true), entry.name);
