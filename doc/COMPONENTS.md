@@ -12,7 +12,7 @@
 | `renderTextEditor(main, path, entry, info)` | 文本查看/编辑切换 + 保存（版本校验、409 载入最新） | `info` 为 `GET /api/text` 响应 | 白名单内文件进入预览时调用 | 409 时提示「已被他人修改」并载入最新内容；按钮 `aria` 走原生 button |
 | `openLightbox(path, entries)` / `lbClose()` | 图片灯箱：缩放、旋转、前后切换 | `path`、`entries` 队列 | 点击图片卡片调用 | 键盘 ←/→/±/R/Esc；`role=dialog aria-modal` |
 | `toast(msg, isError)` | 轻提示 | `msg` 文案、`isError` 是否错误样式 | 任何异步失败处 | 单一实例，重复调用覆盖上一条 |
-| 新建文本弹窗（`btnNewText`/`#newFile`） | 目录内新建文本文件 | `POST /api/text/new` | 由工具栏按钮打开 | 文件名不得含分隔符；服务端二次校验 |
+| 新建弹窗（`btnNewText`/`#newFile`，`setNewKind`/`syncNewFileFields`） | 目录内新建空文件（扩展名不限）或单层文件夹 | `POST /api/create`；`kind` 文件/文件夹二选一 | 由工具栏按钮打开，默认「文件」 | 仅文本白名单扩展名才显示初始内容框，否则提示「该类型只创建空文件」；名称空白时禁用创建；服务端二次校验命名 |
 | 认证覆盖层（`renderLogin`/`renderSetup`，`#auth`） | 引导页与登录页（口令/TOTP/记住我） | `GET /api/auth/status` 状态驱动；提交 `/api/auth/setup`、`/api/auth/login` | 启动时 `bootstrap()` 按状态渲染 | 覆盖层不渲染任何目录内容；CSP 严格；失败文案统一；登录成功把响应体 token 写入 sessionStorage/localStorage |
 | 凭据/短票助手（`authFetch`、`mediaURL`、`ensureTicket`、`clearToken`） | XHR 附 Bearer；原生媒体 URL 拼 `?t=`；401 清凭据回登录页 | `fs.token`/`fs.token.expires`；`POST /api/auth/ticket` | `authFetch(url, opts)`、`mediaURL(url)` | token 不进 URL/日志；短票绑定会话、只对 GET 生效，剩余 <60s 自动续签 |
 | 会话管理弹窗（`#sessions`） | 列出会话并撤销 | `GET /api/auth/sessions`、`POST /api/auth/sessions/revoke` | 工具栏「会话」按钮打开 | 不显示 token 明文；撤销当前会话以外需确认 |
