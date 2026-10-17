@@ -176,9 +176,15 @@ function toast(msg, isError) {
   const el = $('toast');
   el.textContent = msg;
   el.classList.toggle('error', !!isError);
+  // #toast 初始带 .hidden（全局 `.hidden { display: none !important }`），
+  // 只加 .show 只改透明度、元素仍是 display:none → 消息用户根本看不到。
+  el.classList.remove('hidden');
   el.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), 3200);
+  toastTimer = setTimeout(() => {
+    el.classList.remove('show');
+    el.classList.add('hidden');
+  }, 3200);
 }
 
 /* ---------- 状态 ---------- */

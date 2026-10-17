@@ -34,6 +34,7 @@
 
 ### Fixed
 
+- **提示条（toast）此前从不显示**：`#toast` 初始带 `.hidden`，而全局规则 `.hidden { display: none !important }` 会压过 `.toast.show` 的透明度动画 —— `toast()` 只加 `.show`、从不摘 `.hidden`，于是所有「已保存 / 已创建 / 失败」提示对用户完全不可见（功能本身正常）。修复：显示时移除 `.hidden`，隐藏时补回。该缺陷从早期版本即在，由新增的 `scripts/create_e2e_test.py` 首次跑出。
 - gofmt 全仓库对齐；修正 errcheck / ineffassign / staticcheck / unused 报告的正确性告警。
 
 ## [1.0.0] - 2026-08-15
