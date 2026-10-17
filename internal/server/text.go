@@ -123,7 +123,11 @@ func (s *Server) handleTextGet(w http.ResponseWriter, r *http.Request) {
 // handleTextSave POST /api/text 保存已有文本文件（原子写 + 版本校验）。
 func (s *Server) handleTextSave(w http.ResponseWriter, r *http.Request) {
 	var req textSaveReq
-	if !decodeTextBody(w, r, s.cfg.textMaxBytes, &req) {
+	if !decodeJSONBody(w, r, s.cfg.textMaxBytes, &req) {
+		return
+	}
+	if contentTooLarge(req.Content, s.cfg.textMaxBytes) {
+		httpError(w, http.StatusRequestEntityTooLarge, "文本超过大小上限")
 		return
 	}
 	abs, err := s.safePath(req.Path)
@@ -164,62 +168,22 @@ func (s *Server) handleTextSave(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleTextNew POST /api/text/new 在指定目录内新建文本文件。
+// 作为 /api/create 的兼容入口保留：仍限白名单扩展名，但命名校验与写入内核
+// 与 /api/create 完全一致。
 func (s *Server) handleTextNew(w http.ResponseWriter, r *http.Request) {
 	var req textSaveReq
-	if !decodeTextBody(w, r, s.cfg.textMaxBytes, &req) {
+	if !decodeJSONBody(w, r, s.cfg.textMaxBytes, &req) {
 		return
 	}
-	name := req.Name
-	if !validNewTextName(name) {
-		httpError(w, http.StatusBadRequest, "文件名不合法")
+	if contentTooLarge(req.Content, s.cfg.textMaxBytes) {
+		httpError(w, http.StatusRequestEntityTooLarge, "文本超过大小上限")
 		return
 	}
-	if !textEditableExt(name) {
+	if !textEditableExt(req.Name) {
 		httpError(w, http.StatusForbidden, "该扩展名不在新建白名单内")
 		return
 	}
-	dirAbs, err := s.safePath(req.Dir)
-	if err != nil {
-		httpError(w, errToStatus(err), err.Error())
-		return
-	}
-	di, err := os.Stat(dirAbs)
-	if err != nil || !di.IsDir() {
-		httpError(w, http.StatusBadRequest, "目标不是目录")
-		return
-	}
-	if isReadOnlyMode(di.Mode()) {
-		httpError(w, http.StatusForbidden, "目标目录不可写（只读）")
-		return
-	}
-	target := filepath.Join(dirAbs, name)
-	if !pathWithin(s.cfg.root, target) {
-		httpError(w, http.StatusForbidden, "路径访问被拒绝")
-		return
-	}
-	if s.hiddenBlocked(target) {
-		httpError(w, http.StatusForbidden, "不能在此创建隐藏文件")
-		return
-	}
-	// 并发/存在性：目标已存在则拒绝，避免覆盖他人文件
-	f, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
-	if err != nil {
-		if os.IsExist(err) {
-			httpError(w, http.StatusConflict, "同名文件已存在")
-			return
-		}
-		writeTextWriteError(w, err)
-		return
-	}
-	// 先用 O_EXCL 占位确保不覆盖，再走原子写替换为完整内容
-	_ = f.Close()
-	if err := atomicWriteFile(target, []byte(req.Content), 0o644); err != nil {
-		_ = os.Remove(target)
-		writeTextWriteError(w, err)
-		return
-	}
-	s.invalidateTextCaches()
-	writeTextSaved(w, s.cfg.root, target)
+	s.createEntry(w, req.Dir, "file", req.Name, req.Content)
 }
 
 // writeTextSaved 返回写入后文件的新版本信息。
@@ -244,8 +208,9 @@ func (s *Server) invalidateTextCaches() {
 	s.list.mu.Unlock()
 }
 
-// decodeTextBody 解析并校验请求体：体积超上限返回 413，JSON 非法返回 400。
-func decodeTextBody(w http.ResponseWriter, r *http.Request, maxBytes int64, out *textSaveReq) bool {
+// decodeJSONBody 解析并校验请求体：体积超上限返回 413，JSON 非法返回 400。
+// out 为 *textSaveReq 或 *createReq，二者共用同一套体积防护。
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, maxBytes int64, out any) bool {
 	// 正文上限：内容上限 + JSON 结构开销余量
 	r.Body = http.MaxBytesReader(w, r.Body, maxBytes+64*1024)
 	dec := json.NewDecoder(r.Body)
@@ -258,11 +223,12 @@ func decodeTextBody(w http.ResponseWriter, r *http.Request, maxBytes int64, out 
 		httpError(w, http.StatusBadRequest, "参数格式错误")
 		return false
 	}
-	if int64(len(out.Content)) > maxBytes {
-		httpError(w, http.StatusRequestEntityTooLarge, "文本超过大小上限")
-		return false
-	}
 	return true
+}
+
+// contentTooLarge 内容是否超过可写文本上限（超限统一 413）。
+func contentTooLarge(content string, maxBytes int64) bool {
+	return int64(len(content)) > maxBytes
 }
 
 // writeTextWriteError 将写入底层错误映射为明确的 HTTP 语义。
@@ -329,18 +295,4 @@ func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 		return err
 	}
 	return nil
-}
-
-// validNewTextName 校验新建文件名：非空、无路径分隔符、非 . / ..、无 NUL。
-func validNewTextName(name string) bool {
-	if name == "" || name == "." || name == ".." {
-		return false
-	}
-	if strings.ContainsAny(name, "/\\\x00") {
-		return false
-	}
-	if filepath.Base(name) != name {
-		return false
-	}
-	return true
 }

@@ -202,6 +202,7 @@ func (s *Server) apiRoutes() []route {
 		{"GET", "/api/text", s.handleTextGet},
 		{"POST", "/api/text", s.handleTextSave},
 		{"POST", "/api/text/new", s.handleTextNew},
+		{"POST", "/api/create", s.handleCreate},
 		{"POST", "/api/settings/ffmpeg", s.handleSetFFmpeg},
 		// 认证：/api/auth/* 不受门禁
 		{"GET", "/api/auth/status", s.handleAuthStatus},
