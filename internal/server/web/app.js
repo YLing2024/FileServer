@@ -28,6 +28,109 @@ const searchURL = (q, p, limit) => `/api/search?q=${pathParam(q)}&path=${pathPar
 const videoInfoURL = (p) => '/api/video-info?path=' + pathParam(p);
 const hlsURL = (p) => '/api/hls?path=' + pathParam(p) + '&f=index.m3u8';
 
+/* ============================================================
+   凭据存储 / 短票 / 鉴权请求
+   ------------------------------------------------------------
+   凭据真源在前端存储：不勾「记住我」→ sessionStorage（关标签/浏览器即失效）；
+   勾选 → localStorage（持久）。键名 fs.token / fs.token.expires。
+   服务端不再下发 cookie：
+   - XHR（fetch）请求统一经 authFetch 带 Authorization: Bearer；
+   - <img>/<video>/<a download>/HLS 等浏览器原生请求无法带头，统一经 mediaURL
+     拼 ?t=<短票>（短票由 POST /api/auth/ticket 签发，绑定会话、只对 GET 生效）。
+   ============================================================ */
+
+const TOKEN_KEY = 'fs.token';
+const TOKEN_EXP_KEY = 'fs.token.expires';
+
+// readTokenState 读取凭据：sessionStorage 优先（不勾），其次 localStorage（勾选）。
+function readTokenState() {
+  try {
+    const st = sessionStorage.getItem(TOKEN_KEY);
+    if (st) return { token: st, expires: Number(sessionStorage.getItem(TOKEN_EXP_KEY)) || 0, remember: false };
+    const lt = localStorage.getItem(TOKEN_KEY);
+    if (lt) return { token: lt, expires: Number(localStorage.getItem(TOKEN_EXP_KEY)) || 0, remember: true };
+  } catch (_) { /* 隐私模式等存储不可用：视为无凭据 */ }
+  return null;
+}
+function authToken() { const s = readTokenState(); return s ? s.token : ''; }
+
+// writeToken 按勾选写入单一存储；先清另一处，避免同浏览器出现两份凭据。
+function writeToken(token, expires, remember) {
+  clearToken();
+  try {
+    const store = remember ? localStorage : sessionStorage;
+    store.setItem(TOKEN_KEY, token);
+    store.setItem(TOKEN_EXP_KEY, String(expires || 0));
+  } catch (_) { /* 存储不可用：本次页面内存态仍可用 */ }
+}
+function clearToken() {
+  try { sessionStorage.removeItem(TOKEN_KEY); sessionStorage.removeItem(TOKEN_EXP_KEY); } catch (_) { /* ignore */ }
+  try { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(TOKEN_EXP_KEY); } catch (_) { /* ignore */ }
+}
+
+// handleUnauthorized 任何接口 401：清本地凭据并回登录页（不得静默失败）。
+function handleUnauthorized() {
+  clearToken();
+  ticketState.value = '';
+  ticketState.expires = 0;
+  location.reload();
+}
+
+// authFetch 为 /api/* 请求附 Authorization: Bearer；401 触发全局清理回登录页。
+async function authFetch(url, opts) {
+  const o = Object.assign({}, opts || {});
+  const t = authToken();
+  if (t) {
+    o.headers = Object.assign({}, o.headers || {});
+    if (!o.headers['Authorization']) o.headers['Authorization'] = 'Bearer ' + t;
+  }
+  const resp = await fetch(url, o);
+  if (resp.status === 401) { handleUnauthorized(); throw new Error('未认证'); }
+  return resp;
+}
+
+// ---- 短票（ticket）----
+const ticketState = { value: '', expires: 0, inflight: null };
+let ticketTimer = null;
+
+// ticketFresh 剩余寿命是否仍 >60s（否则需续签）。
+function ticketFresh() { return !!ticketState.value && ticketState.expires * 1000 - Date.now() > 60000; }
+
+function refreshTicket() {
+  if (ticketState.inflight) return ticketState.inflight;
+  if (!authToken()) return Promise.resolve('');
+  ticketState.inflight = authFetch('/api/auth/ticket', { method: 'POST' })
+    .then((r) => r.json())
+    .then((j) => {
+      if (j && j.ticket) { ticketState.value = j.ticket; ticketState.expires = j.expires || 0; }
+      return ticketState.value;
+    })
+    .catch(() => ticketState.value)
+    .finally(() => { ticketState.inflight = null; });
+  return ticketState.inflight;
+}
+
+function ensureTicket() {
+  if (ticketFresh()) return Promise.resolve(ticketState.value);
+  return refreshTicket();
+}
+
+// mediaURL 收口：所有浏览器原生媒体/下载 URL 统一拼 ?t=<短票>。
+function mediaURL(url) {
+  if (!ticketState.value) { ensureTicket(); return url; }
+  return url + (url.includes('?') ? '&' : '?') + 't=' + enc(ticketState.value);
+}
+
+// startTicketRefresh 定时续签：剩余不足 60s 时重新签发，保证播放/下载不中断。
+function startTicketRefresh() {
+  ensureTicket();
+  if (ticketTimer) return;
+  ticketTimer = setInterval(() => {
+    if (!authToken()) return;
+    if (!ticketFresh()) refreshTicket();
+  }, 30000);
+}
+
 function fmtSize(n) {
   if (n == null) return '';
   if (n < 1024) return n + ' B';
@@ -57,7 +160,7 @@ function fmtDur(sec) {
 }
 
 async function api(url) {
-  const resp = await fetch(url);
+  const resp = await authFetch(url);
   if (!resp.ok) {
     let msg = '请求失败 (' + resp.status + ')';
     try { const j = await resp.json(); if (j.error) msg = j.error; } catch (_) { /* ignore */ }
@@ -301,12 +404,12 @@ function renderGrid(entries) {
       img.loading = 'lazy';
       img.decoding = 'async';
       img.alt = e.name;
-      img.src = thumbURL(p, 300, 300);
+      img.src = mediaURL(thumbURL(p, 300, 300));
       // 网络抖动偶发失败：重试一次，再失败才移除（保留图标位）
       let tries = 0;
       img.addEventListener('error', () => {
         tries++;
-        if (tries < 2) { img.src = thumbURL(p, 300, 300); }
+        if (tries < 2) { img.src = mediaURL(thumbURL(p, 300, 300)); }
         else { img.remove(); }
       });
       thumb.appendChild(img);
@@ -462,7 +565,7 @@ function openSearchEntry(e) {
 
 function triggerDownload(url, filename) {
   const a = document.createElement('a');
-  a.href = url;
+  a.href = mediaURL(url);
   a.download = filename || '';
   document.body.appendChild(a);
   a.click();
@@ -545,7 +648,7 @@ function observeVideoThumb(e, img, holder, thumbEl, p) {
         thumbCacheSet(key, im.src);
       };
       im.onerror = () => { thumbCacheSet(key, null); }; // 失败记忆，不重试
-      im.src = thumbURL(p, 300, 300);
+      im.src = mediaURL(thumbURL(p, 300, 300));
     } else {
       thumbCacheSet(key, null); // 不生成缩略图，保持图标且本会话不重试
     }
@@ -621,7 +724,7 @@ function grabVideoFrame(job) {
     // 样本区，≤16MB），浏览器把它当完整文件解析——元数据秒读、seek 命中，
     // 绝不整段下载整个视频（Chromium 对 video 源发开区间 Range，整段回源
     // 会把 1.4GB 文件全传一遍）。
-    const src = '/api/thumb-src?path=' + pathParam(job.key);
+    const src = mediaURL('/api/thumb-src?path=' + pathParam(job.key));
     video.src = src;
     activeGrabsSet.add(video);
     window.__thumbGrabs++;
@@ -709,14 +812,14 @@ function lbShow() {
   $('lbCount').textContent = `${lb.index + 1} / ${lb.images.length}`;
   $('lbPrev').classList.toggle('disabled', lb.images.length <= 1);
   $('lbNext').classList.toggle('disabled', lb.images.length <= 1);
-  img.src = fileURL(it.path);
+  img.src = mediaURL(fileURL(it.path));
   img.onload = () => img.classList.remove('loading');
   img.onerror = () => { img.classList.remove('loading'); toast('图片加载失败', true); };
   lbApplyTransform();
   // 相邻图片预加载：切换方向几乎零等待
   for (const d of [1, -1]) {
     const n = lb.images[lb.index + d];
-    if (n) { const pre = new Image(); pre.src = fileURL(n.path); }
+    if (n) { const pre = new Image(); pre.src = mediaURL(fileURL(n.path)); }
   }
 }
 
@@ -790,7 +893,7 @@ function stopPreview() {
   if (pvHlsPath) {
     const ab = pvHlsPath;
     pvHlsPath = null;
-    fetch(hlsURL(ab) + '&abandon=1').catch(() => {});
+    authFetch(hlsURL(ab) + '&abandon=1').catch(() => {});
   }
   if (pvHlsTimer) {
     clearInterval(pvHlsTimer);
@@ -866,11 +969,11 @@ function renderPreview(path, entry) {
   const kind = fileKind(entry);
 
   if (kind === 'image') {
-    main.innerHTML = `<div class="pv-image"><img src="${esc(fileURL(path))}" alt="${esc(entry.name)}"></div>`;
+    main.innerHTML = `<div class="pv-image"><img src="${esc(mediaURL(fileURL(path)))}" alt="${esc(entry.name)}"></div>`;
   } else if (kind === 'video' || kind === 'audio') {
     buildPlayer(main, path, entry, kind);
   } else if (kind === 'pdf') {
-    main.innerHTML = `<embed class="pv-embed" src="${esc(fileURL(path))}" type="application/pdf">`;
+    main.innerHTML = `<embed class="pv-embed" src="${esc(mediaURL(fileURL(path)))}" type="application/pdf">`;
   } else if (kind === 'text' || kind === 'code') {
     renderTextPreview(main, path, entry);
   } else {
@@ -894,7 +997,7 @@ function renderTextPreview(main, path, entry) {
   const seq = pvSeq;
   if (textEditableExt(entry.name)) {
     main.innerHTML = '<pre class="pv-text">加载中…</pre>';
-    fetch('/api/text?path=' + pathParam(path))
+    authFetch('/api/text?path=' + pathParam(path))
       .then((r) => r.json().then((j) => ({ ok: r.ok, j })))
       .then(({ ok, j }) => {
         if (seq !== pvSeq) return;
@@ -936,7 +1039,7 @@ function renderReadonlyText(main, path, entry, seq, note) {
     } else {
       main.innerHTML = '<pre class="pv-text">加载中…</pre>';
     }
-    fetch(fileURL(path))
+    authFetch(fileURL(path))
       .then((r) => r.text())
       .then((t) => {
         if (seq !== pvSeq) return;
@@ -994,7 +1097,7 @@ function renderTextEditor(main, path, entry, info) {
 
   const reload = async () => {
     try {
-      const j = await (await fetch('/api/text?path=' + pathParam(path))).json();
+      const j = await (await authFetch('/api/text?path=' + pathParam(path))).json();
       if (j && j.editable) {
         info.content = j.content; info.version = j.version; info.size = j.size; info.mtime = j.mtime;
       }
@@ -1005,7 +1108,7 @@ function renderTextEditor(main, path, entry, info) {
     if (!editing) { showEdit(); return; }
     btnEdit.disabled = true;
     try {
-      const r = await fetch('/api/text', {
+      const r = await authFetch('/api/text', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path, content: ta.value, version: info.version }),
@@ -1305,17 +1408,17 @@ function buildPlayer(container, path, entry, kind) {
   // 起播不再被「等待 video-info 往返」串联拖慢。video-info 仅异步补时长（进度条）。
   // 因服务端已禁 ffmpeg/HLS，mode 恒为 direct；仅当出现 hls（异常残留）时兜底切换。
   if (isAudio) {
-    video.src = fileURL(path); // 音频一律直链（浏览器原生支持）
+    video.src = mediaURL(fileURL(path)); // 音频一律直链（浏览器原生支持）
     return;
   }
-  video.src = fileURL(path); // 视频直链：立即拉流，浏览器 GPU 硬解
+  video.src = mediaURL(fileURL(path)); // 视频直链：立即拉流，浏览器 GPU 硬解
 
   // 异步补时长（不阻塞起播）：命中缓存立即返回，未命中则后台探测。
   // 失败结果（{} 且无关键字段）不入缓存，下次仍重试（否则瞬时错误会永久锁死该视频的时长）。
   const infoKey = 'vinfo:' + path;
   let infoP = videoInfoCache.get(infoKey);
   if (!infoP) {
-    infoP = fetch(videoInfoURL(path)).then((r) => (r.ok ? r.json() : {})).catch(() => ({}));
+    infoP = authFetch(videoInfoURL(path)).then((r) => (r.ok ? r.json() : {})).catch(() => ({}));
     infoP.then((info) => {
       if (info && (info.mode === 'hls' || info.duration)) {
         videoInfoCache.set(infoKey, infoP); // 有效结果才缓存
@@ -1353,7 +1456,7 @@ function buildPlayer(container, path, entry, kind) {
     // duration 可能尚未探测完成：稍后二次查询补真实总时长
     if (!info.duration) {
       setTimeout(() => {
-        fetch(videoInfoURL(path))
+        authFetch(videoInfoURL(path))
           .then((r) => (r.ok ? r.json() : null))
           .then((info2) => {
             if (info2 && info2.duration && pvVideo === video) {
@@ -1371,7 +1474,7 @@ function buildPlayer(container, path, entry, kind) {
 // （部分 Chromium 构建的 canPlayType('mpegurl') 返回 truthy 但原生实现有缺陷，
 // 相对 URI 解析错误导致起播失败——只对 Safari 走原生路径）。
 function attachHls(video, path) {
-  const url = hlsURL(path);
+  const url = mediaURL(hlsURL(path));
   pvHlsPath = path;
   const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
   if (isSafari && video.canPlayType('application/vnd.apple.mpegurl')) {
@@ -1402,6 +1505,17 @@ function attachHls(video, path) {
         fragLoadingRetryDelay: 500,
         manifestLoadingTimeOut: 30000,
         manifestLoadingMaxRetry: 4,
+        // 短票可能过期：hls.js 复用同一 manifest/分片 URL，这里在每次 XHR 前用最新
+        // 短票重写 ?t=，保证长转码会话播放不中断（Safari 原生 HLS 走服务端分片 URL 携带的票）。
+        xhrSetup: (xhr, reqUrl) => {
+          const t = ticketState.value;
+          if (!t) return;
+          try {
+            const u = new URL(reqUrl, location.origin);
+            u.searchParams.set('t', t);
+            xhr.open('GET', u.pathname + u.search, true);
+          } catch (_) { /* 保持 hls.js 默认行为 */ }
+        },
       });
       pvHls = hls;
       hls.loadSource(url);
@@ -1422,7 +1536,7 @@ function attachHls(video, path) {
       // manifest 轮询持续推进该范围，转码完成后全片可拖。
       let hlsAvail = 0;
       const updateAvail = () => {
-        fetch(url, { cache: 'no-store' })
+        fetch(mediaURL(hlsURL(path)), { cache: 'no-store' })
           .then((r) => r.text())
           .then((txt) => {
             let total = 0;
@@ -1447,7 +1561,7 @@ function attachHls(video, path) {
       // 转码进行中：定时重载 manifest 让 hls.js 看到新分片。
       // 检测到 ENDLIST（转码完成）即停止轮询——hls.js 已按 VOD 结束，无需再推。
       pvHlsTimer = setInterval(() => {
-        fetch(url, { cache: 'no-store' })
+        fetch(mediaURL(hlsURL(path)), { cache: 'no-store' })
           .then((r) => r.text())
           .then((txt) => {
             updateAvail();
@@ -1595,7 +1709,7 @@ $('btnFFmpeg').addEventListener('click', async () => {
   const target = !btn.classList.contains('active');
   btn.disabled = true;
   try {
-    const r = await fetch('/api/settings/ffmpeg', {
+    const r = await authFetch('/api/settings/ffmpeg', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled: target }),
@@ -1639,7 +1753,7 @@ $('nfCreate').addEventListener('click', async () => {
   const btn = $('nfCreate');
   btn.disabled = true;
   try {
-    const r = await fetch('/api/text/new', {
+    const r = await authFetch('/api/text/new', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ dir: state.path, name, content: $('nfContent').value }),
@@ -1759,7 +1873,8 @@ function renderLogin(st) {
     <p class="auth-hint">${esc(authModeLabel(st.mode))}</p>
     ${needPw ? '<label class="modal-field">访问口令<input id="auPw" type="password" autocomplete="current-password"></label>' : ''}
     ${needCode ? '<label class="modal-field">6 位验证码<input id="auCode" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code"></label>' : ''}
-    <label class="modal-field auth-remember"><input id="auRemember" type="checkbox"> 记住我（30 天内免登录）</label>
+    <label class="modal-field auth-remember"><input id="auRemember" type="checkbox"> 记住我（7 天内免登录）</label>
+    <p class="auth-hint">不勾选：关闭浏览器后需要重新登录</p>
     <p id="authErr" class="modal-error hidden"></p>
     <div class="modal-actions"><button id="auSubmit" class="btn primary">登录</button></div>`;
   $('auSubmit').addEventListener('click', submitLogin);
@@ -1769,15 +1884,19 @@ function renderLogin(st) {
 }
 
 async function submitLogin() {
+  const remember = $('auRemember') ? $('auRemember').checked : false;
   const body = {
     password: $('auPw') ? $('auPw').value : '',
     code: $('auCode') ? $('auCode').value.trim() : '',
-    remember: $('auRemember') ? $('auRemember').checked : false,
+    remember,
   };
   try {
+    // 登录失败也是 401，不能用 authFetch（否则会触发全局清理/刷新），故用裸 fetch。
     const r = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || '登录失败');
+    // 凭据真源写前端存储：不勾 -> sessionStorage，勾选 -> localStorage。
+    if (j.token) writeToken(j.token, j.expires, !!j.remember);
     location.reload();
   } catch (e) {
     authError(e.message);
@@ -1827,7 +1946,8 @@ async function submitSetup(skip) {
 // bootstrap 先探测认证状态：需要引导/登录则先渲染认证页，否则进入主应用。
 async function bootstrap() {
   let st = null;
-  try { st = await (await fetch('/api/auth/status')).json(); } catch (_) { /* 状态不可用时按无认证处理 */ }
+  // 用 authFetch 带上本地凭据：服务端已不再下发 cookie，状态探测靠 Authorization。
+  try { st = await (await authFetch('/api/auth/status')).json(); } catch (_) { /* 状态不可用时按无认证处理 */ }
   if (st && st.enabled) {
     if (st.unavailable) {
       showAuthOverlay();
@@ -1835,15 +1955,24 @@ async function bootstrap() {
       return;
     }
     if (st.needs_setup) { showAuthOverlay(); renderSetup(st); return; }
-    if (!st.authenticated) { showAuthOverlay(); renderLogin(st); return; }
+    if (!st.authenticated) {
+      clearToken(); // 服务端判定凭据无效/过期：清掉本地留痕，确保停在登录页
+      showAuthOverlay();
+      renderLogin(st);
+      return;
+    }
     $('btnLogout').classList.remove('hidden');
     $('btnSessions').classList.remove('hidden');
+    // 媒体/下载/缩略图/HLS 需要短票：进入主应用前先取到，避免首屏原生请求 401。
+    await ensureTicket();
+    startTicketRefresh();
   }
   startApp();
 }
 
 $('btnLogout').addEventListener('click', async () => {
-  try { await fetch('/api/auth/logout', { method: 'POST' }); } catch (_) { /* 忽略 */ }
+  try { await authFetch('/api/auth/logout', { method: 'POST' }); } catch (_) { /* 忽略 */ }
+  clearToken();
   location.reload();
 });
 
@@ -1852,7 +1981,7 @@ $('btnSessions').addEventListener('click', async () => {
   const list = $('ssList');
   list.textContent = '加载中…';
   try {
-    const j = await (await fetch('/api/auth/sessions')).json();
+    const j = await (await authFetch('/api/auth/sessions')).json();
     list.innerHTML = '';
     (j.sessions || []).forEach((s) => {
       const row = document.createElement('div');
@@ -1876,7 +2005,7 @@ $('btnSessions').addEventListener('click', async () => {
         btn.className = 'btn';
         btn.textContent = '撤销';
         btn.addEventListener('click', async () => {
-          await fetch('/api/auth/sessions/revoke', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: s.id }) });
+          await authFetch('/api/auth/sessions/revoke', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: s.id }) });
           $('btnSessions').click();
         });
         row.appendChild(btn);
@@ -1899,7 +2028,7 @@ function startApp() {
   setView(state.view);
   // 探测服务端能力（HLS 转码、扩展名映射、搜索上限），缩略图已 100% 浏览器抽帧。
   const params = new URL(location.href).searchParams;
-  fetch('/api/info')
+  authFetch('/api/info')
     .then((r) => r.json())
     .then((info) => {
       if (info.kinds) state.kinds = info.kinds; // 统一扩展名映射（4.1）
@@ -1914,7 +2043,7 @@ function startApp() {
         want = saved === '1';
         if (want !== !!info.hls) {
           // 同步服务端到用户选择（不阻塞初始化）
-          fetch('/api/settings/ffmpeg', {
+          authFetch('/api/settings/ffmpeg', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ enabled: want }),
           }).catch(() => {});
