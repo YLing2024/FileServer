@@ -77,6 +77,10 @@ web/
 ## 6. 移动端适配
 
 - 响应式：网格列数自适应（`auto-fill, minmax`）；触屏手势（swipe 返回、进度条拖拽）。
+- 触摸目标（`@media (max-width:991px), (pointer:coarse)`）：工具栏/面包屑按钮 ≥44px、
+  视图切换等图标按钮 ≥32×32、搜索框与表单控件 ≥44px 高且字号 ≥16px（防 iOS 聚焦放大整页）、
+  相邻操作间距 ≥8px；触屏无 hover 时列表行操作常显。窄屏工具栏换行、搜索框独占一行、
+  登录/新建弹窗按钮单列。可见小字号抬到 ≥12px。该查询不覆盖 ≥992px 细指针桌面，桌面观感不变。
 - 播放器全屏按钮：iOS Safari 用 `webkitEnterFullscreen`，其余 `requestFullscreen`。
 - 物理返回键：popstate 统一处理（预览 → 列表 → 上级目录）。
 - 列表/网格视图切换记忆在 localStorage（`fs.view`/`fs.sort`/`fs.order`）。
