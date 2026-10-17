@@ -82,12 +82,6 @@ func TestCreateDir(t *testing.T) {
 	if err != nil || !fi.IsDir() {
 		t.Fatalf("文件夹未创建: %v", err)
 	}
-
-	// 不递归：父目录不存在时 school/class 应 400，而不是造出 school。
-	r2, _ := createJSON(t, ts.URL+"/api/create", `{"dir":"/","kind":"dir","name":"school"}`)
-	if r2.StatusCode != http.StatusOK {
-		t.Fatalf("建 school 应 200, 得到 %d", r2.StatusCode)
-	}
 }
 
 // TestCreateInvalidNames 命名校验矩阵（非法名一律 400 且不落盘）。
@@ -275,6 +269,14 @@ func TestCreateBadDir(t *testing.T) {
 	r3, _ := createJSON(t, ts.URL+"/api/create", `{"dir":"../..","kind":"file","name":"x.txt"}`)
 	if r3.StatusCode != http.StatusForbidden {
 		t.Errorf("目录穿越应 403, 得到 %d", r3.StatusCode)
+	}
+	// 建文件夹同样不递归：父目录不存在 → 400（不会顺带造出父目录）
+	r4, _ := createJSON(t, ts.URL+"/api/create", `{"dir":"/no/such/parent","kind":"dir","name":"x"}`)
+	if r4.StatusCode != http.StatusBadRequest {
+		t.Errorf("父目录不存在建文件夹应 400, 得到 %d", r4.StatusCode)
+	}
+	if _, err := os.Stat(filepath.Join(root, "no")); !os.IsNotExist(err) {
+		t.Errorf("不应递归创建父目录: %v", err)
 	}
 }
 
