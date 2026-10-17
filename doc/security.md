@@ -56,15 +56,21 @@
 - 首次启动且 `--auth-mode != none` 时，浏览器落地**引导页**：设置口令（≥ 8 位；
   `password`/`password+totp`）与绑定 TOTP（`totp` 必须绑定不可跳过；`password+totp`
   可跳过，跳过后退化为单因素并可随时补绑）。引导完成后自动转登录页。
-- 登录支持「记住我」：不勾=会话 cookie（关浏览器失效，服务端 TTL 默认 12 小时，
-  `--session-hours`）；勾选=持久 cookie（默认 30 天，`--remember-days`）。
-- cookie 属性：`HttpOnly`、`SameSite=Lax`、`Path=/`；请求为 https 或 `--cookie-secure`
-  时带 `Secure`。
+- 登录支持「记住我」，但**服务端不再下发 cookie**：登录响应体返回明文 `token`，
+  前端据勾选写入 `sessionStorage`（不勾，关标签/浏览器即失效）或 `localStorage`
+  （勾选，持久）。服务端 token 有效期统一 **7 天**（`--token-days`，默认 7；勾/不勾一致），
+  由客户端存储决定「是否还要重新输」。
+- XHR 请求经 `Authorization: Bearer <token>` 鉴权；浏览器原生媒体请求
+  （`<video>/<img>/<a download>`/HLS 分片）无法带头，改用绑定会话的**短票** `?t=`
+  （`POST /api/auth/ticket` 签发，默认 5 分钟、**只对 GET 生效**、会话撤销即失效）。
+  短票可出现在 URL；**token 本体绝不进入 URL/日志**。旧版 `fs_session` cookie 仅作
+  只读兼容（不再下发）。
 - 凭据只存服务端产物于 `.FileServer/auth.json`（0600，原子写）：
   - 口令：自研 Argon2id PHC 哈希（`m=64MiB, t=3, p=4`，标准库自研，RFC 9106 向量校验）；
   - TOTP 密钥：**明文存储**（无主密钥可加密，取 0600 文件 + 目录受控，等价于 SSH
     私钥的保护级别；如需更强保护应在磁盘加密层解决）；
-  - 会话/记住我 token：只存 `sha256` 哈希 + 过期时间，永不落明文。列表页也不显示明文。
+  - 会话 token：只存 `sha256` 哈希 + 过期时间，永不落明文；列表页也不显示明文。
+  - 短票：只存哈希，仅内存（重启即失效），不落盘。
 - 恒定时间比较：口令走 Argon2 派生后 `subtle.ConstantTimeCompare`，TOTP 校验同理。
 - TOTP 重放防护：**任何一次成功的 TOTP 校验（引导绑定或登录）都会把该时间步计入
   已用集合**；同一步内同码再次使用一律拒绝，且不早于已消费步的窗口内码失效。

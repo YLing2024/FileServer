@@ -43,10 +43,9 @@ Stopping the service: close the window, or press `Ctrl+C` (graceful exit that al
 | `--hidden` | show hidden files (leading dot). When off (default), hidden files are invisible / inaccessible in the list, search, direct download, thumbnails and zip; `.FileServer` is a reserved name and is always invisible / inaccessible regardless |
 | `--auth-mode <mode>` | authentication mode: `none` (default, open) \| `totp` \| `password` \| `password+totp` |
 | `--auth user:pass` | compatibility: equals `--auth-mode password` plus a preset password |
-| `--remember-days 30` | "remember me" persistent cookie lifetime in days, default 30 |
-| `--session-hours 12` | session lifetime when "remember me" is unchecked (hours), default 12 |
+| `--token-days 7` | session token lifetime in days, default 7; same whether or not "remember me" is checked (client storage decides whether you are asked to log in again) |
 | `--trust-proxy` | trust the reverse proxy's `X-Forwarded-For` (leftmost value is the client IP); off by default |
-| `--cookie-secure` | force the `Secure` flag on the auth cookie (automatic under https) |
+| `--cookie-secure` | legacy sessions: require secure transport (https) for the old `fs_session` cookie; the new flow no longer sets cookies |
 | `--reset-auth` | clear all credentials and sessions then exit (recovery while the service is stopped) |
 | `--reset-totp` | clear only the TOTP binding then exit (recovery after losing an authenticator) |
 | `--text-max-bytes N` | editable text size limit in bytes, default 2097152 (2 MiB) |
@@ -56,19 +55,23 @@ Stopping the service: close the window, or press `Ctrl+C` (graceful exit that al
 
 Same-named environment variables act as defaults (command-line wins): `FILESERVER_PORT`,
 `FILESERVER_HOST`, `FILESERVER_DIR`, `FILESERVER_HIDDEN`, `FILESERVER_FFMPEG`,
-`FILESERVER_AUTH`, `FILESERVER_AUTH_MODE`, `FILESERVER_REMEMBER_DAYS`,
-`FILESERVER_SESSION_HOURS`, `FILESERVER_TRUST_PROXY`, `FILESERVER_COOKIE_SECURE`,
-`FILESERVER_TEXT_MAX_BYTES`. When locating ffmpeg it also checks
-`%LOCALAPPDATA%\FileServer\ffmpeg`.
+`FILESERVER_AUTH`, `FILESERVER_AUTH_MODE`, `FILESERVER_TOKEN_DAYS`,
+`FILESERVER_TRUST_PROXY`, `FILESERVER_COOKIE_SECURE`, `FILESERVER_TEXT_MAX_BYTES`.
+When locating ffmpeg it also checks `%LOCALAPPDATA%\FileServer\ffmpeg`.
 
 ## Authentication
 
 When enabled (`--auth-mode` other than `none`), the first visit opens a **setup guide**
 to set a password (≥ 8 chars) and bind TOTP (`totp` requires binding; `password+totp` can
-skip it and degrade to single-factor). The login form offers "remember me" (checked =
-stay signed in up to 30 days; unchecked = session cookie that expires when the browser
-closes). Credentials are stored only server-side in `.FileServer/auth.json` (0600):
-Argon2id password hash, TOTP secret (0600-protected) and sha256 hashes of session tokens.
+skip it and degrade to single-factor). The login form offers "remember me": **unchecked**
+stores the credential in `sessionStorage` (closing the tab/browser requires logging in
+again); **checked** stores it in `localStorage` (stays signed in). Server-side tokens are
+valid for 7 days (`--token-days`).
+Credentials are stored only server-side in `.FileServer/auth.json` (0600): Argon2id
+password hash, TOTP secret (0600-protected) and sha256 hashes of session tokens.
+The server no longer sets cookies: the login response body returns the plaintext token for
+the client to store, and browser-native requests (media/download) authenticate with a
+session-bound short ticket (`?t=`, 5 minutes by default, GET only) — the token never enters a URL.
 Lost authenticator / password: with the service stopped, run `--reset-totp` (TOTP only)
 or `--reset-auth` (all credentials), then restart. See `doc/security.md`.
 

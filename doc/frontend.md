@@ -86,14 +86,23 @@ web/
   只有进入视口的卡片才发 `thumb-src` 请求（每张 ≤16MB，3 路并发）。
 - 前端缩略图缓存 LRU 防内存膨胀；重复浏览同一目录秒显（dataURL 命中）。
 
-## 8. 认证页与文本编辑
+## 8. 认证页与凭据 / 媒体 URL
 
 - 启动时 `bootstrap()` 先查 `/api/auth/status`：`needs_setup` → 引导页，未认证 → 登录页，
   否则进入主应用。引导/登录是 `#auth` 覆盖层，不渲染任何目录内容，服务端对静态资源
   不设门禁、对 `/api/*` 设门禁，故未认证也拿不到目录数据。
 - 引导页按模式显示：口令（两次输入，≥8 位）、TOTP 二维码（`/api/auth/totp-qr`，SVG）+
-  手输密钥 + 6 位码确认；`password+totp` 提供「跳过 TOTP」。登录页支持「记住我」。
+  手输密钥 + 6 位码确认；`password+totp` 提供「跳过 TOTP」。登录页支持「记住我」
+  （勾选=7 天内免登录；不勾=关闭浏览器后需重新登录）。
+- **凭据真源在前端存储**：登录响应体返回明文 `token`（服务端不再下发 cookie），
+  `remember=false` 写 `sessionStorage`、`remember=true` 写 `localStorage`（键
+  `fs.token` + `fs.token.expires`）。所有 XHR 经 `authFetch()` 附
+  `Authorization: Bearer`；任何接口 `401` → `clearToken()` 并回登录页。
+- **媒体 URL 收口 `mediaURL(url)`**：`<img>/<video>/<a download>/<embed>` 与 HLS（含
+  服务端分片 URI）等浏览器原生请求无法带 `Authorization` 头，统一拼 `?t=<短票>`；
+  短票由 `POST /api/auth/ticket` 签发（绑定会话、只对 GET 生效、默认 5 分钟），
+  前端在剩余寿命不足 60s 时自动续签；hls.js 用 `xhrSetup` 在每个 XHR 前刷新 `?t=`。
 - 工具栏在认证启用时显示登出与会话管理按钮；会话弹窗列出会话（UA/时间/IP，不显示 token）
-  并可逐个撤销。
+  并可逐个撤销。登出清前端存储并调用 `/api/auth/logout` 使服务端 token 失效。
 - 文本编辑见 §4 与 `doc/COMPONENTS.md`：白名单内文件在预览页提供「编辑」，
   保存带版本标识，409 时提示并载入最新内容。

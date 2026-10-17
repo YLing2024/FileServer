@@ -43,10 +43,9 @@
 | `--hidden` | 显示隐藏文件（点开头）。默认关闭时，隐藏文件在列表、搜索、直链下载、缩略图、zip 中均不可见/不可访问；`.FileServer` 为保留名，无论开关始终不可见/不可访问 |
 | `--auth-mode <模式>` | 认证模式：`none`（默认，敞开）\| `totp` \| `password` \| `password+totp` |
 | `--auth user:pass` | 兼容用法：等价于 `--auth-mode password` + 预置口令 |
-| `--remember-days 30` | 「记住我」持久 cookie 天数，默认 30 |
-| `--session-hours 12` | 不勾「记住我」的会话有效期（小时），默认 12 |
+| `--token-days 7` | 会话 token 有效期（天），默认 7；勾/不勾「记住我」一致（客户端存储决定是否需重新登录） |
 | `--trust-proxy` | 信任反向代理的 `X-Forwarded-For`（取最左为客户端 IP）；默认不信任 |
-| `--cookie-secure` | 强制认证 cookie 带 `Secure`（https 下自动开启） |
+| `--cookie-secure` | 兼容旧版会话：要求经安全连接（https）携带旧 `fs_session` cookie；新流程不再下发 cookie |
 | `--reset-auth` | 清除全部认证凭据与会话后退出（服务未启动时用于找回访问权限） |
 | `--reset-totp` | 仅清除 TOTP 绑定后退出（丢失验证器时自救） |
 | `--text-max-bytes N` | 可编辑文本大小上限（字节），默认 2097152（2 MiB） |
@@ -56,18 +55,21 @@
 
 同名环境变量作为默认值（命令行优先）：`FILESERVER_PORT`、`FILESERVER_HOST`、
 `FILESERVER_DIR`、`FILESERVER_HIDDEN`、`FILESERVER_FFMPEG`、`FILESERVER_AUTH`、
-`FILESERVER_AUTH_MODE`、`FILESERVER_REMEMBER_DAYS`、`FILESERVER_SESSION_HOURS`、
-`FILESERVER_TRUST_PROXY`、`FILESERVER_COOKIE_SECURE`、`FILESERVER_TEXT_MAX_BYTES`。
+`FILESERVER_AUTH_MODE`、`FILESERVER_TOKEN_DAYS`、`FILESERVER_TRUST_PROXY`、
+`FILESERVER_COOKIE_SECURE`、`FILESERVER_TEXT_MAX_BYTES`。
 查找 ffmpeg 时会参考 `%LOCALAPPDATA%\FileServer\ffmpeg`。
 
 ## 认证
 
 启用后（`--auth-mode` 非 `none`）：首次访问进入**引导页**设置口令（≥ 8 位）与绑定
 TOTP（`totp` 必须绑定；`password+totp` 可跳过，跳过后退化为单因素并可随时补绑）。
-登录页支持「记住我」（勾选=最长 30 天免登录；不勾=关浏览器即失效）。
+登录页支持「记住我」：**不勾**把凭据存到 `sessionStorage`（关闭标签/浏览器即需重新登录）；
+**勾选**存 `localStorage`（持久免登录）。服务端 token 统一 7 天有效（`--token-days`）。
 
 - 凭据只存服务端产物：`.FileServer/auth.json`（0600）保存口令 Argon2id 哈希、
   TOTP 密钥（0600 保护）与会话 token 的 sha256 哈希；列表页不显示 token。
+- 服务端不再下发 cookie：登录响应体返回明文 token，由前端存储；媒体/下载等浏览器
+  原生请求用绑定会话的短票（`?t=`，默认 5 分钟、只对 GET 生效）鉴权，token 不进 URL。
 - 恒定时间比较、TOTP 重放防护、按 IP 阶梯限速（失败过多会短暂锁定）。
 - **丢失验证器/口令**：在服务未启动时执行 `--reset-totp`（仅清 TOTP）或
   `--reset-auth`（清全部凭据），再重新启动完成引导。重置后任何人都能重新绑定，
