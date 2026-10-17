@@ -1727,7 +1727,9 @@ $('btnFFmpeg').addEventListener('click', async () => {
   }
 });
 
-/* ---------- 新建文本文件 ---------- */
+/* ---------- 新建文件 / 文件夹 ---------- */
+
+let nfKind = 'file'; // 当前选择的类型：file | dir
 
 function showNewFileError(msg) {
   const el = $('nfError');
@@ -1736,27 +1738,57 @@ function showNewFileError(msg) {
 }
 function closeNewFile() { $('newFile').classList.add('hidden'); }
 
+// syncNewFileFields 依据类型与扩展名决定「初始内容」框与提示的显隐，并同步创建按钮可用态。
+function syncNewFileFields() {
+  const name = $('nfName').value.trim();
+  const isFile = nfKind === 'file';
+  const editable = isFile && textEditableExt(name);
+  $('nfContentField').classList.toggle('hidden', !editable);
+  $('nfHint').classList.toggle('hidden', !isFile || editable);
+  $('nfCreate').disabled = !name;
+}
+
+// setNewKind 切换「文件 / 文件夹」并同步字段与占位文案。
+function setNewKind(kind) {
+  nfKind = kind;
+  const isFile = kind === 'file';
+  $('nfKindFile').classList.toggle('active', isFile);
+  $('nfKindDir').classList.toggle('active', !isFile);
+  $('nfKindFile').setAttribute('aria-pressed', String(isFile));
+  $('nfKindDir').setAttribute('aria-pressed', String(!isFile));
+  $('nfNameLabel').textContent = isFile ? '文件名（含扩展名）' : '文件夹名';
+  $('nfName').placeholder = isFile ? 'example.md' : '新建文件夹';
+  syncNewFileFields();
+}
+
 $('btnNewText').addEventListener('click', () => {
   $('nfError').classList.add('hidden');
   $('nfName').value = '';
   $('nfContent').value = '';
+  setNewKind('file');
   $('newFile').classList.remove('hidden');
   $('nfName').focus();
 });
+$('nfKindFile').addEventListener('click', () => setNewKind('file'));
+$('nfKindDir').addEventListener('click', () => setNewKind('dir'));
+$('nfName').addEventListener('input', syncNewFileFields);
 $('nfCancel').addEventListener('click', closeNewFile);
 $('newFile').addEventListener('keydown', (e) => {
   if (e.key === 'Escape') closeNewFile();
 });
 $('nfCreate').addEventListener('click', async () => {
   const name = $('nfName').value.trim();
-  if (!name) { showNewFileError('请输入文件名'); return; }
+  if (!name) { showNewFileError('请输入名称'); return; }
+  const isFile = nfKind === 'file';
+  // 仅文本白名单文件才带初始内容，其余一律建空文件。
+  const content = isFile && textEditableExt(name) ? $('nfContent').value : '';
   const btn = $('nfCreate');
   btn.disabled = true;
   try {
-    const r = await authFetch('/api/text/new', {
+    const r = await authFetch('/api/create', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dir: state.path, name, content: $('nfContent').value }),
+      body: JSON.stringify({ dir: state.path, kind: nfKind, name, content }),
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || '创建失败');

@@ -531,6 +531,11 @@ tr:hover .row-act { opacity: 1; }
 .auth-remember { flex-direction: row !important; align-items: center; gap: 8px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; }
 .modal-error { margin: 0; color: var(--danger); font-size: 13px; }
+.modal-hint { margin: 0; color: var(--text-3); font-size: 12.5px; }
+.nf-kind { display: flex; gap: 4px; background: var(--bg-soft); border: 1px solid var(--border); border-radius: 11px; padding: 3px; }
+.nf-kind button { flex: 1; height: 34px; border-radius: 8px; color: var(--text-3); font-size: 13.5px; transition: background .15s, color .15s; }
+.nf-kind button:hover { color: var(--text); }
+.nf-kind button.active { background: var(--card); color: var(--accent); box-shadow: var(--shadow-sm); }
 .session-list { display: flex; flex-direction: column; gap: 8px; max-height: 50vh; overflow: auto; }
 .session-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; }
 .session-row .s-meta { margin-right: auto; color: var(--text-3); display: flex; flex-direction: column; gap: 2px; }

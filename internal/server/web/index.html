@@ -32,7 +32,7 @@
       <button id="btnFFmpeg" class="icon-btn" title="冷门格式支持（MKV/RMVB/HEVC 等在线播放与缩略图，需 ffmpeg）" aria-label="冷门格式开关">
         <svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/><path d="M3 8h3M5 6v4M16 3v3M14.5 4.5h3"/></svg>
       </button>
-      <button id="btnNewText" class="icon-btn" title="在当前目录新建文本文件" aria-label="新建文本文件">
+      <button id="btnNewText" class="icon-btn" title="新建文件 / 文件夹" aria-label="新建文件或文件夹">
         <svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M12 11v6M9 14h6"/></svg>
       </button>
       <div class="seg" role="group" aria-label="视图切换">
@@ -152,20 +152,25 @@
   </div>
 </div>
 
-<!-- ============ 新建文本文件对话框 ============ -->
+<!-- ============ 新建文件 / 文件夹对话框 ============ -->
 <div id="newFile" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="nfTitle">
   <div class="modal-box">
-    <h3 id="nfTitle">新建文本文件</h3>
-    <label class="modal-field">文件名（含扩展名）
+    <h3 id="nfTitle">新建</h3>
+    <div class="nf-kind" role="group" aria-label="新建类型">
+      <button id="nfKindFile" type="button" class="active" aria-pressed="true">文件</button>
+      <button id="nfKindDir" type="button" aria-pressed="false">文件夹</button>
+    </div>
+    <label class="modal-field"><span id="nfNameLabel">文件名（含扩展名）</span>
       <input id="nfName" type="text" placeholder="example.md" autocomplete="off" spellcheck="false">
     </label>
-    <label class="modal-field">初始内容（可留空）
+    <label class="modal-field" id="nfContentField">初始内容（可留空）
       <textarea id="nfContent" spellcheck="false"></textarea>
     </label>
+    <p id="nfHint" class="modal-hint hidden">该类型只创建空文件</p>
     <p id="nfError" class="modal-error hidden"></p>
     <div class="modal-actions">
       <button id="nfCancel" class="btn">取消</button>
-      <button id="nfCreate" class="btn primary">创建</button>
+      <button id="nfCreate" class="btn primary" disabled>创建</button>
     </div>
   </div>
 </div>
