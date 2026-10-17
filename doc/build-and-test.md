@@ -162,6 +162,7 @@ $env:PYTHONIOENCODING='utf-8'   # 控制台中文输出
 | `mobile_test.py` | 移动端视口 + zip 打包下载 |
 | `mobile_ui_check.py` | 移动端 UI 检查（布局/触控） |
 | `special_e2e_test.py` | 特殊字符文件名端到端 |
+| `create_e2e_test.py` | **新建验收**：建文件夹 → 进入 → 建空文件（0 字节）→ 建 .txt 编辑保存 → 回上级 |
 | `frontthumb_test.py` | 前端抽帧模式（需**无 ffmpeg** 服务，见下） |
 | `hls_e2e_test.py` | HLS 起播/seek（生成 HEVC/MKV 测试片） |
 | `thumbspeed_test.py` | **缩略图速度验收**：大目录冷浏览出图速度 + 抽帧中播放不受影响 |
