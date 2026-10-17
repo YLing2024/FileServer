@@ -9,22 +9,57 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/cookiejar"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
 // ---- 测试辅助 ----
 
+// tokenHolder 保存测试客户端的当前会话 token（登录成功后写入），供 bearerTransport 注入。
+type tokenHolder struct {
+	mu    sync.Mutex
+	token string
+}
+
+func (h *tokenHolder) set(t string) { h.mu.Lock(); h.token = t; h.mu.Unlock() }
+func (h *tokenHolder) get() string  { h.mu.Lock(); defer h.mu.Unlock(); return h.token }
+
+// bearerTransport 模拟新前端：把本地保存的 token 作为 Authorization: Bearer 附到每个
+// 请求（服务端不再下发 cookie，所有 /api/* 请求靠 Bearer 鉴权）。
+type bearerTransport struct {
+	base   http.RoundTripper
+	holder *tokenHolder
+}
+
+func (t *bearerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if tok := t.holder.get(); tok != "" && r.Header.Get("Authorization") == "" {
+		r = r.Clone(r.Context())
+		r.Header.Set("Authorization", "Bearer "+tok)
+	}
+	return t.base.RoundTrip(r)
+}
+
+// newBearerClient 生成一个自动携带 holder 中 token 的客户端（token 由 authLogin 写入）。
+func newBearerClient() *http.Client {
+	holder := &tokenHolder{}
+	return &http.Client{Transport: &bearerTransport{base: http.DefaultTransport, holder: holder}}
+}
+
+func setClientToken(client *http.Client, token string) {
+	if tr, ok := client.Transport.(*bearerTransport); ok {
+		tr.holder.set(token)
+	}
+}
+
 func newAuthServer(t *testing.T, opts Options) (*httptest.Server, *http.Client) {
 	t.Helper()
 	srv := New(t.TempDir(), opts)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
-	jar, _ := cookiejar.New(nil)
-	return ts, &http.Client{Jar: jar}
+	return ts, newBearerClient()
 }
 
 type authStatusResp struct {
@@ -53,6 +88,7 @@ func authStatus(t *testing.T, base string) authStatusResp {
 	return st
 }
 
+// authLogin 提交登录；成功时把响应体里的 token 写入客户端（Bearer 注入），返回状态码。
 func authLogin(t *testing.T, client *http.Client, base, password, code string, remember bool) int {
 	t.Helper()
 	body, _ := json.Marshal(map[string]any{"password": password, "code": code, "remember": remember})
@@ -60,8 +96,14 @@ func authLogin(t *testing.T, client *http.Client, base, password, code string, r
 	if err != nil {
 		t.Fatal(err)
 	}
-	io.Copy(io.Discard, r.Body)
-	r.Body.Close()
+	defer r.Body.Close()
+	var resp struct {
+		Token string `json:"token"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&resp)
+	if r.StatusCode == http.StatusOK && resp.Token != "" {
+		setClientToken(client, resp.Token)
+	}
 	return r.StatusCode
 }
 
@@ -164,7 +206,7 @@ func TestAuthPasswordFlow(t *testing.T) {
 	if code := authLogin(t, client, ts.URL, "wrongpass", "", false); code != http.StatusUnauthorized {
 		t.Fatalf("错误口令应 401, 得到 %d", code)
 	}
-	// 正确口令 → cookie → 访问
+	// 正确口令 → 响应体返回 token（客户端据此以 Bearer 访问）
 	if code := authLogin(t, client, ts.URL, "password123", "", false); code != http.StatusOK {
 		t.Fatalf("正确口令应 200, 得到 %d", code)
 	}
@@ -337,42 +379,142 @@ func TestAuthLockout(t *testing.T) {
 	}
 }
 
-// TestAuthCookieFlags 会话 cookie 属性：HttpOnly/SameSite/Path 恒有；
-// 勾选记住我带 Max-Age，不勾则无；CookieSecure 时带 Secure。
-func TestAuthCookieFlags(t *testing.T) {
-	ts, client := newAuthServer(t, Options{Auth: "user:password123", CookieSecure: true})
+// TestAuthLoginReturnsTokenNoCookie 登录响应体返回明文 token/expires/remember，
+// 且响应头不含 Set-Cookie（服务端不再下发 cookie）。
+func TestAuthLoginReturnsTokenNoCookie(t *testing.T) {
+	ts, client := newAuthServer(t, Options{Auth: "user:password123"})
 
-	// 不勾记住我：会话 cookie（无 Max-Age/Expires），带 Secure
-	r := postJSONClient(t, client, ts.URL+"/api/auth/login", `{"password":"password123","remember":false}`)
-	r.Body.Close()
-	c := findCookie(t, r, "fs_session")
-	if c == nil || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode || c.Path != "/" || !c.Secure {
-		t.Fatalf("会话 cookie 属性异常: %+v", c)
+	r := postJSONClient(t, client, ts.URL+"/api/auth/login", `{"password":"password123","remember":true}`)
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("登录应 200, 得到 %d", r.StatusCode)
 	}
-	if c.MaxAge != 0 || !c.Expires.IsZero() {
-		t.Errorf("不勾记住我不应带持久期: MaxAge=%d Expires=%v", c.MaxAge, c.Expires)
+	if got := r.Header.Values("Set-Cookie"); len(got) != 0 {
+		t.Fatalf("登录响应不应下发 Set-Cookie, 得到 %v", got)
 	}
-
-	// 勾选记住我：持久 cookie（Max-Age > 0）
-	r2 := postJSONClient(t, client, ts.URL+"/api/auth/login", `{"password":"password123","remember":true}`)
-	r2.Body.Close()
-	c2 := findCookie(t, r2, "fs_session")
-	if c2 == nil || c2.MaxAge <= 0 {
-		t.Fatalf("记住我应带 Max-Age: %+v", c2)
+	var resp struct {
+		OK       bool   `json:"ok"`
+		Token    string `json:"token"`
+		Expires  int64  `json:"expires"`
+		Remember bool   `json:"remember"`
 	}
-	if c2.MaxAge < 29*24*3600 {
-		t.Errorf("记住我有效期应约 30 天, 得到 %d 秒", c2.MaxAge)
+	if err := json.NewDecoder(r.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK || resp.Token == "" || !resp.Remember {
+		t.Fatalf("登录响应体异常: %+v", resp)
+	}
+	if d := time.Until(time.Unix(resp.Expires, 0)); d > 7*24*time.Hour || d < 7*24*time.Hour-time.Minute {
+		t.Errorf("expires 应约 7 天, 得到 %v", d)
 	}
 }
 
-func findCookie(t *testing.T, r *http.Response, name string) *http.Cookie {
-	t.Helper()
-	for _, c := range r.Cookies() {
-		if c.Name == name {
-			return c
+// TestAuthTicketSignAndUse 短票：Bearer 换短票 → 裸客户端仅凭 ?t= 可 GET；
+// 无效短票 401；POST 不接受短票；撤销会话后短票立即失效。
+func TestAuthTicketSignAndUse(t *testing.T) {
+	ts, client := newAuthServer(t, Options{Auth: "user:password123"})
+	if code := authLogin(t, client, ts.URL, "password123", "", false); code != http.StatusOK {
+		t.Fatalf("登录应 200, 得到 %d", code)
+	}
+	tr := postJSONClient(t, client, ts.URL+"/api/auth/ticket", "")
+	defer tr.Body.Close()
+	if tr.StatusCode != http.StatusOK {
+		t.Fatalf("签发短票应 200, 得到 %d", tr.StatusCode)
+	}
+	var tk struct {
+		Ticket  string `json:"ticket"`
+		Expires int64  `json:"expires"`
+	}
+	if err := json.NewDecoder(tr.Body).Decode(&tk); err != nil {
+		t.Fatal(err)
+	}
+	if tk.Ticket == "" {
+		t.Fatal("短票不应为空")
+	}
+	if d := time.Until(time.Unix(tk.Expires, 0)); d > 5*time.Minute || d < 5*time.Minute-time.Minute {
+		t.Errorf("短票有效期应约 5 分钟, 得到 %v", d)
+	}
+
+	// 裸客户端（无 Bearer/cookie）仅凭短票：GET 通过
+	raw := &http.Client{}
+	g1 := getWithClient(t, raw, ts.URL+"/api/list?path=/&t="+tk.Ticket)
+	g1.Body.Close()
+	if g1.StatusCode != http.StatusOK {
+		t.Fatalf("仅短票 GET /api/list 应 200, 得到 %d", g1.StatusCode)
+	}
+	g2 := getWithClient(t, raw, ts.URL+"/api/info?t="+tk.Ticket)
+	g2.Body.Close()
+	if g2.StatusCode != http.StatusOK {
+		t.Fatalf("仅短票 GET /api/info 应 200, 得到 %d", g2.StatusCode)
+	}
+
+	// 无任何凭据：401
+	none := getWithClient(t, raw, ts.URL+"/api/list?path=/")
+	none.Body.Close()
+	if none.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("无凭据应 401, 得到 %d", none.StatusCode)
+	}
+	// 无效短票：401
+	bad := getWithClient(t, raw, ts.URL+"/api/list?path=/&t=not-a-ticket")
+	bad.Body.Close()
+	if bad.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("无效短票应 401, 得到 %d", bad.StatusCode)
+	}
+	// POST 不接受短票（短票只对 GET 生效）
+	pr, err := raw.Post(ts.URL+"/api/settings/ffmpeg?t="+tk.Ticket, "application/json", strings.NewReader(`{"enabled":false}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr.Body.Close()
+	if pr.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("POST 带短票应 401, 得到 %d", pr.StatusCode)
+	}
+
+	// 撤销当前会话 → 其短票立即失效
+	sr := getWithClient(t, client, ts.URL+"/api/auth/sessions")
+	var out struct {
+		Sessions []struct {
+			ID      string `json:"id"`
+			Current bool   `json:"current"`
+		} `json:"sessions"`
+	}
+	if err := json.NewDecoder(sr.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	sr.Body.Close()
+	var curID string
+	for _, s := range out.Sessions {
+		if s.Current {
+			curID = s.ID
 		}
 	}
-	return nil
+	if curID == "" {
+		t.Fatal("未找到当前会话")
+	}
+	rv := postJSONClient(t, client, ts.URL+"/api/auth/sessions/revoke", `{"id":"`+curID+`"}`)
+	rv.Body.Close()
+	if rv.StatusCode != http.StatusOK {
+		t.Fatalf("撤销应 200, 得到 %d", rv.StatusCode)
+	}
+	after := getWithClient(t, raw, ts.URL+"/api/list?path=/&t="+tk.Ticket)
+	after.Body.Close()
+	if after.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("撤销会话后短票应 401, 得到 %d", after.StatusCode)
+	}
+}
+
+// TestAuthTicketRequiresLogin 未登录不能签发短票。
+func TestAuthTicketRequiresLogin(t *testing.T) {
+	ts, _ := newAuthServer(t, Options{Auth: "user:password123"})
+	raw := &http.Client{}
+	r, err := raw.Post(ts.URL+"/api/auth/ticket", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Body.Close()
+	if r.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("未登录签发短票应 401, 得到 %d", r.StatusCode)
+	}
 }
 
 // TestAuthSessionsAndRevoke 会话列表与撤销。
@@ -381,8 +523,7 @@ func TestAuthSessionsAndRevoke(t *testing.T) {
 	authLogin(t, client, ts.URL, "password123", "", false)
 
 	// 用第二个独立客户端登录，产生第二个会话
-	jar2, _ := cookiejar.New(nil)
-	client2 := &http.Client{Jar: jar2}
+	client2 := newBearerClient()
 	authLogin(t, client2, ts.URL, "password123", "", true)
 
 	lr := getWithClient(t, client, ts.URL+"/api/auth/sessions")

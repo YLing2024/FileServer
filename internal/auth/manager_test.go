@@ -34,21 +34,21 @@ func TestPasswordModeFlow(t *testing.T) {
 	if _, _, err := m.Login("wrongpass", "", false, "ua", "1.1.1.1"); err != ErrInvalidCredentials {
 		t.Fatalf("错误口令应拒绝, 得到 %v", err)
 	}
-	// 正确口令 + 不勾记住我（会话 TTL 12h）
+	// 正确口令 + 不勾记住我（token 有效期统一 7 天）
 	tok, exp, err := m.Login("password123", "", false, "ua", "1.1.1.1")
 	if err != nil {
 		t.Fatalf("登录失败: %v", err)
 	}
-	if d := time.Until(exp); d > 13*time.Hour || d < 11*time.Hour {
-		t.Errorf("会话有效期异常: %v", d)
+	if d := time.Until(exp); d > 7*24*time.Hour || d < 7*24*time.Hour-2*time.Minute {
+		t.Errorf("会话有效期应约 7 天, 得到 %v", d)
 	}
 	if _, ok := m.Validate(tok); !ok {
 		t.Fatal("token 应有效")
 	}
-	// 勾选记住我（30 天）
+	// 勾选记住我同样 7 天（客户端存储决定"是否还要重新输"，服务端 TTL 一致）
 	tok2, exp2, _ := m.Login("password123", "", true, "ua", "1.1.1.1")
-	if d := time.Until(exp2); d < 29*24*time.Hour {
-		t.Errorf("记住我记得有效期应约 30 天, 得到 %v", d)
+	if d := time.Until(exp2); d > 7*24*time.Hour || d < 7*24*time.Hour-2*time.Minute {
+		t.Errorf("勾选记住我的 token 有效期也应约 7 天, 得到 %v", d)
 	}
 	// 会话列表 + 撤销
 	list := m.Sessions(tok2)
@@ -281,5 +281,85 @@ func TestPresetPassword(t *testing.T) {
 	}
 	if _, _, err := m.Login("sekret", "", false, "ua", "4.4.4.4"); err != nil {
 		t.Fatalf("预置口令登录失败: %v", err)
+	}
+}
+
+// TestTokenTTLSevenDays 断言服务端 token 有效期统一 7 天（--token-days 默认），
+// 勾/不勾「记住我」一致。
+func TestTokenTTLSevenDays(t *testing.T) {
+	m := newTestManager(t, ModePassword, "sekret")
+	for _, remember := range []bool{false, true} {
+		_, exp, err := m.Login("sekret", "", remember, "ua", "8.8.8.8")
+		if err != nil {
+			t.Fatalf("remember=%v 登录失败: %v", remember, err)
+		}
+		if d := time.Until(exp); d > 7*24*time.Hour || d < 7*24*time.Hour-time.Minute {
+			t.Errorf("remember=%v token 有效期应约 7 天, 得到 %v", remember, d)
+		}
+	}
+}
+
+// TestTicketTTL 短票默认有效期 5 分钟：到期前有效、到期后失效。
+func TestTicketTTL(t *testing.T) {
+	m := newTestManager(t, ModePassword, "sekret")
+	fixed := time.Unix(1_700_000_000, 0)
+	m.now = func() time.Time { return fixed }
+	tok, _, err := m.Login("sekret", "", false, "ua", "8.8.8.8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticket, exp, err := m.IssueTicket(tok, 0)
+	if err != nil {
+		t.Fatalf("签发短票失败: %v", err)
+	}
+	if ticket == "" {
+		t.Fatal("短票不应为空")
+	}
+	if d := exp.Sub(fixed); d != 5*time.Minute {
+		t.Errorf("短票默认 TTL 应为 5 分钟, 得到 %v", d)
+	}
+	if _, ok := m.ValidateTicket(ticket); !ok {
+		t.Fatal("未过期短票应有效")
+	}
+	m.now = func() time.Time { return fixed.Add(5 * time.Minute) }
+	if _, ok := m.ValidateTicket(ticket); ok {
+		t.Fatal("过期短票应失效")
+	}
+}
+
+// TestTicketBindsSession 短票绑定会话：会话撤销/登出后其短票立即失效。
+func TestTicketBindsSession(t *testing.T) {
+	m := newTestManager(t, ModePassword, "sekret")
+	tok, _, err := m.Login("sekret", "", false, "ua", "8.8.8.8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticket, _, err := m.IssueTicket(tok, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.ValidateTicket(ticket); !ok {
+		t.Fatal("短票应有效")
+	}
+	m.RevokeToken(tok)
+	if _, ok := m.ValidateTicket(ticket); ok {
+		t.Fatal("会话撤销后短票应失效")
+	}
+	if _, ok := m.ValidateTicket("unknown-ticket"); ok {
+		t.Fatal("未知短票应失效")
+	}
+	if _, ok := m.ValidateTicket(""); ok {
+		t.Fatal("空短票应失效")
+	}
+}
+
+// TestIssueTicketRequiresSession 无有效会话不能签发短票。
+func TestIssueTicketRequiresSession(t *testing.T) {
+	m := newTestManager(t, ModePassword, "sekret")
+	if _, _, err := m.IssueTicket("nonexistent", 0); err != ErrInvalidCredentials {
+		t.Fatalf("未知会话签发短票应失败, 得到 %v", err)
+	}
+	if _, _, err := m.IssueTicket("", 0); err != ErrInvalidCredentials {
+		t.Fatalf("空会话签发短票应失败, 得到 %v", err)
 	}
 }

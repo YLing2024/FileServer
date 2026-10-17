@@ -167,12 +167,21 @@ moov 预读预热：把 MP4 头部/尾部最多 8MB 顺序读进 OS 缓存（512
 ## 认证端点
 
 认证默认关闭（`--auth-mode none`）。启用后，除 `/api/auth/*` 与 `GET /api/health`
-外的全部 `/api/*` 接口都需要有效会话 cookie（`fs_session`），未认证返回
-`401 {"error":"需要访问口令"}`（`GET /api/health` 免鉴权，详见该端点说明）。
+外的全部 `/api/*` 接口都需要有效凭据，未认证返回 `401 {"error":"需要访问口令"}`
+（`GET /api/health` 免鉴权，详见该端点说明）。
+
+凭据校验顺序（`requireAuth`）：短票 `?t=`（**仅 GET**）→ `Authorization: Bearer <token>`
+→ 旧版 `fs_session` cookie（只读兼容，服务端已不再下发 cookie）。前端凭据真源为浏览器
+存储：不勾「记住我」存 `sessionStorage`，勾选存 `localStorage`（键 `fs.token`）。
 
 认证模式 `--auth-mode`：`none` / `totp` / `password` / `password+totp`。
 兼容用法 `--auth user:pass` 等价于 `password` 模式 + 预置口令。
 失败响应统一为 `401 访问凭据无效`（不区分原因）；触发限速返回 `429`。
+服务端 token 有效期统一 7 天（`--token-days`，默认 7；勾/不勾「记住我」一致）。
+
+> 浏览器原生请求（`<video>`/`<img>`/`<a download>`/HLS 分片）无法携带 `Authorization`
+> 头，改用绑定会话的短票经 `?t=` 鉴权（见 `POST /api/auth/ticket`）；token 本体**绝不**
+> 进入 URL/日志。
 
 ### GET /api/auth/status
 
@@ -204,14 +213,40 @@ totp_secret, otpauth_url}`（`need_totp` 时生成待绑定密钥）；已完成
 
 ### POST /api/auth/login
 
-登录并下发会话 cookie。请求体 `{password, code, remember}`（按模式取用）。
-成功 `200 {"ok":true}` 并 `Set-Cookie: fs_session=...`（`HttpOnly`、`SameSite=Lax`、
-`Path=/`；请求为 https 或 `--cookie-secure` 时带 `Secure`；`remember=true` 时带
-`Max-Age`= `--remember-days` 天，否则为会话 cookie）。凭据错误 `401`；触发限速 `429`。
+校验凭据并签发会话 token。请求体 `{password, code, remember}`（按模式取用）。
+成功 `200 {"ok":true, "token":"<明文 token>", "expires":<unix 秒>, "remember":bool}`；
+**不再 `Set-Cookie`**（凭据由前端自行写入 `sessionStorage`/`localStorage`）。
+`expires` 距当前约 7 天。凭据错误 `401`；触发限速 `429`。
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"password":"secret123","remember":true}'
+# {"ok":true,"token":"...","expires":1750000000,"remember":true}
+```
+
+### POST /api/auth/ticket
+
+为当前会话签发短票，供浏览器原生媒体/下载/缩略图/HLS 请求经 `?t=` 鉴权
+（这些请求无法携带 `Authorization` 头）。**需已登录**：`Authorization: Bearer <token>`。
+
+- 成功 `200 {"ticket":"<明文短票>", "expires":<unix 秒>}`；短票默认有效期 5 分钟。
+- 短票**绑定签发它的会话**：会话被撤销/过期后其短票立即失效。
+- 短票**只对 GET 生效**（POST/编辑类接口只认 `Authorization` 头）。
+- 同一会话可重复签发；前端在剩余寿命不足 60s 时自动续签。
+- 未登录/凭据无效 `401`。短票可出现在 URL（如 HLS 分片）中；token 本体不可。
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/api/auth/ticket \
+  -H 'Authorization: Bearer <token>'
+# {"ticket":"...","expires":1750000300}
+curl -s "http://127.0.0.1:8080/api/list?path=/&t=<ticket>"
+```
 
 ### POST /api/auth/logout
 
-使当前会话 token 失效并清除 cookie。返回 `204`。
+使当前会话 token 失效（凭据经 `Authorization: Bearer` 或旧版 cookie 提供）。返回 `204`。
+前端登出时同时清本地存储的 `fs.token`。
 
 ### GET /api/auth/sessions
 

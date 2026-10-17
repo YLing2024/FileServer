@@ -47,8 +47,8 @@ type Config struct {
 	Path           string        // auth.json 路径
 	PresetPassword string        // --auth user:pass 的 pass 部分
 	HasPreset      bool          // 是否传了 --auth
-	SessionTTL     time.Duration // 不勾「记住我」时的会话有效期（默认 12h）
-	RememberDays   int           // 勾选「记住我」的持久 cookie 天数（默认 30）
+	TokenTTL       time.Duration // 会话 token 有效期（默认 7 天，--token-days；勾/不勾「记住我」一致）
+	TicketTTL      time.Duration // 短票有效期（默认 5 分钟）
 	TrustProxy     bool          // 是否信任 X-Forwarded-For（取最左）
 }
 
@@ -70,21 +70,31 @@ type Manager struct {
 	cfg  Config
 	data authFile
 
+	// tickets 短票（内存态，重启即失效）：浏览器原生请求（<video>/<img>/<a download>/
+	// HLS 分片）无法带 Authorization 头，改用绑定会话的短票经 ?t= 鉴权。只存哈希。
+	tickets map[string]ticketRecord
+
 	pendingTOTP string // 引导页待确认的 TOTP 密钥（仅内存，确认后落盘）
 
 	limiter *loginLimiter
 	now     func() time.Time
 }
 
+// ticketRecord 一条短票：绑定签发它的会话 id，用于浏览器原生 GET 请求的短时鉴权。
+type ticketRecord struct {
+	SessionID string
+	Expires   int64 // Unix 秒
+}
+
 // NewManager 载入（或初始化）认证状态；--auth 预置口令在首次启动时写入。
 func NewManager(cfg Config) (*Manager, error) {
-	if cfg.SessionTTL <= 0 {
-		cfg.SessionTTL = 12 * time.Hour
+	if cfg.TokenTTL <= 0 {
+		cfg.TokenTTL = 7 * 24 * time.Hour
 	}
-	if cfg.RememberDays <= 0 {
-		cfg.RememberDays = 30
+	if cfg.TicketTTL <= 0 {
+		cfg.TicketTTL = 5 * time.Minute
 	}
-	m := &Manager{cfg: cfg, limiter: newLoginLimiter(), now: time.Now}
+	m := &Manager{cfg: cfg, limiter: newLoginLimiter(), now: time.Now, tickets: make(map[string]ticketRecord)}
 	af, err := loadAuthFile(cfg.Path)
 	if err != nil {
 		return nil, err
@@ -357,7 +367,94 @@ func (m *Manager) Logout(token string) {
 	_ = m.saveLocked()
 }
 
-// Sessions 列出全部有效会话（不含 token），按创建时间倒序；current 标记当前 token。
+// IssueTicket 为指定会话 token 签发短票（绑定其会话 id）。会话不存在或已过期
+// 返回 ErrInvalidCredentials；ttl<=0 时用默认 TicketTTL。同一会话可重复签发。
+func (m *Manager) IssueTicket(sessionToken string, ttl time.Duration) (string, time.Time, error) {
+	if sessionToken == "" {
+		return "", time.Time{}, ErrInvalidCredentials
+	}
+	if ttl <= 0 {
+		ttl = m.cfg.TicketTTL
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	nowT := m.now()
+	sess := m.sessionByTokenHashLocked(hashToken(sessionToken))
+	if sess == nil || nowT.Unix() >= sess.Expires {
+		return "", time.Time{}, ErrInvalidCredentials
+	}
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", time.Time{}, err
+	}
+	ticket := base64.RawURLEncoding.EncodeToString(raw)
+	exp := nowT.Add(ttl)
+	m.tickets[hashToken(ticket)] = ticketRecord{SessionID: sess.ID, Expires: exp.Unix()}
+	m.gcTicketsLocked(nowT)
+	return ticket, exp, nil
+}
+
+// ValidateTicket 校验短票：未过期且其绑定会话仍有效才通过。会话被撤销/过期时
+// 其短票立即失效（按 session id 现查，无需在撤销处联动清理）。
+func (m *Manager) ValidateTicket(ticket string) (SessionInfo, bool) {
+	if ticket == "" {
+		return SessionInfo{}, false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	h := hashToken(ticket)
+	rec, ok := m.tickets[h]
+	if !ok {
+		return SessionInfo{}, false
+	}
+	nowT := m.now()
+	if nowT.Unix() >= rec.Expires {
+		delete(m.tickets, h)
+		return SessionInfo{}, false
+	}
+	sess := m.sessionByIDLocked(rec.SessionID)
+	if sess == nil || nowT.Unix() >= sess.Expires {
+		delete(m.tickets, h)
+		return SessionInfo{}, false
+	}
+	return toSessionInfo(*sess), true
+}
+
+// sessionByTokenHashLocked 按 token 哈希查会话（调用方须持锁）。
+func (m *Manager) sessionByTokenHashLocked(h string) *sessionRecord {
+	for i := range m.data.Sessions {
+		if m.data.Sessions[i].TokenHash == h {
+			return &m.data.Sessions[i]
+		}
+	}
+	return nil
+}
+
+// sessionByIDLocked 按会话 id 查会话（调用方须持锁）。
+func (m *Manager) sessionByIDLocked(id string) *sessionRecord {
+	for i := range m.data.Sessions {
+		if m.data.Sessions[i].ID == id {
+			return &m.data.Sessions[i]
+		}
+	}
+	return nil
+}
+
+// gcTicketsLocked 清理过期短票并做上限保护（短票短命，无需精确 LRU）。
+func (m *Manager) gcTicketsLocked(nowT time.Time) {
+	for h, rec := range m.tickets {
+		if nowT.Unix() >= rec.Expires {
+			delete(m.tickets, h)
+		}
+	}
+	const maxTickets = 500
+	for h := range m.tickets {
+		if len(m.tickets) <= maxTickets {
+			break
+		}
+		delete(m.tickets, h)
+	}
+}
 func (m *Manager) Sessions(currentToken string) []SessionInfo {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -415,6 +512,7 @@ func (m *Manager) ResetAll() error {
 	defer m.mu.Unlock()
 	m.data = authFile{Version: 1, Mode: m.data.Mode}
 	m.pendingTOTP = ""
+	m.tickets = make(map[string]ticketRecord)
 	return m.saveLocked()
 }
 
@@ -425,10 +523,9 @@ func (m *Manager) newSessionLocked(remember bool, ua, ip string, nowT time.Time)
 		return "", sessionRecord{}, err
 	}
 	token := base64.RawURLEncoding.EncodeToString(raw)
-	ttl := m.cfg.SessionTTL
-	if remember {
-		ttl = time.Duration(m.cfg.RememberDays) * 24 * time.Hour
-	}
+	// token 有效期统一 7 天（--token-days）：勾/不勾「记住我」一致，客户端存储
+	// 才决定"是否还要重新输"。remember 仅作会话列表展示。
+	ttl := m.cfg.TokenTTL
 	rec := sessionRecord{
 		ID:        newID(),
 		TokenHash: hashToken(token),

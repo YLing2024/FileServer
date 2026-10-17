@@ -89,6 +89,13 @@ func (s *Server) serveHlsFile(w http.ResponseWriter, r *http.Request, session *h
 func rewritePlaylistURIs(data []byte, r *http.Request, done bool) []byte {
 	path := r.URL.Query().Get("path")
 	base := "/api/hls?path=" + url.QueryEscape(path) + "&f="
+	// 短票随播放列表下发：Safari 原生 HLS 播放器自行拉取分片、无法像 hls.js 那样
+	// 经 xhrSetup 注入 Authorization/ticket，故把当前请求的 ?t= 原样带进分片/init URI
+	// （短票短命且只对 GET，允许出现在 URL）。
+	suffix := ""
+	if t := r.URL.Query().Get("t"); t != "" {
+		suffix = "&t=" + url.QueryEscape(t)
+	}
 	lines := strings.Split(string(data), "\n")
 	out := make([]string, 0, len(lines)+2)
 	hasEnd := false
@@ -113,7 +120,7 @@ func rewritePlaylistURIs(data []byte, r *http.Request, done bool) []byte {
 				if end := strings.Index(rest, `"`); end > 0 {
 					uri := rest[:end]
 					if !strings.Contains(uri, "://") && !strings.HasPrefix(uri, "/") {
-						out = append(out, trimmed[:idx]+`URI="`+base+uri+`"`)
+						out = append(out, trimmed[:idx]+`URI="`+base+uri+suffix+`"`)
 						continue
 					}
 				}
@@ -127,7 +134,7 @@ func rewritePlaylistURIs(data []byte, r *http.Request, done bool) []byte {
 		}
 		// 纯分片文件名行（无路径分隔符）→ 绝对 URL
 		if !strings.Contains(trimmed, "/") && !strings.Contains(trimmed, "://") {
-			out = append(out, base+trimmed)
+			out = append(out, base+trimmed+suffix)
 		} else {
 			out = append(out, trimmed)
 		}

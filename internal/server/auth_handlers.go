@@ -18,8 +18,16 @@ import (
 // 状态机与凭据存储见 internal/auth；这里只负责 cookie、请求解析与响应。
 // ============================================================
 
-// sessionCookie 会话 cookie 名。
+// sessionCookie 旧版会话 cookie 名。新流程不再下发 cookie，这里仅用于兼容读取
+// 历史会话（只读，不再 Set-Cookie）。
 const sessionCookie = "fs_session"
+
+// ticketTTL 短票有效期：媒体/下载/缩略图/HLS 等浏览器原生 GET 请求经 ?t= 鉴权，
+// 短票绑定会话、只对 GET 生效；前端在剩余寿命不足 60s 时自动续签。
+const ticketTTL = 5 * time.Minute
+
+// bearerPrefix Authorization: Bearer 前缀。
+const bearerPrefix = "Bearer "
 
 // requireAuth 全接口门禁：认证启用时，除 /api/auth/* 外的 /api/* 必须带有效会话。
 // 非 /api/ 的静态资源放行（前端需要加载才能渲染登录/引导页），静态资源不含
@@ -63,16 +71,51 @@ func (s *Server) authUnavailable(w http.ResponseWriter) bool {
 	return false
 }
 
-// sessionFromRequest 读取并校验请求 cookie 中的会话。
+// bearerToken 提取 Authorization: Bearer <token> 中的 token（无则空串）。
+func bearerToken(r *http.Request) string {
+	h := r.Header.Get("Authorization")
+	if len(h) > len(bearerPrefix) && strings.EqualFold(h[:len(bearerPrefix)], bearerPrefix) {
+		return strings.TrimSpace(h[len(bearerPrefix):])
+	}
+	return ""
+}
+
+// tokenFromRequest 取请求携带的会话 token：Authorization: Bearer 优先，其次兼容
+// 读取旧版 cookie。用于登出/会话列表/短票签发等需要 token 本体的处理。
+func tokenFromRequest(r *http.Request) string {
+	if t := bearerToken(r); t != "" {
+		return t
+	}
+	if c, err := r.Cookie(sessionCookie); err == nil && c.Value != "" {
+		return c.Value
+	}
+	return ""
+}
+
+// sessionFromRequest 校验请求凭据，顺序：短票 ?t=（仅 GET）→ Authorization: Bearer
+// → 旧版 cookie（只读兼容，不再下发）。短票用于浏览器原生媒体请求；无效凭据返回 false。
 func (s *Server) sessionFromRequest(r *http.Request) (auth.SessionInfo, bool) {
 	if s.cfg.auth == nil {
 		return auth.SessionInfo{}, false
 	}
-	c, err := r.Cookie(sessionCookie)
-	if err != nil || c.Value == "" {
-		return auth.SessionInfo{}, false
+	if r.Method == http.MethodGet {
+		if t := r.URL.Query().Get("t"); t != "" {
+			if info, ok := s.cfg.auth.ValidateTicket(t); ok {
+				return info, true
+			}
+		}
 	}
-	return s.cfg.auth.Validate(c.Value)
+	if tok := bearerToken(r); tok != "" {
+		return s.cfg.auth.Validate(tok)
+	}
+	// 旧版 cookie 只读兼容：--cookie-secure 时与旧版一致，要求安全传输
+	// （旧 cookie 本就是 Secure，浏览器不会在明文连接上发送）。
+	if c, err := r.Cookie(sessionCookie); err == nil && c.Value != "" {
+		if !s.cfg.cookieSecure || s.cookieSecure(r) {
+			return s.cfg.auth.Validate(c.Value)
+		}
+	}
+	return auth.SessionInfo{}, false
 }
 
 // clientIP 解析客户端 IP：默认用 TCP 对端；--trust-proxy 时取 X-Forwarded-For
@@ -92,46 +135,14 @@ func (s *Server) clientIP(r *http.Request) string {
 	return r.RemoteAddr
 }
 
-// cookieSecure 是否给 cookie 加 Secure：显式配置、直连 https，或信任代理且
-// X-Forwarded-Proto=https 时为真。
+// cookieSecure 是否视为安全传输：显式配置、直连 https，或信任代理且
+// X-Forwarded-Proto=https 时为真。新流程不再下发 cookie，仅用于旧版 cookie
+// 兼容路径的传输要求（--cookie-secure 语义的历史延续）。
 func (s *Server) cookieSecure(r *http.Request) bool {
 	if s.cfg.cookieSecure || r.TLS != nil {
 		return true
 	}
 	return s.cfg.trustProxy && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
-}
-
-// setSessionCookie 下发会话 cookie：HttpOnly + SameSite=Lax + Path=/；
-// remember=true 时带 Max-Age/Expires（持久），否则为会话 cookie（关浏览器即失效）。
-func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, token string, expires time.Time, remember bool) {
-	c := &http.Cookie{
-		Name:     sessionCookie,
-		Value:    token,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   s.cookieSecure(r),
-	}
-	if remember {
-		c.Expires = expires
-		if secs := int(time.Until(expires).Seconds()); secs > 0 {
-			c.MaxAge = secs
-		}
-	}
-	http.SetCookie(w, c)
-}
-
-// clearSessionCookie 清除会话 cookie（登出）。
-func (s *Server) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookie,
-		Value:    "",
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   s.cookieSecure(r),
-		MaxAge:   -1,
-	})
 }
 
 // handleAuthStatus GET /api/auth/status 认证状态（公开）。
@@ -248,7 +259,9 @@ type authLoginReq struct {
 	Remember bool   `json:"remember"`
 }
 
-// handleAuthLogin POST /api/auth/login 登录并下发会话 cookie。
+// handleAuthLogin POST /api/auth/login 校验凭据并签发会话 token。token 明文只经
+// 响应体交给前端，前端据 remember 决定存 sessionStorage（不勾）或 localStorage（勾选）；
+// 服务端不再下发 cookie。
 func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	if !s.authEnabled() {
 		httpError(w, http.StatusNotFound, "认证未启用")
@@ -265,8 +278,12 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	token, expires, err := s.cfg.auth.Login(req.Password, req.Code, req.Remember, r.UserAgent(), s.clientIP(r))
 	switch {
 	case err == nil:
-		s.setSessionCookie(w, r, token, expires, req.Remember)
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":       true,
+			"token":    token,
+			"expires":  expires.Unix(),
+			"remember": req.Remember,
+		})
 	case errors.Is(err, auth.ErrLocked):
 		// 统一措辞，不泄露锁定阈值细节
 		httpError(w, http.StatusTooManyRequests, "尝试过于频繁，请稍后再试")
@@ -275,14 +292,41 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleAuthLogout POST /api/auth/logout 使当前会话失效。
+// handleAuthTicket POST /api/auth/ticket 为当前会话签发短票（需已登录）。
+// 短票绑定该会话、只对 GET 生效，供浏览器原生媒体/下载/缩略图/HLS 请求经 ?t=
+// 鉴权（这些请求无法携带 Authorization 头）；同会话可重复签发。
+func (s *Server) handleAuthTicket(w http.ResponseWriter, r *http.Request) {
+	if !s.authEnabled() {
+		httpError(w, http.StatusNotFound, "认证未启用")
+		return
+	}
+	if s.authUnavailable(w) {
+		return
+	}
+	tok := tokenFromRequest(r)
+	if tok == "" {
+		httpError(w, http.StatusUnauthorized, "需要访问口令")
+		return
+	}
+	if _, ok := s.cfg.auth.Validate(tok); !ok {
+		httpError(w, http.StatusUnauthorized, "需要访问口令")
+		return
+	}
+	ticket, expires, err := s.cfg.auth.IssueTicket(tok, ticketTTL)
+	if err != nil {
+		httpError(w, http.StatusUnauthorized, "需要访问口令")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ticket": ticket, "expires": expires.Unix()})
+}
+
+// handleAuthLogout POST /api/auth/logout 使当前会话 token 失效（前端同时清本地凭据）。
 func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 	if s.authEnabled() {
-		if c, err := r.Cookie(sessionCookie); err == nil && c.Value != "" {
-			s.cfg.auth.Logout(c.Value)
+		if tok := tokenFromRequest(r); tok != "" {
+			s.cfg.auth.Logout(tok)
 		}
 	}
-	s.clearSessionCookie(w, r)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -299,11 +343,7 @@ func (s *Server) handleAuthSessions(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusUnauthorized, "需要访问口令")
 		return
 	}
-	tok := ""
-	if c, err := r.Cookie(sessionCookie); err == nil {
-		tok = c.Value
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"sessions": s.cfg.auth.Sessions(tok)})
+	writeJSON(w, http.StatusOK, map[string]any{"sessions": s.cfg.auth.Sessions(tokenFromRequest(r))})
 }
 
 // handleAuthSessionRevoke POST /api/auth/sessions/revoke 撤销指定会话。

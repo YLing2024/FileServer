@@ -63,8 +63,7 @@ type Options struct {
 	FFmpeg       bool   // 开启冷门格式（MKV/RMVB/HEVC 等）的在线转码播放 + 服务端缩略图
 	TextMaxBytes int64  // 可编辑文本大小上限（0 用默认 2 MiB）
 	AuthMode     string // none|totp|password|password+totp（空视为 none）
-	RememberDays int    // 「记住我」持久 cookie 天数（0 用默认 30）
-	SessionHours int    // 不勾「记住我」的会话有效期小时数（0 用默认 12）
+	TokenDays    int    // 会话 token 有效期天数（0 用默认 7）
 	TrustProxy   bool   // 信任 X-Forwarded-For（取最左）
 	CookieSecure bool   // 强制 cookie Secure
 }
@@ -129,8 +128,7 @@ func New(root string, opts Options) *Server {
 				Path:           filepath.Join(base, "auth.json"),
 				PresetPassword: preset,
 				HasPreset:      hasPreset,
-				SessionTTL:     time.Duration(opts.SessionHours) * time.Hour,
-				RememberDays:   opts.RememberDays,
+				TokenTTL:       time.Duration(opts.TokenDays) * 24 * time.Hour,
 				TrustProxy:     opts.TrustProxy,
 			})
 			if merr != nil {
@@ -211,6 +209,7 @@ func (s *Server) apiRoutes() []route {
 		{"POST", "/api/auth/setup", s.handleAuthSetupPost},
 		{"GET", "/api/auth/totp-qr", s.handleAuthTOTPQR},
 		{"POST", "/api/auth/login", s.handleAuthLogin},
+		{"POST", "/api/auth/ticket", s.handleAuthTicket},
 		{"POST", "/api/auth/logout", s.handleAuthLogout},
 		{"GET", "/api/auth/sessions", s.handleAuthSessions},
 		{"POST", "/api/auth/sessions/revoke", s.handleAuthSessionRevoke},

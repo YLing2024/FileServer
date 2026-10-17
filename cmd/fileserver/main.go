@@ -105,8 +105,7 @@ func main() {
 		FFmpeg:       cfg.FFmpeg,
 		TextMaxBytes: cfg.TextMax,
 		AuthMode:     cfg.AuthMode,
-		RememberDays: cfg.RememberDays,
-		SessionHours: cfg.SessionHours,
+		TokenDays:    cfg.TokenDays,
 		TrustProxy:   cfg.TrustProxy,
 		CookieSecure: cfg.CookieSecure,
 	})

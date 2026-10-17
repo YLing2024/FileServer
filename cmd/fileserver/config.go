@@ -19,8 +19,7 @@ type Config struct {
 	FFmpeg       bool   // FILESERVER_FFMPEG
 	Auth         string // FILESERVER_AUTH（兼容：等价 password 模式预置口令）
 	AuthMode     string // FILESERVER_AUTH_MODE（none|totp|password|password+totp）
-	RememberDays int    // FILESERVER_REMEMBER_DAYS
-	SessionHours int    // FILESERVER_SESSION_HOURS
+	TokenDays    int    // FILESERVER_TOKEN_DAYS（会话 token 有效期，默认 7 天）
 	TrustProxy   bool   // FILESERVER_TRUST_PROXY
 	CookieSecure bool   // FILESERVER_COOKIE_SECURE
 	ResetAuth    bool   // --reset-auth
@@ -51,10 +50,8 @@ func parseConfig(args []string) *Config {
 		"兼容用法：--auth user:pass，等价于 --auth-mode password + 预置口令（环境变量 FILESERVER_AUTH）")
 	fs.StringVar(&cfg.AuthMode, "auth-mode", envString("FILESERVER_AUTH_MODE", ""),
 		"认证模式：none|totp|password|password+totp（默认 none=局域网敞开；环境变量 FILESERVER_AUTH_MODE）")
-	fs.IntVar(&cfg.RememberDays, "remember-days", envInt("FILESERVER_REMEMBER_DAYS", 0),
-		"勾选「记住我」的持久 cookie 天数（默认 30；环境变量 FILESERVER_REMEMBER_DAYS）")
-	fs.IntVar(&cfg.SessionHours, "session-hours", envInt("FILESERVER_SESSION_HOURS", 0),
-		"不勾「记住我」的会话有效期小时数（默认 12；环境变量 FILESERVER_SESSION_HOURS）")
+	fs.IntVar(&cfg.TokenDays, "token-days", envInt("FILESERVER_TOKEN_DAYS", 0),
+		"会话 token 有效期天数（默认 7；勾/不勾「记住我」一致；环境变量 FILESERVER_TOKEN_DAYS）")
 	fs.BoolVar(&cfg.TrustProxy, "trust-proxy", envBool("FILESERVER_TRUST_PROXY"),
 		"信任反向代理的 X-Forwarded-For（取最左为客户端 IP；默认不信任；环境变量 FILESERVER_TRUST_PROXY）")
 	fs.BoolVar(&cfg.CookieSecure, "cookie-secure", envBool("FILESERVER_COOKIE_SECURE"),
