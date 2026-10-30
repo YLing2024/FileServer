@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="color-scheme" content="dark light">
+<title>文件分享</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%234f8cff' d='M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/share.css">
+</head>
+<body class="share-body">
+
+<header class="share-top">
+  <div class="share-brand">文件分享</div>
+  <div class="share-meta">
+    <span id="shareNote" class="share-note">共享文件</span>
+    <span id="shareExpiry" class="share-expiry"></span>
+  </div>
+</header>
+
+<main id="shareMain" class="share-main">
+  <div id="shareLoading" class="share-card share-loading" role="status">正在加载…</div>
+
+  <!-- 提取码 -->
+  <section id="shareCode" class="share-card hidden" aria-labelledby="codeTitle">
+    <h1 id="codeTitle" class="share-title">需要提取码</h1>
+    <p class="share-hint">请输入分享者提供的 4 位提取码。</p>
+    <form id="codeForm" class="code-form" novalidate>
+      <label class="share-field">提取码
+        <input id="codeInput" type="text" maxlength="4" autocomplete="off" autocapitalize="characters" spellcheck="false" inputmode="text" required>
+      </label>
+      <p id="codeError" class="share-error hidden" role="alert"></p>
+      <button id="codeSubmit" class="btn primary" type="submit">确定</button>
+    </form>
+  </section>
+
+  <!-- 不可用状态 -->
+  <section id="shareStatus" class="share-card hidden" aria-labelledby="statusTitle">
+    <h1 id="statusTitle" class="share-title">无法访问</h1>
+    <p id="statusText" class="share-hint"></p>
+  </section>
+
+  <!-- 单文件 -->
+  <section id="shareFile" class="share-card hidden" aria-labelledby="fileTitle">
+    <div class="share-file-head">
+      <div>
+        <h1 id="fileTitle" class="share-title"></h1>
+        <p id="fileMeta" class="share-hint"></p>
+      </div>
+      <a id="fileDownload" class="btn primary share-download" href="#" download>下载</a>
+    </div>
+    <div id="filePreview" class="share-preview hidden"></div>
+  </section>
+
+  <!-- 目录 -->
+  <section id="shareDir" class="share-card hidden" aria-labelledby="dirTitle">
+    <div class="share-file-head">
+      <div>
+        <h1 id="dirTitle" class="share-title"></h1>
+        <p id="dirMeta" class="share-hint"></p>
+      </div>
+      <a id="dirZip" class="btn primary share-download" href="#">打包下载 zip</a>
+    </div>
+    <nav id="dirCrumbs" class="share-crumbs" aria-label="目录路径"></nav>
+    <div class="share-table-wrap">
+      <table class="share-table">
+        <thead><tr><th class="col-name">名称</th><th class="col-size">大小</th><th class="col-time">修改时间</th><th class="col-act"><span class="sr-only">操作</span></th></tr></thead>
+        <tbody id="dirBody"></tbody>
+      </table>
+    </div>
+    <p id="dirEmpty" class="share-hint hidden">此文件夹为空</p>
+    <p id="dirError" class="share-error hidden" role="alert"></p>
+  </section>
+</main>
+
+<footer class="share-foot">由 FileServer 提供</footer>
+
+<script src="/share.js"></script>
+</body>
+</html>
