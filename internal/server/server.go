@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/YLing2024/FileServer/internal/auth"
@@ -53,6 +54,9 @@ type Server struct {
 	pw      *prewarmState  // moov 预读预热（机械硬盘冷读提速）
 	pb      *playbackState // 直链播放活动跟踪（预热据此让路）
 	started time.Time
+
+	cleanupStop chan struct{} // 每日清理协程退出信号
+	cleanupOnce sync.Once     // Close 幂等关闭清理协程
 }
 
 // Options 服务器选项
@@ -161,9 +165,10 @@ func New(root string, opts Options) *Server {
 			img:     make(chan struct{}, thumbImgMaxConc),
 			ffThumb: make(chan struct{}, ffThumbMaxConc),
 		},
-		started: time.Now(),
-		pw:      &prewarmState{warmed: make(map[string]time.Time)},
-		pb:      &playbackState{},
+		started:     time.Now(),
+		pw:          &prewarmState{warmed: make(map[string]time.Time)},
+		pb:          &playbackState{},
+		cleanupStop: make(chan struct{}),
 	}
 	srv.cfg.transcodeEnabled.Store(opts.FFmpeg && ff != nil && ff.Available())
 	srv.cfg.authRequired = authRequired
@@ -179,11 +184,15 @@ func New(root string, opts Options) *Server {
 	if srv.cfg.uploadMaxBytes <= 0 {
 		srv.cfg.uploadMaxBytes = uploadMaxDefaultBytes
 	}
+	// 启动时先清一次：上次异常退出可能留下超过 24 小时的分片会话与孤儿 blob。
+	srv.cleanupUploadStore(time.Now())
+	go srv.cleanupUploadLoop()
 	return srv
 }
 
 // Close 释放资源（终止 HLS 转码进程）
 func (s *Server) Close() {
+	s.cleanupOnce.Do(func() { close(s.cleanupStop) })
 	if s.deps.hls != nil {
 		s.deps.hls.Close()
 	}
@@ -216,6 +225,11 @@ func (s *Server) apiRoutes() []route {
 		{"POST", "/api/text/new", s.handleTextNew},
 		{"POST", "/api/create", s.handleCreate},
 		{"POST", "/api/upload", s.handleUpload},
+		{"POST", "/api/upload/chunk", s.handleUploadChunk},
+		{"GET", "/api/upload/status", s.handleUploadStatus},
+		{"POST", "/api/upload/complete", s.handleUploadComplete},
+		{"POST", "/api/upload/instant", s.handleUploadInstant},
+		{"POST", "/api/upload/mkdir", s.handleUploadMkdir},
 		{"POST", "/api/rename", s.handleRename},
 		{"POST", "/api/move", s.handleMove},
 		{"POST", "/api/copy", s.handleCopy},

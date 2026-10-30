@@ -4,6 +4,7 @@
 package platform
 
 import (
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -155,4 +156,18 @@ func TerminateTree(cmd *exec.Cmd) {
 		return
 	}
 	_ = KillProcessGroup(cmd.Process.Pid)
+}
+
+// LinkCount 返回路径对应文件的硬链接计数（Windows：GetFileInformationByHandle）。
+func LinkCount(path string) (uint64, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	var info syscall.ByHandleFileInformation
+	if err := syscall.GetFileInformationByHandle(syscall.Handle(f.Fd()), &info); err != nil {
+		return 0, err
+	}
+	return uint64(info.NumberOfLinks), nil
 }

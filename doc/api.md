@@ -26,6 +26,8 @@
 | `text_max_bytes` | 可编辑文本大小上限（字节） |
 | `allow_upload` | 是否允许上传（`FILESERVER_ALLOW_UPLOAD` / `--allow-upload`，默认 false） |
 | `upload_max_bytes` | 单文件上传上限（字节，默认 1024 MiB） |
+| `upload_chunk_threshold` | 超过该大小走分片上传（字节，默认 8 MiB） |
+| `upload_chunk_max` | 单个分片上限（字节，默认 64 MiB） |
 | `manage` | 是否可用文件管理（重命名/删除/移动/复制/回收站）；仅在启用认证时为 true |
 
 ## GET /api/health
@@ -188,6 +190,8 @@ moov 预读预热：把 MP4 头部/尾部最多 8MB 顺序读进 OS 缓存（512
     - `ask`：不覆盖；有冲突时整批拒绝并返回 `409`，由前端弹窗询问。
     - `overwrite`：覆盖同名**普通文件**；目标是文件夹时返回 `409`（不覆盖目录）。
     - `rename`：自动改名为 `name (1).ext`、`name (2).ext`……（保留扩展名）。
+  - `sha256`（query，可选）：前端已计算整文件 SHA-256 时带上，落位后登记内容索引；
+    仅单文件请求生效，服务端会重新计算确认后登记，不匹配则忽略（不影响上传）。
   - `file`（multipart，1..64 个）：文件字段，可重复；文件名保留中文与空格。
 - 请求体：`multipart/form-data`。单文件上限由 `--max-upload-mb`
   （默认 1024，环境变量 `FILESERVER_MAX_UPLOAD_MB`）配置，超限 `413`。
@@ -259,6 +263,118 @@ curl -s -X POST 'http://127.0.0.1:8080/api/upload?dir=%2Fdocs&mode=ask' \
   `rename` 之间创建同名文件，仍可能被替换（与既有文本写入相同的残余 TOCTOU 面）。
 - **不覆盖目录**：任何模式下目标为文件夹都拒绝（`409`），不会删除目录。
 - **副作用**：成功后失效目录列表缓存；不修改任何其他文件。
+
+## 分片上传、断点续传与秒传
+
+大文件（默认 > 8 MiB）由前端切分为 8 MiB 分片；所有分片先落到
+`.FileServer/uploads/<upload_id>/<index>`，再由 `complete` 顺序合并到目标目录的
+`.upload-*` 临时文件，校验大小（可选 SHA-256）后原子 rename。残缺会话保留 24 小时，
+服务启动与每日清理会删除过期分片；内容索引位于 `.FileServer/blobs/<sha256 前两位>/<sha256>`。
+
+`upload_id` 派生公式（前端 `uploadIDFor` 与服务端 `deriveUploadID` 必须一致）：
+
+```
+sha256( 文件前 min(1 MiB, 文件大小) 字节 || 0x00 || 十进制文件大小 || 0x00 || 文件名 )
+```
+
+文件名只取单段文件名（不含目录），因此同一文件中断后重新选择会得到同一 id，可复用
+已完成分片。**以下分片/秒传/目录接口仅登录会话可用**：认证未启用或未登录一律 `401`；
+上传总开关关闭时已登录请求返回 `403`。
+
+### POST /api/upload/chunk
+
+上传一个原始分片（`application/octet-stream`）。
+
+| 参数 | 位置 | 类型 | 必填 | 说明 |
+|---|---|---|---|---|
+| `upload_id` | query | string | 是 | 64 位十六进制，按上述公式派生 |
+| `index` | query | int | 是 | 分片索引，`0 <= index < total` |
+| `total` | query | int | 是 | 分片总数，1..65536 |
+| `size` | query | int64 | 是 | 整个文件字节数，不超过 `upload_max_bytes` |
+| `name` | query | string | 是 | 最终文件名（单段，命名规则同上传） |
+| `dir` | query | string | 是 | 目标目录相对路径，必须已存在 |
+
+请求体为单个分片原始字节，单分片最多 64 MiB。同一索引重传幂等覆盖。
+
+```bash
+curl -s -X POST "http://127.0.0.1:8080/api/upload/chunk?upload_id=$ID&index=0&total=2&size=10485760&name=big.bin&dir=%2Fdocs" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/octet-stream' \
+  --data-binary @chunk0.bin
+# {"ok":true,"received":1,"total":2}
+```
+
+错误：`400` 参数/upload_id/文件名/目录不合法；`401` 未登录；`403` 上传未启用、
+隐藏目录、只读目录；`409` 同一 upload_id 的大小/名称/总数不一致；`413` 分片超限。
+
+### GET /api/upload/status?upload_id=
+
+查询分片进度，供断点续传跳过已上传部分。`size`、`name`、`dir` 可选，传入时做同样的
+命名与目录校验。
+
+```bash
+curl -s "http://127.0.0.1:8080/api/upload/status?upload_id=$ID" \
+  -H "Authorization: Bearer $TOKEN"
+# {"upload_id":"...","received":[0,1],"total":3,"size":10485760,
+#  "complete":false,"created_at":1761782400,"expires_at":1761868800}
+```
+
+会话不存在时仍返回 `200`，`received` 为空、`total` 为 0。`expires_at` 为创建时间 + 24 小时。
+
+### POST /api/upload/complete
+
+合并全部分片并落位。请求体：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `upload_id` | string | 是 | 分片会话 id |
+| `dir` | string | 是 | 目标目录 |
+| `name` | string | 是 | 文件名，必须与分片会话一致 |
+| `mode` | string | 否 | `ask`（默认）/`overwrite`/`rename`，语义同 `/api/upload` |
+| `sha256` | string | 否 | 整文件 SHA-256；提供时合并过程中校验，不匹配拒绝 |
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/api/upload/complete \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"upload_id":"'$ID'","dir":"/docs","name":"big.bin","mode":"ask","sha256":"'$SHA'"}'
+# {"uploaded":[{"name":"big.bin","size":10485760,"mtime":1761782400}],"instant":false}
+```
+
+- 缺片：返回 `409 {"error":"分片不完整","code":"missing_chunks","missing":[...]}`，
+  并删除该残缺会话（不会产生半截目标文件）。
+- 同名冲突：返回 `409 {code:"conflict",existing:[...]}`；分片会话保留，用户选择
+  `overwrite`/`rename` 后可直接再次 complete，无需重传。
+- 大小不符、SHA-256 不符、合并写盘失败：拒绝并清理临时文件与会话。
+- 成功后删除分片目录；带 `sha256` 时登记内容索引（硬链接到 blob）。
+
+### POST /api/upload/instant
+
+秒传：命中已有内容时直接创建目标文件，不计上传流量。请求体：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `sha256` | string | 是 | 整文件 SHA-256（64 位十六进制） |
+| `name` | string | 是 | 目标文件名 |
+| `dir` | string | 是 | 目标目录 |
+| `size` | int64 | 是 | 文件大小；与索引不一致视为未命中 |
+| `mode` | string | 否 | `ask`/`overwrite`/`rename` |
+
+命中返回：
+
+```json
+{"instant":true,"uploaded":[{"name":"copy.bin","size":123,"mtime":1761782400}]}
+```
+
+未命中返回 `200 {"instant":false}`，前端继续正常/分片上传，完成后登记哈希。
+目标同名冲突时返回 `409`（格式同上），不创建文件。
+
+### POST /api/upload/mkdir
+
+文件夹上传的目录预创建（不递归）：前端按父目录优先顺序调用，以保留结构与空目录。
+请求体 `{dir,name,mode}`：`dir` 为父目录，`name` 为单层目录名，`mode` 为
+`ask|overwrite|rename`。`ask` 下同名目录返回 `409 {code:"conflict",existing:[name]}`；
+`overwrite` 复用已存在目录；`rename` 创建 `name (1)` 等新目录。同名文件占位一律 `409`。
+返回 `{ok,name,path,created}`。路径/命名校验与上传一致，非法返回 `400/403`。
 
 ## 文件管理
 

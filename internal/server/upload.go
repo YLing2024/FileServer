@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -68,6 +69,17 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "mode 非法")
 		return
 	}
+	// 可选 SHA-256：前端已计算整文件哈希时随上传带来，落位后登记内容索引。
+	// 仅单文件请求生效；哈希由服务端重新计算确认，避免错误索引。
+	sha := ""
+	if raw := strings.TrimSpace(r.URL.Query().Get("sha256")); raw != "" {
+		var ok bool
+		sha, ok = normalizeHex64(raw)
+		if !ok {
+			httpError(w, http.StatusBadRequest, "sha256 不合法")
+			return
+		}
+	}
 
 	dirAbs, err := s.safePath(r.URL.Query().Get("dir"))
 	if err != nil {
@@ -129,11 +141,23 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 			httpError(w, http.StatusForbidden, "路径访问被拒绝")
 			return
 		}
+		oldInfo, oldErr := os.Stat(target)
 		if err := commitUploadTemp(items[i].tmp, target); err != nil {
 			writeTextWriteError(w, err)
 			return
 		}
 		items[i].tmp = ""
+		if oldErr == nil && oldInfo.Mode().IsRegular() {
+			// 覆盖会把旧 inode 的最后一条用户链接摘掉，顺手回收无引用 blob。
+			s.pruneOrphanBlobs()
+		}
+		if sha != "" && len(items) == 1 {
+			if got, herr := hashFileSHA256(target); herr == nil && got == sha {
+				if rerr := s.registerBlobFile(target, sha); rerr != nil {
+					slog.Warn("登记内容索引失败", "err", rerr)
+				}
+			}
+		}
 		fi, err := os.Stat(target)
 		if err != nil {
 			httpError(w, http.StatusInternalServerError, "上传后无法读取文件状态")

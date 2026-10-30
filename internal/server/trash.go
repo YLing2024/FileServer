@@ -556,6 +556,10 @@ func (s *Server) handleTrashEmpty(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if len(deleted) > 0 {
+		// 彻底删除才真正摘掉用户链接；没有其他链接的 blob 立即回收。
+		s.pruneOrphanBlobs()
+	}
 	s.logManage("trash-empty", info, r, len(ids), len(deleted), len(failed))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":      len(failed) == 0,

@@ -4,10 +4,15 @@
 package platform
 
 import (
+	"errors"
+	"os"
 	"os/exec"
 	"runtime"
 	"syscall"
 )
+
+// errLinkCountUnsupported 表示当前平台无法读取硬链接计数。
+var errLinkCountUnsupported = errors.New("link count unsupported")
 
 // SetConsoleUTF8 非 Windows 平台无操作。
 func SetConsoleUTF8() {}
@@ -63,4 +68,18 @@ func OpenBrowser(url string) {
 		opener = "open"
 	}
 	_ = exec.Command(opener, url).Start()
+}
+
+// LinkCount 返回路径对应 inode 的硬链接计数（POSIX：stat.Nlink）。
+// blob 回收据此判断「除索引本身外是否还有用户文件链接」。
+func LinkCount(path string) (uint64, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return 0, err
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, errLinkCountUnsupported
+	}
+	return uint64(st.Nlink), nil
 }
