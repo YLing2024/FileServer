@@ -131,12 +131,14 @@ func (s *Server) manageSource(rel string) (string, error) {
 	}
 	// 父目录必须落在根内（若父目录尚不存在，则检查最近的已存在祖先）。
 	parent := filepath.Dir(abs)
-	if realParent, ok := nearestRealPath(parent); ok {
-		if !pathWithin(s.cfg.root, realParent) {
+	if _, statErr := os.Lstat(parent); statErr == nil {
+		realParent, ok := nearestRealPath(parent)
+		if !ok || !pathWithin(s.cfg.root, realParent) {
 			return "", manageErr(http.StatusBadRequest, "路径越界")
 		}
+		// 父目录存在：以真实父目录为准，避免经由根内符号链接操作到错误位置。
 		abs = filepath.Join(realParent, filepath.Base(abs))
-	} else if _, err := os.Lstat(parent); err == nil {
+	} else if !os.IsNotExist(statErr) {
 		return "", manageErr(http.StatusBadRequest, "路径不合法")
 	}
 	// 最后一段是符号链接时，链接目标也必须在根内；越界链接直接拒绝。

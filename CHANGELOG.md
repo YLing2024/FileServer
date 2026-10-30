@@ -8,6 +8,14 @@
 
 ### Added
 
+- **文件管理（仅登录会话）**：新增 `POST /api/rename`、`POST /api/move`、
+  `POST /api/copy`、`POST /api/delete`、`GET /api/trash`、
+  `POST /api/trash/restore`、`POST /api/trash/empty`。删除只移入
+  `.FileServer/trash/<id>/`（保留原相对路径，可恢复/彻底删除/清空）；移动与复制支持
+  `ask|overwrite|rename` 同名策略，目录复制递归保留结构与 mtime；批量逐项返回
+  `moved|copied|restored` 与 `failed`，部分失败不静默。全部路径做根目录/越界链接/
+  `.FileServer` 校验，单批上限 200；未登录（包括认证关闭）一律 `401`。前端新增多选、
+  右键菜单、`Delete`/`F2`/`Ctrl+A`/`Esc` 快捷键、移动端长按选择、目录树选择器和回收站页面。
 - **文件上传（可选，默认关闭）**：新增 `POST /api/upload`（multipart，可多文件，
   `mode=ask|overwrite|rename`），仅当 `--allow-upload` / `FILESERVER_ALLOW_UPLOAD=1`
   时开放；单文件上限 `--max-upload-mb`（默认 1024 MiB），超限 413。前端工具栏新增
@@ -32,8 +40,8 @@
   间距 ≥8px；登录/新建弹窗窄屏按钮单列；可见小字号抬到 ≥12px。断点媒体查询不覆盖 ≥992px
   细指针桌面，桌面观感逐像素不变。新增 `scripts/responsive_e2e_test.py` 机检。
 - 写入范围放开：由「仅新建/编辑文本文件」扩为「新建空文件 + 新建文件夹 + 编辑文本文件」，
-  并新增默认关闭的可选上传；删除 / 重命名 / 移动仍不做。`POST /api/text/new` 作为兼容入口保留白名单限制，
-  但与新端点共用同一套命名校验与写入内核。
+  并新增默认关闭的可选上传；删除 / 重命名 / 移动改为仅登录会话可用的文件管理（删除进回收站）。
+  `POST /api/text/new` 作为兼容入口保留白名单限制，但与新端点共用同一套命名校验与写入内核。
 - 新建名称校验收紧为跨平台交集：拒绝首尾空白、`.`/`..`、路径分隔符、控制字符、
   Windows 非法字符 `< > : " | ? *`、点开头（隐藏）、点或空格结尾、Windows 保留设备名
   （`CON`/`CON.txt` 等）、以及 UTF-8 超过 255 字节的名称。

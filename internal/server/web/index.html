@@ -39,6 +39,9 @@
       <button id="btnNewText" class="icon-btn" title="新建文件 / 文件夹" aria-label="新建文件或文件夹">
         <svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M12 11v6M9 14h6"/></svg>
       </button>
+      <button id="btnTrash" class="icon-btn hidden" title="回收站" aria-label="回收站">
+        <svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/><path d="M10 11v5M14 11v5"/></svg>
+      </button>
       <div class="seg" role="group" aria-label="视图切换">
         <button id="btnGrid" class="seg-btn active" title="网格视图" aria-label="网格视图">
           <svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg>
@@ -67,6 +70,18 @@
       </button>
     </div>
   </header>
+
+  <div id="selBar" class="sel-bar hidden" role="region" aria-label="批量操作">
+    <span id="selCount" class="sel-count">已选 0 项</span>
+    <div class="sel-actions">
+      <button id="selDownload" class="btn">下载</button>
+      <button id="selRename" class="btn">重命名</button>
+      <button id="selMove" class="btn">移动</button>
+      <button id="selCopy" class="btn">复制</button>
+      <button id="selDelete" class="btn danger">删除</button>
+      <button id="selExit" class="btn">退出</button>
+    </div>
+  </div>
 
   <main id="main">
     <div id="skeleton" class="skeleton" aria-hidden="true"></div>
@@ -175,6 +190,85 @@
   </div>
 </div>
 
+<!-- ============ 重命名 ============ -->
+<div id="renameModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="rnTitle">
+  <div class="modal-box">
+    <h3 id="rnTitle">重命名</h3>
+    <label class="modal-field">新名称
+      <input id="rnName" type="text" autocomplete="off" spellcheck="false">
+    </label>
+    <p id="rnHint" class="modal-hint">扩展名不参与默认选中，可直接修改主名。</p>
+    <p id="rnError" class="modal-error hidden"></p>
+    <div class="modal-actions">
+      <button id="rnCancel" class="btn">取消</button>
+      <button id="rnOk" class="btn primary" disabled>确定</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 移动 / 复制：目录树选择器 ============ -->
+<div id="transferModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="trTitle">
+  <div class="modal-box transfer-box">
+    <h3 id="trTitle">移动</h3>
+    <p class="modal-hint">选择目标文件夹；点击箭头展开，点击名称选中。</p>
+    <div id="trTree" class="dir-tree" role="tree" aria-label="目录树"></div>
+    <div class="tr-new">
+      <input id="trNewName" type="text" placeholder="新建文件夹" autocomplete="off" spellcheck="false">
+      <button id="trNewBtn" class="btn">新建文件夹</button>
+    </div>
+    <p id="trTarget" class="modal-hint"></p>
+    <p id="trError" class="modal-error hidden"></p>
+    <div class="modal-actions">
+      <button id="trCancel" class="btn">取消</button>
+      <button id="trOk" class="btn primary">移动</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 回收站 ============ -->
+<div id="trashModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="tsTitle">
+  <div class="modal-box trash-box">
+    <h3 id="tsTitle">回收站</h3>
+    <div class="trash-head">
+      <label class="trash-all"><input id="trashAll" type="checkbox"> 全选</label>
+      <span id="trashUsage" class="modal-hint"></span>
+    </div>
+    <div id="trashList" class="trash-list"></div>
+    <p id="trashError" class="modal-error hidden"></p>
+    <div class="modal-actions trash-actions">
+      <button id="trashClose" class="btn">关闭</button>
+      <button id="trashEmpty" class="btn danger">清空</button>
+      <button id="trashDelete" class="btn danger">彻底删除</button>
+      <button id="trashRestore" class="btn primary">恢复</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 通用确认（删除/彻底删除/冲突） ============ -->
+<div id="confirmModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="cfTitle">
+  <div class="modal-box">
+    <h3 id="cfTitle">确认</h3>
+    <p id="cfMessage" class="modal-hint"></p>
+    <div class="modal-actions">
+      <button id="cfCancel" class="btn">取消</button>
+      <button id="cfThird" class="btn hidden"></button>
+      <button id="cfOk" class="btn primary">确定</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 批量失败明细 ============ -->
+<div id="resultModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="rsTitle">
+  <div class="modal-box">
+    <h3 id="rsTitle">操作结果</h3>
+    <ul id="resultList" class="result-list"></ul>
+    <div class="modal-actions"><button id="resultClose" class="btn">知道了</button></div>
+  </div>
+</div>
+
+<!-- ============ 右键菜单 ============ -->
+<div id="ctxMenu" class="ctx-menu hidden" role="menu"></div>
+
 <div id="toast" class="toast hidden"></div>
 
 <!-- ============ 认证（引导/登录）覆盖层 ============ -->
@@ -214,6 +308,7 @@
   </div>
 </div>
 
+<script src="/manage.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

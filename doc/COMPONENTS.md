@@ -18,6 +18,11 @@
 | 认证覆盖层（`renderLogin`/`renderSetup`，`#auth`） | 引导页与登录页（口令/TOTP/记住我） | `GET /api/auth/status` 状态驱动；提交 `/api/auth/setup`、`/api/auth/login` | 启动时 `bootstrap()` 按状态渲染 | 覆盖层不渲染任何目录内容；CSP 严格；失败文案统一；登录成功把响应体 token 写入 sessionStorage/localStorage |
 | 凭据/短票助手（`authFetch`、`mediaURL`、`ensureTicket`、`clearToken`） | XHR 附 Bearer；原生媒体 URL 拼 `?t=`；401 清凭据回登录页 | `fs.token`/`fs.token.expires`；`POST /api/auth/ticket` | `authFetch(url, opts)`、`mediaURL(url)` | token 不进 URL/日志；短票绑定会话、只对 GET 生效，剩余 <60s 自动续签 |
 | 会话管理弹窗（`#sessions`） | 列出会话并撤销 | `GET /api/auth/sessions`、`POST /api/auth/sessions/revoke` | 工具栏「会话」按钮打开 | 不显示 token 明文；撤销当前会话以外需确认 |
+| 文件管理（`manage.js`、`window.FSManage`） | 多选、右键菜单、批量操作栏、快捷键 | `init()`/`applyCapabilities()`/`bindItem(el,e,path)`/`handleClick(e,ev)`/`onNavigate()`/`decorate()` | `startApp()` 调 `FSManage.init()`，`/api/info` 的 `manage` 决定入口显隐 | 仅登录会话可用；桌面单击选中、双击打开，移动端长按 500ms 进入选择 |
+| 重命名弹窗（`#renameModal`） | 实时校验并调用 `POST /api/rename` | 选中项路径 + 新名称 | 操作栏/右键菜单/F2 打开 | 默认只选中主名；非法名称禁用确定；成功后选中保持在新名字 |
+| 移动/复制弹窗（`#transferModal`） | 目录树选择目标 + 直接新建文件夹 | `POST /api/move|copy?mode=`；`mode=ask|overwrite|rename` | 操作栏/右键菜单打开 | 只显示目录；目标不能是自身子目录；冲突弹窗三选一 |
+| 回收站弹窗（`#trashModal`） | 列出/恢复/彻底删除/清空回收站 | `GET /api/trash`、`POST /api/trash/restore|empty` | 工具栏回收站按钮打开 | 恢复冲突可自动改名；彻底删除与清空二次确认；显示总占用 |
+| 通用确认/失败明细（`#confirmModal`/`#resultModal`） | 操作确认与批量失败逐项展示 | `confirmBox({title,message,okLabel,thirdLabel,danger})`；`showFailures(title,failed)` | 删除、冲突、回收站与批量操作调用 | `confirmBox` 返回 `ok|third|cancel`；失败项列出路径与原因 |
 
 ## 可访问性要点（通用）
 

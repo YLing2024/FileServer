@@ -209,6 +209,7 @@ const state = {
   listSeq: 0,         // 列表加载序列号（竞态保护）
   uploadAllowed: false, // 服务端是否允许上传（/api/info 下发，默认关闭）
   uploadMaxBytes: 1024 * 1024 * 1024, // 单文件上传上限（字节）
+  manageAllowed: false, // 文件管理是否可用（仅登录会话；/api/info 下发）
 };
 
 // 单次目录列表页大小（唯一来源，取代旧的分页常量）
@@ -323,6 +324,7 @@ function renderCrumbs() {
 async function loadList(path) {
   state.path = path || '/';
   state.searching = false;
+  if (window.FSManage) FSManage.onNavigate();
   // 列表重新加载：旧网格的抽帧 video 元素随 DOM 销毁，但并发集合可能残留
   // （幽灵任务占满并发槽、导致新缩略图全部不生成）——清空自愈。
   activeGrabsSet.clear();
@@ -375,6 +377,7 @@ function render() {
   $('loadMoreInfo').textContent = state.hasMore
     ? `已加载 ${shown.length} 项，还有更多`
     : (shown.length ? `共 ${shown.length} 项` : '');
+  if (window.FSManage) FSManage.decorate();
 }
 
 // 条目真实路径：搜索模式下用服务端返回的完整路径，浏览模式下拼接当前目录
@@ -450,7 +453,9 @@ function renderGrid(entries) {
 
     card.appendChild(thumb);
     card.appendChild(info);
-    card.addEventListener('click', () => onEntryClick(e));
+    card.dataset.full = p;
+    if (window.FSManage) FSManage.bindItem(card, e, p);
+    card.addEventListener('click', (ev) => onEntryClick(e, ev));
     grid.appendChild(card);
   }
 }
@@ -475,6 +480,7 @@ function renderList(entries) {
     const p = entryPath(e);
     const tr = document.createElement('tr');
     tr.dataset.path = e.name;
+    tr.dataset.full = p;
     const nameCell = document.createElement('td');
     nameCell.className = 'col-name';
     nameCell.innerHTML = `<div class="row-name"><span class="${kind === 'dir' ? 'rdir' : 'rkind'}">${kindIcon(kind)}</span><span class="rname" title="${esc(e.name)}">${esc(e.name)}</span></div>`;
@@ -509,7 +515,8 @@ function renderList(entries) {
     tr.appendChild(sizeCell);
     tr.appendChild(timeCell);
     tr.appendChild(actCell);
-    tr.addEventListener('click', () => onEntryClick(e));
+    if (window.FSManage) FSManage.bindItem(tr, e, p);
+    tr.addEventListener('click', (ev) => onEntryClick(e, ev));
     body.appendChild(tr);
   }
 }
@@ -1629,6 +1636,7 @@ async function doSearch(q) {
   state.searching = true;
   state.query = q;
   state.hasMore = false;
+  if (window.FSManage) FSManage.onNavigate();
   showSkeleton(true);
   const seq = ++state.listSeq;
   try {
@@ -1657,7 +1665,8 @@ function exitSearch() {
 }
 
 // 条目点击统一入口：搜索模式走搜索路径，浏览模式走普通逻辑（4.7 单一函数，无重赋值）
-function onEntryClick(e) {
+function onEntryClick(e, ev) {
+  if (window.FSManage && FSManage.handleClick(e, ev)) return;
   if (state.searching) { openSearchEntry(e); return; }
   // 点击视频：中止在途缩略图请求，播放优先（不抢机械硬盘）
   if (fileKind(e) === 'video') {
@@ -2474,6 +2483,7 @@ $('ssClose').addEventListener('click', () => $('sessions').classList.add('hidden
 
 function startApp() {
   initTheme();
+  if (window.FSManage) FSManage.init();
   document.documentElement.dataset.order = state.order;
   $('sortSelect').value = state.sort;
   setView(state.view);
@@ -2488,6 +2498,8 @@ function startApp() {
       if (info.text_max_bytes) state.textMaxBytes = info.text_max_bytes; // 可编辑上限
       state.uploadAllowed = !!info.allow_upload; // 上传开关（默认关闭）
       if (info.upload_max_bytes) state.uploadMaxBytes = info.upload_max_bytes;
+      state.manageAllowed = !!info.manage; // 文件管理仅登录会话可用
+      if (window.FSManage) FSManage.applyCapabilities();
       setUploadUI();
       const ffavail = !!info.ffmpeg;
       // 用户上次的开关选择（localStorage）优先于服务端默认（--ffmpeg 参数）
