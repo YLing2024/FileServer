@@ -8,6 +8,14 @@
 
 ### Added
 
+- **分享链接（公开访问）**：新增 `POST /api/share`、`GET /api/share`、
+  `POST /api/share/revoke`、`DELETE /api/share/record`，以及公开接口
+  `GET /api/public/share/{token}/{info,list,download,zip,preview}` 与
+  `POST /api/public/share/{token}/verify`、独立页面 `GET /s/{token}`。支持文件/目录分享、
+  1/7/30 天或永久、4 位提取码（30 分钟 cookie）、下载次数上限、预览开关；记录存
+  `.FileServer/shares.json`（0600 原子写，提取码只存哈希），撤销立即失效；公开接口以
+  分享根为边界拒绝 `..`/越界符号链接，下载强制附件并带 `noindex`。前端新增创建/结果/
+  管理弹窗与独立公开页（原生 JS，不依赖管理页脚本）。
 - **文件夹上传、分片断点续传与秒传（仅登录会话）**：新增
   `POST /api/upload/chunk`、`GET /api/upload/status`、`POST /api/upload/complete`、
   `POST /api/upload/instant`、`POST /api/upload/mkdir`。前端支持拖入/选择文件夹
