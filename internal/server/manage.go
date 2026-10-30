@@ -220,16 +220,19 @@ func (s *Server) handleRename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := os.Lstat(src); err != nil {
+		s.logManage("rename", info, r, 1, 0, 1)
 		httpError(w, http.StatusNotFound, "源路径不存在")
 		return
 	}
 	parent := filepath.Dir(src)
 	if fi, err := os.Stat(parent); err != nil || isReadOnlyMode(fi.Mode()) {
+		s.logManage("rename", info, r, 1, 0, 1)
 		httpError(w, http.StatusForbidden, "源目录不可写（只读）")
 		return
 	}
 	dst := filepath.Join(parent, req.Name)
 	if !pathWithin(s.cfg.root, dst) || s.hiddenBlocked(dst) {
+		s.logManage("rename", info, r, 1, 0, 1)
 		httpError(w, http.StatusForbidden, "目标路径不可操作")
 		return
 	}
@@ -243,16 +246,19 @@ func (s *Server) handleRename(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if !same {
+				s.logManage("rename", info, r, 1, 0, 1)
 				httpError(w, http.StatusConflict, "同名文件或文件夹已存在")
 				return
 			}
 		} else if !os.IsNotExist(err) {
+			s.logManage("rename", info, r, 1, 0, 1)
 			httpError(w, http.StatusInternalServerError, "无法检查目标路径")
 			return
 		}
 	}
 	if dst != src {
 		if err := os.Rename(src, dst); err != nil {
+			s.logManage("rename", info, r, 1, 0, 1)
 			writeTextWriteError(w, err)
 			return
 		}
