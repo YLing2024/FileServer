@@ -636,6 +636,12 @@ tr:hover .row-act { opacity: 1; }
 .up-close { width: 30px; height: 30px; }
 .up-close svg { width: 16px; height: 16px; }
 .up-list { overflow-y: auto; padding: 4px 0; }
+.up-group {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 8px 14px 4px; font-size: 12px; color: var(--text-2);
+}
+.up-group-name { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.up-group-meta { flex-shrink: 0; font-family: var(--mono); font-size: 11.5px; color: var(--text-3); }
 .up-item { padding: 9px 14px; display: flex; flex-direction: column; gap: 6px; }
 .up-item + .up-item { border-top: 1px solid var(--border); }
 .up-item-head { display: flex; align-items: center; gap: 10px; }

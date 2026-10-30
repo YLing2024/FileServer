@@ -27,7 +27,7 @@ const listURL = (p, sort, order, limit, offset) => `/api/list?path=${pathParam(p
 const searchURL = (q, p, limit) => `/api/search?q=${pathParam(q)}&path=${pathParam(p)}&limit=${limit}`;
 const videoInfoURL = (p) => '/api/video-info?path=' + pathParam(p);
 const hlsURL = (p) => '/api/hls?path=' + pathParam(p) + '&f=index.m3u8';
-const uploadURL = (dir, mode) => `/api/upload?dir=${pathParam(dir)}&mode=${enc(mode || 'ask')}`;
+const uploadURL = (dir, mode, sha) => `/api/upload?dir=${pathParam(dir)}&mode=${enc(mode || 'ask')}` + (sha ? `&sha256=${enc(sha)}` : '');
 
 /* ============================================================
    凭据存储 / 短票 / 鉴权请求
@@ -209,6 +209,8 @@ const state = {
   listSeq: 0,         // 列表加载序列号（竞态保护）
   uploadAllowed: false, // 服务端是否允许上传（/api/info 下发，默认关闭）
   uploadMaxBytes: 1024 * 1024 * 1024, // 单文件上传上限（字节）
+  uploadChunkThreshold: 8 * 1024 * 1024, // 超过该大小走分片（/api/info 可覆盖）
+  uploadChunkMax: 64 * 1024 * 1024, // 单个分片上限
   manageAllowed: false, // 文件管理是否可用（仅登录会话；/api/info 下发）
 };
 
@@ -1844,15 +1846,21 @@ $('btnLoadMore').addEventListener('click', async () => {
 
 /* ---------- 上传 ---------- */
 
-// 上传队列：单文件单请求（进度/取消独立），mode 在批内共享。
-// ask 冲突时服务端整批回滚临时文件，前端弹窗后带 overwrite / rename 重试。
+// 上传队列：普通文件走单请求；> 8 MiB 走分片 + 断点续传；所有文件先算 SHA-256
+// 尝试秒传。文件夹上传按顶层目录分组，目录创建（含空目录）先于文件上传完成。
+const UPLOAD_CHUNK_DEFAULT = 8 * 1024 * 1024;
+const UPLOAD_MAX_FILES = 2000;
+const UPLOAD_HASH_WORKER_MIN = 200 * 1024 * 1024;
+
 const uploadState = {
-  items: [],        // {id, file, name, size, status, progress, error, xhr}
+  items: [],        // {id,file,name,size,status,phase,progress,error,xhr,sha256,relPath,groupKey,dir}
+  groups: [],       // {key,root,actualRoot,dirs,items,prepared,mode,status}
   active: null,     // 当前在传的条目
   target: null,     // 本批目标目录（选择文件时快照）
-  mode: 'ask',
-  conflictItem: null,
+  mode: 'ask',      // 同名文件冲突策略（整批共享）
+  conflict: null,   // {type:'file'|'group',item,group,names}
   refreshed: false,
+  preparing: false, // 目录创建 in-flight
   seq: 0,
   dragDepth: 0,
 };
@@ -1861,120 +1869,578 @@ function uploadBusy() {
   return uploadState.items.some((it) => it.status === 'waiting' || it.status === 'uploading');
 }
 
-// setUploadUI 按 /api/info 的 allow_upload 决定工具栏按钮显隐（未开启完全不出现）。
+function groupOfItem(item) {
+  return item.groupKey ? uploadState.groups.find((g) => g.key === item.groupKey) : null;
+}
+
+// setUploadUI 按 /api/info 的 allow_upload 决定入口显隐（未开启完全不出现）。
+// webkitdirectory 不支持的环境隐藏「上传文件夹」入口。
 function setUploadUI() {
   $('btnUpload').classList.toggle('hidden', !state.uploadAllowed);
+  const dirSupported = typeof document.createElement('input').webkitdirectory !== 'undefined';
+  $('btnUploadDir').classList.toggle('hidden', !state.uploadAllowed || !dirSupported || !state.manageAllowed);
   if (!state.uploadAllowed) hideDropOverlay();
 }
 
-// enqueueUploadFiles 把选中的文件加入队列；上传目标为调用时的当前目录。
+// validUploadNamePart 与服务端 validEntryName 对齐：单段名称不含分隔符/控制字符、
+// 不以点开头（隐藏）、不以点或空格结尾、非 Windows 保留名、UTF-8 ≤255 字节。
+function validUploadNamePart(name) {
+  if (!name || name === '.' || name === '..') return false;
+  if (/[\/\\\x00]/.test(name)) return false;
+  if (/[\x00-\x1f\x7f]/.test(name)) return false;
+  if (/[<>:"|?*]/.test(name)) return false;
+  if (name.startsWith('.') || name.endsWith('.') || name.endsWith(' ')) return false;
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i.test(name)) return false;
+  if (name.toLowerCase() === '.fileserver') return false;
+  try { if (new TextEncoder().encode(name).length > 255) return false; } catch (_) { /* 忽略编码异常 */ }
+  return true;
+}
+
+function splitUploadPath(rel) {
+  return String(rel || '').split('/').filter((p) => p !== '');
+}
+
+// joinRelPath 拼接相对目录：/base + root + 子段，始终以 / 开头、无重复斜杠。
+function joinRelPath() {
+  const out = [];
+  for (const part of arguments) {
+    for (const seg of splitUploadPath(part)) out.push(seg);
+  }
+  return '/' + out.join('/');
+}
+
+function resetUploadBatch(target) {
+  uploadState.items = [];
+  uploadState.groups = [];
+  uploadState.mode = 'ask';
+  uploadState.conflict = null;
+  uploadState.refreshed = false;
+  uploadState.preparing = false;
+  uploadState.target = target;
+  uploadState.seq = 0;
+  uploadState.active = null;
+}
+
+// enqueueUploadFiles 普通文件选择/投放（不含目录结构）。
 function enqueueUploadFiles(fileList) {
-  if (!state.uploadAllowed) return;
   const files = Array.from(fileList || []).filter((f) => f && f.name);
   if (!files.length) return;
+  enqueueUploadCollected({
+    files: files.map((f) => ({ file: f, name: f.name, relPath: '' })),
+    dirs: [],
+  });
+}
+
+// enqueueFolderFiles webkitdirectory 选择器：用 webkitRelativePath 还原目录结构。
+function enqueueFolderFiles(fileList) {
+  const files = Array.from(fileList || []).filter((f) => f && f.name);
+  if (!files.length) return;
+  const dirs = new Set();
+  const out = [];
+  for (const f of files) {
+    const rel = f.webkitRelativePath || f.name;
+    const parts = splitUploadPath(rel);
+    for (let i = 1; i < parts.length; i++) dirs.add(parts.slice(0, i).join('/'));
+    out.push({ file: f, name: f.name, relPath: rel });
+  }
+  enqueueUploadCollected({ files: out, dirs: Array.from(dirs) });
+}
+
+// enqueueUploadCollected 把带相对路径的文件加入队列；顶层目录形成独立分组。
+function enqueueUploadCollected(collected) {
+  if (!state.uploadAllowed) return;
+  const files = (collected && collected.files) || [];
+  if (!files.length) return;
+  if (!state.manageAllowed && files.some((f) => splitUploadPath(f.relPath).length > 1)) {
+    toast('文件夹上传需要登录后使用', true);
+    return;
+  }
+  if (files.length > UPLOAD_MAX_FILES) {
+    toast(`单次最多上传 ${UPLOAD_MAX_FILES} 个文件`, true);
+    return;
+  }
   const target = state.path;
   if (uploadBusy() && uploadState.target !== target) {
     toast('请等待当前上传完成', true);
     return;
   }
-  if (!uploadBusy()) {
-    // 新一轮选择：清空上一批结果，默认回到 ask（绝不默认覆盖）
-    uploadState.items = [];
-    uploadState.mode = 'ask';
-    uploadState.refreshed = false;
-    uploadState.target = target;
-    uploadState.seq = 0;
-  }
+  if (!uploadBusy()) resetUploadBatch(target);
+
+  const groupByRoot = new Map();
+  const plainItems = [];
+  let accepted = 0;
   for (const f of files) {
+    if (accepted >= UPLOAD_MAX_FILES) break;
+    accepted++;
+    const parts = splitUploadPath(f.relPath);
+    const baseName = parts.length ? parts[parts.length - 1] : f.name;
+    const isFolder = parts.length > 1;
+    let group = null;
+    if (isFolder) {
+      const root = parts[0];
+      const key = 'dir:' + root;
+      group = groupByRoot.get(key);
+      if (!group) {
+        group = {
+          key, root, actualRoot: root, dirs: new Set([root]), items: [],
+          prepared: false, mode: '', status: 'waiting',
+        };
+        groupByRoot.set(key, group);
+        uploadState.groups.push(group);
+      }
+      for (let i = 1; i < parts.length - 1; i++) group.dirs.add(parts.slice(0, i + 1).join('/'));
+    }
     const item = {
       id: ++uploadState.seq,
-      file: f,
-      name: f.name,
-      size: f.size,
+      file: f.file,
+      name: baseName,
+      size: f.file.size,
       status: 'waiting',
+      phase: 'hash',
       progress: 0,
       error: '',
       xhr: null,
+      sha256: '',
+      relPath: f.relPath || '',
+      groupKey: group ? group.key : '',
+      dir: target,
     };
-    if (f.size > state.uploadMaxBytes) {
+    if (group) group.items.push(item);
+    else plainItems.push(item);
+
+    const badName = parts.length
+      ? parts.some((p) => !validUploadNamePart(p))
+      : !validUploadNamePart(baseName);
+    if (badName) {
+      item.status = 'error';
+      item.error = '名称不合法（路径、隐藏名或保留名）';
+    } else if (item.size > state.uploadMaxBytes) {
       item.status = 'error';
       item.error = `超过上限 ${fmtSize(state.uploadMaxBytes)}`;
     }
-    uploadState.items.push(item);
   }
+  // collected 里的空目录也登记到对应分组（仅目录、无文件时不建条目）。
+  for (const d of (collected && collected.dirs) || []) {
+    const parts = splitUploadPath(d);
+    if (!parts.length) continue;
+    const root = parts[0];
+    const key = 'dir:' + root;
+    let group = groupByRoot.get(key);
+    if (!group) {
+      group = { key, root, actualRoot: root, dirs: new Set([root]), items: [], prepared: false, mode: '', status: 'waiting' };
+      groupByRoot.set(key, group);
+      uploadState.groups.push(group);
+    }
+    for (let i = 1; i <= parts.length; i++) group.dirs.add(parts.slice(0, i).join('/'));
+  }
+
+  // 先按顶层目录展开，再追加普通文件：保证同一目录的条目连续，面板只出现一个标题。
+  for (const g of uploadState.groups) {
+    for (const it of g.items) uploadState.items.push(it);
+  }
+  for (const it of plainItems) uploadState.items.push(it);
+
+  if (!uploadState.items.length) return;
   renderUploadPanel();
   pumpUploads();
 }
 
+// groupDirsSorted 目录由浅到深创建，父目录先存在。
+function groupDirsSorted(group) {
+  return Array.from(group.dirs).sort((a, b) => {
+    const da = splitUploadPath(a).length;
+    const db = splitUploadPath(b).length;
+    return da === db ? a.localeCompare(b) : da - db;
+  });
+}
+
+// mkdirAPI 创建单层目录；返回 {status, ok, name, path, created, code, error}。
+async function mkdirAPI(dir, name, mode) {
+  const resp = await authFetch('/api/upload/mkdir', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dir, name, mode }),
+  });
+  let j = {};
+  try { j = await resp.json(); } catch (_) { /* 非 JSON 响应 */ }
+  return Object.assign({ status: resp.status, ok: resp.ok }, j);
+}
+
+// prepareGroup 先建顶层目录（冲突按目录整体询问），再按层级补齐子目录/空目录。
+// 返回 'ok' | 'conflict'；其它错误抛给调用方。
+async function prepareGroup(group) {
+  if (group.prepared) return 'ok';
+  group.status = 'preparing';
+  refreshGroupHeader(group);
+  const rootMode = group.mode || uploadState.mode || 'ask';
+  const rootRes = await mkdirAPI(uploadState.target, group.root, rootMode);
+  if (rootRes.status === 409 && rootRes.code === 'conflict' && rootMode === 'ask') {
+    group.status = 'waiting';
+    showUploadConflict(rootRes.existing && rootRes.existing.length ? rootRes.existing : [group.root], {
+      type: 'group', group, names: rootRes.existing || [group.root],
+    });
+    return 'conflict';
+  }
+  if (!rootRes.ok) throw new Error(rootRes.error || '无法创建文件夹');
+  group.actualRoot = rootRes.name || group.root;
+
+  for (const dir of groupDirsSorted(group)) {
+    if (dir === group.root) continue;
+    const parts = splitUploadPath(dir);
+    const parent = joinRelPath(uploadState.target, group.actualRoot, parts.slice(1, -1).join('/'));
+    const res = await mkdirAPI(parent, parts[parts.length - 1], 'overwrite');
+    if (!res.ok) throw new Error(res.error || ('无法创建目录 ' + dir));
+  }
+  group.prepared = true;
+  group.status = 'uploading';
+  // 目录真实名称可能因改名而变化，回填每个条目的目标目录。
+  for (const it of group.items) {
+    const parts = splitUploadPath(it.relPath);
+    it.dir = joinRelPath(uploadState.target, group.actualRoot, parts.slice(1, -1).join('/'));
+  }
+  refreshGroupHeader(group);
+  return 'ok';
+}
+
 function pumpUploads() {
   updateUploadTitle();
-  if (uploadState.conflictItem || uploadState.active) return;
+  if (uploadState.conflict || uploadState.active || uploadState.preparing) return;
   const next = uploadState.items.find((it) => it.status === 'waiting');
   if (!next) {
     finishUploadBatch();
     return;
   }
+  const group = groupOfItem(next);
+  if (group && !group.prepared) {
+    uploadState.preparing = true;
+    prepareGroup(group)
+      .then((result) => {
+        uploadState.preparing = false;
+        if (result === 'conflict') { updateUploadTitle(); return; }
+        pumpUploads();
+      })
+      .catch((err) => {
+        uploadState.preparing = false;
+        failUploadGroup(group, err && err.message ? err.message : '无法创建文件夹');
+        pumpUploads();
+      });
+    return;
+  }
   startUpload(next);
 }
 
-function startUpload(item) {
+function failUploadGroup(group, message) {
+  group.status = 'error';
+  for (const it of group.items) {
+    if (it.status === 'waiting' || it.status === 'uploading') {
+      it.status = 'error';
+      it.error = message;
+      refreshUploadRow(it);
+    }
+  }
+  refreshGroupHeader(group);
+}
+
+// ---- 内容哈希（秒传 / upload_id 派生）----
+
+let hashWorker = null;
+
+function hashInWorker(file, onProgress) {
+  return new Promise((resolve, reject) => {
+    try {
+      if (!hashWorker) hashWorker = new Worker('/hash-worker.js');
+    } catch (err) {
+      reject(err);
+      return;
+    }
+    const cleanup = () => {
+      hashWorker.onmessage = null;
+      hashWorker.onerror = null;
+    };
+    hashWorker.onmessage = (e) => {
+      const msg = e.data || {};
+      if (msg.type === 'progress') { onProgress(msg.progress); return; }
+      cleanup();
+      if (msg.type === 'done') resolve(msg.hex);
+      else reject(new Error(msg.error || '校验失败'));
+    };
+    hashWorker.onerror = (e) => {
+      cleanup();
+      reject(new Error(e.message || '校验失败'));
+    };
+    hashWorker.postMessage({ file });
+  });
+}
+
+async function computeFileSHA(item, onProgress) {
+  if (item.file.size > UPLOAD_HASH_WORKER_MIN && typeof Worker !== 'undefined') {
+    try { return await hashInWorker(item.file, onProgress); } catch (_) { /* 回退主线程 */ }
+  }
+  if (!window.FSSHA256) throw new Error('浏览器不支持内容校验');
+  return window.FSSHA256.hashBlob(item.file, onProgress, 4 << 20);
+}
+
+// uploadIDFor 与服务端 deriveUploadID 一致：sha256(前1MiB || 0 || size || 0 || name)。
+async function uploadIDFor(item) {
+  const headLen = Math.min(1 << 20, item.size);
+  const head = new Uint8Array(await item.file.slice(0, headLen).arrayBuffer());
+  const tail = new TextEncoder().encode('\0' + item.size + '\0' + item.name);
+  const all = new Uint8Array(head.length + tail.length);
+  all.set(head, 0);
+  all.set(tail, head.length);
+  return window.FSSHA256.hex(window.FSSHA256.hashBytes(all));
+}
+
+async function postUploadJSON(url, body) {
+  const resp = await authFetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  let j = {};
+  try { j = await resp.json(); } catch (_) { /* 非 JSON 响应 */ }
+  return { resp, j };
+}
+
+async function instantRequest(item) {
+  const { resp, j } = await postUploadJSON('/api/upload/instant', {
+    sha256: item.sha256,
+    name: item.name,
+    dir: item.dir,
+    size: item.size,
+    mode: uploadState.mode,
+  });
+  if (resp.status === 409 && j.code === 'conflict') {
+    pauseForUploadConflict(item, j);
+    return { conflict: true };
+  }
+  if (!resp.ok) throw new Error(j.error || ('秒传检查失败 (' + resp.status + ')'));
+  return j;
+}
+
+function applyUploadedName(item, j) {
+  if (j && Array.isArray(j.uploaded) && j.uploaded[0] && j.uploaded[0].name) {
+    item.name = j.uploaded[0].name;
+  }
+}
+
+function pauseForUploadConflict(item, j) {
+  uploadState.active = null;
+  item.xhr = null;
+  item.status = 'waiting';
+  item.phase = '';
+  item.progress = 0;
+  refreshUploadRow(item);
+  showUploadConflict(Array.isArray(j.existing) && j.existing.length ? j.existing : [item.name], {
+    type: 'file', item, names: j.existing || [item.name],
+  });
+}
+
+async function startUpload(item) {
   item.status = 'uploading';
+  item.phase = 'hash';
   item.progress = 0;
   item.error = '';
+  item.xhr = null;
   uploadState.active = item;
   refreshUploadRow(item);
   updateUploadTitle();
 
-  const xhr = new XMLHttpRequest();
-  item.xhr = xhr;
-  xhr.open('POST', uploadURL(uploadState.target, uploadState.mode));
-  const token = authToken();
-  if (token) xhr.setRequestHeader('Authorization', 'Bearer ' + token);
-  xhr.upload.onprogress = (e) => {
-    if (!e.lengthComputable) return;
-    item.progress = Math.min(99, Math.round((e.loaded / e.total) * 100));
-    refreshUploadRow(item);
-  };
-  xhr.onload = () => handleUploadResponse(item, xhr);
-  xhr.onerror = () => finishUploadItem(item, 'error', '网络错误');
-  xhr.onabort = () => finishUploadItem(item, 'canceled', '已取消');
-  const fd = new FormData();
-  fd.append('file', item.file, item.name);
-  xhr.send(fd);
-}
-
-function handleUploadResponse(item, xhr) {
-  if (xhr.status === 401) {
-    finishUploadItem(item, 'error', '未认证');
-    handleUnauthorized();
-    return;
-  }
-  let j = {};
-  try { j = JSON.parse(xhr.responseText || '{}'); } catch (_) { /* 非 JSON 响应 */ }
-  if (xhr.status >= 200 && xhr.status < 300) {
-    // rename 模式下服务端返回实际落盘名（name (1).ext），同步用于刷新后高亮。
-    if (Array.isArray(j.uploaded) && j.uploaded[0] && j.uploaded[0].name) {
-      item.name = j.uploaded[0].name;
+  try {
+    if (!state.manageAllowed) {
+      // 分片/秒传/目录接口仅登录会话可用；认证关闭时保持第 1 段的单请求上传。
+      item.phase = 'upload';
+      const outcome = await smallUpload(item);
+      if (outcome === 'canceled' || outcome === 'conflict') return;
+      return;
     }
-    item.progress = 100;
-    finishUploadItem(item, 'done', '');
-    return;
-  }
-  if (xhr.status === 409 && j.code === 'conflict') {
-    // 服务端未落盘（临时文件已回滚）：暂停队列，等待用户选择整批处理方式。
-    uploadState.active = null;
-    item.xhr = null;
-    item.status = 'waiting';
+    if (!item.sha256) {
+      const sha = await computeFileSHA(item, (p) => {
+        if (item.status !== 'uploading' || item.phase !== 'hash') return;
+        item.progress = Math.min(99, Math.round(p * 100));
+        refreshUploadRow(item);
+      });
+      if (item.status !== 'uploading') return;
+      item.sha256 = sha;
+    }
+
+    item.phase = 'instant';
     item.progress = 0;
     refreshUploadRow(item);
-    showUploadConflict(Array.isArray(j.existing) && j.existing.length ? j.existing : [item.name], item);
-    return;
+    const instant = await instantRequest(item);
+    if (item.status !== 'uploading') return;
+    if (instant.conflict) return;
+    if (instant.instant) {
+      applyUploadedName(item, instant);
+      finishUploadItem(item, 'done', '');
+      return;
+    }
+
+    item.phase = 'upload';
+    const outcome = item.size > state.uploadChunkThreshold
+      ? await chunkedUpload(item)
+      : await smallUpload(item);
+    if (outcome === 'canceled' || outcome === 'conflict') return;
+  } catch (err) {
+    if (item.status === 'uploading') {
+      finishUploadItem(item, 'error', err && err.message ? err.message : '上传失败');
+    }
   }
-  if (xhr.status === 413) {
-    finishUploadItem(item, 'error', '超过大小上限 ' + fmtSize(state.uploadMaxBytes));
-    return;
+}
+
+// smallUpload 小文件仍走第 1 段的单请求 multipart 接口；附带 sha256 供服务端登记索引。
+function smallUpload(item) {
+  return new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    item.xhr = xhr;
+    xhr.open('POST', uploadURL(item.dir, uploadState.mode, item.sha256));
+    const token = authToken();
+    if (token) xhr.setRequestHeader('Authorization', 'Bearer ' + token);
+    xhr.upload.onprogress = (e) => {
+      if (!e.lengthComputable || item.status !== 'uploading') return;
+      item.progress = Math.min(99, Math.round((e.loaded / e.total) * 100));
+      refreshUploadRow(item);
+    };
+    xhr.onload = () => {
+      item.xhr = null;
+      if (xhr.status === 401) {
+        finishUploadItem(item, 'error', '未认证');
+        handleUnauthorized();
+        resolve('error');
+        return;
+      }
+      let j = {};
+      try { j = JSON.parse(xhr.responseText || '{}'); } catch (_) { /* 非 JSON 响应 */ }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        applyUploadedName(item, j);
+        finishUploadItem(item, 'done', '');
+        resolve('done');
+        return;
+      }
+      if (xhr.status === 409 && j.code === 'conflict') {
+        pauseForUploadConflict(item, j);
+        resolve('conflict');
+        return;
+      }
+      if (xhr.status === 413) {
+        finishUploadItem(item, 'error', '超过大小上限 ' + fmtSize(state.uploadMaxBytes));
+        resolve('error');
+        return;
+      }
+      finishUploadItem(item, 'error', j.error || ('上传失败 (' + xhr.status + ')'));
+      resolve('error');
+    };
+    xhr.onerror = () => {
+      item.xhr = null;
+      if (item.status !== 'canceled') finishUploadItem(item, 'error', '网络错误');
+      resolve(item.status === 'canceled' ? 'canceled' : 'error');
+    };
+    xhr.onabort = () => {
+      item.xhr = null;
+      if (item.status !== 'canceled') finishUploadItem(item, 'canceled', '已取消');
+      resolve('canceled');
+    };
+    const fd = new FormData();
+    fd.append('file', item.file, item.name);
+    xhr.send(fd);
+  });
+}
+
+function chunkLength(size, total, index, chunkSize) {
+  if (index < total - 1) return chunkSize;
+  return size - chunkSize * (total - 1);
+}
+
+// sendChunk 发送单个原始分片；返回 'ok' | 'canceled'，失败抛错。
+function sendChunk(item, id, index, total, size, chunkSize, sentBefore) {
+  return new Promise((resolve, reject) => {
+    const start = index * chunkSize;
+    const len = chunkLength(size, total, index, chunkSize);
+    const blob = item.file.slice(start, start + len);
+    const q = new URLSearchParams({
+      upload_id: id,
+      index: String(index),
+      total: String(total),
+      size: String(size),
+      name: item.name,
+      dir: item.dir,
+    });
+    const xhr = new XMLHttpRequest();
+    item.xhr = xhr;
+    xhr.open('POST', '/api/upload/chunk?' + q.toString());
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    const token = authToken();
+    if (token) xhr.setRequestHeader('Authorization', 'Bearer ' + token);
+    xhr.upload.onprogress = (e) => {
+      if (!e.lengthComputable || item.status !== 'uploading') return;
+      const loaded = sentBefore + e.loaded;
+      item.progress = Math.min(99, Math.round((loaded / size) * 100));
+      refreshUploadRow(item);
+    };
+    xhr.onload = () => {
+      item.xhr = null;
+      if (xhr.status === 401) { handleUnauthorized(); reject(new Error('未认证')); return; }
+      if (xhr.status >= 200 && xhr.status < 300) { resolve('ok'); return; }
+      let j = {};
+      try { j = JSON.parse(xhr.responseText || '{}'); } catch (_) { /* 非 JSON 响应 */ }
+      reject(new Error(j.error || ('分片上传失败 (' + xhr.status + ')')));
+    };
+    xhr.onerror = () => {
+      item.xhr = null;
+      if (item.status === 'canceled') { resolve('canceled'); return; }
+      reject(new Error('网络错误'));
+    };
+    xhr.onabort = () => { item.xhr = null; resolve('canceled'); };
+    xhr.send(blob);
+  });
+}
+
+// chunkedUpload 查询已收分片 → 只传缺少部分 → complete 合并落位。
+async function chunkedUpload(item) {
+  item.phase = 'upload';
+  item.progress = 0;
+  refreshUploadRow(item);
+  const chunkSize = Math.max(1, Math.min(state.uploadChunkThreshold || UPLOAD_CHUNK_DEFAULT, state.uploadChunkMax || (64 << 20)));
+  const total = Math.max(1, Math.ceil(item.size / chunkSize));
+  const id = await uploadIDFor(item);
+  if (item.status !== 'uploading') return 'canceled';
+
+  const q = new URLSearchParams({ upload_id: id, size: String(item.size), name: item.name, dir: item.dir });
+  const stResp = await authFetch('/api/upload/status?' + q.toString());
+  let st = {};
+  try { st = await stResp.json(); } catch (_) { /* 非 JSON 响应 */ }
+  if (!stResp.ok) throw new Error(st.error || ('查询上传进度失败 (' + stResp.status + ')'));
+  const received = new Set(Array.isArray(st.received) ? st.received : []);
+
+  let sentBefore = 0;
+  for (let i = 0; i < total; i++) {
+    if (received.has(i)) sentBefore += chunkLength(item.size, total, i, chunkSize);
   }
-  finishUploadItem(item, 'error', j.error || ('上传失败 (' + xhr.status + ')'));
+  for (let i = 0; i < total; i++) {
+    if (received.has(i)) continue;
+    if (item.status !== 'uploading') return 'canceled';
+    const outcome = await sendChunk(item, id, i, total, item.size, chunkSize, sentBefore);
+    if (outcome !== 'ok') return outcome;
+    sentBefore += chunkLength(item.size, total, i, chunkSize);
+    item.progress = Math.min(99, Math.round((sentBefore / item.size) * 100));
+    refreshUploadRow(item);
+  }
+
+  const { resp, j } = await postUploadJSON('/api/upload/complete', {
+    upload_id: id,
+    dir: item.dir,
+    name: item.name,
+    mode: uploadState.mode,
+    sha256: item.sha256,
+  });
+  if (resp.status === 409 && j.code === 'conflict') {
+    pauseForUploadConflict(item, j);
+    return 'conflict';
+  }
+  if (!resp.ok) throw new Error(j.error || ('合并分片失败 (' + resp.status + ')'));
+  applyUploadedName(item, j);
+  finishUploadItem(item, 'done', '');
+  return 'done';
 }
 
 function finishUploadItem(item, status, msg) {
@@ -1983,18 +2449,24 @@ function finishUploadItem(item, status, msg) {
   if (status === 'canceled' && item.status === 'canceled') return;
   item.status = status;
   item.error = msg || '';
+  item.phase = '';
   if (status === 'done') item.progress = 100;
   refreshUploadRow(item);
   pumpUploads();
 }
 
 function cancelUpload(item) {
-  if (item.status === 'uploading' && item.xhr) {
+  if (item.status === 'uploading') {
+    if (item.phase === 'hash' && hashWorker) {
+      // 取消大文件校验：终止 Worker，下一条从干净状态重新开始。
+      try { hashWorker.terminate(); } catch (_) { /* 已终止 */ }
+      hashWorker = null;
+    }
     item.status = 'canceled';
     item.error = '已取消';
     const xhr = item.xhr;
     item.xhr = null;
-    try { xhr.abort(); } catch (_) { /* 已结束 */ }
+    try { if (xhr) xhr.abort(); } catch (_) { /* 已结束 */ }
     if (uploadState.active === item) uploadState.active = null;
     refreshUploadRow(item);
     pumpUploads();
@@ -2019,6 +2491,7 @@ function retryUpload(item) {
   item.status = 'waiting';
   item.error = '';
   item.progress = 0;
+  item.phase = 'hash';
   refreshUploadRow(item);
   pumpUploads();
 }
@@ -2028,7 +2501,28 @@ function renderUploadPanel() {
   panel.classList.toggle('hidden', uploadState.items.length === 0);
   const list = $('upList');
   list.innerHTML = '';
+  let lastGroup = null;
+  uploadState.groups.forEach((g) => { g.refs = null; });
   for (const item of uploadState.items) {
+    if (item.groupKey && item.groupKey !== lastGroup) {
+      const group = groupOfItem(item);
+      if (group) {
+        const head = document.createElement('div');
+        head.className = 'up-group';
+        const name = document.createElement('span');
+        name.className = 'up-group-name';
+        name.textContent = group.root;
+        name.title = group.root;
+        const meta = document.createElement('span');
+        meta.className = 'up-group-meta';
+        head.appendChild(name);
+        head.appendChild(meta);
+        list.appendChild(head);
+        group.refs = { head, name, meta };
+      }
+    }
+    lastGroup = item.groupKey || null;
+
     const row = document.createElement('div');
     row.className = 'up-item';
     const head = document.createElement('div');
@@ -2065,11 +2559,26 @@ function renderUploadPanel() {
     list.appendChild(row);
     refreshUploadRow(item);
   }
+  uploadState.groups.forEach((g) => refreshGroupHeader(g));
   updateUploadTitle();
+}
+
+function refreshGroupHeader(group) {
+  if (!group || !group.refs) return;
+  const done = group.items.filter((it) => it.status === 'done').length;
+  const failed = group.items.filter((it) => it.status === 'error').length;
+  group.refs.name.textContent = group.actualRoot || group.root;
+  let text = `${done}/${group.items.length}`;
+  if (group.status === 'preparing') text = '准备目录…';
+  else if (group.items.length && done === group.items.length) text = '完成';
+  else if (failed) text = `${done}/${group.items.length} · ${failed} 失败`;
+  group.refs.meta.textContent = text;
 }
 
 function refreshUploadRow(item) {
   const r = item.refs;
+  const group = groupOfItem(item);
+  if (group) refreshGroupHeader(group);
   if (!r) return;
   r.name.textContent = item.name;
   r.name.title = item.name;
@@ -2077,8 +2586,11 @@ function refreshUploadRow(item) {
   r.row.classList.toggle('failed', item.status === 'error' || item.status === 'canceled');
   r.fill.style.width = (item.status === 'done' ? 100 : item.progress) + '%';
   let text = '等待中';
-  if (item.status === 'uploading') text = item.progress > 0 ? item.progress + '%' : '上传中…';
-  else if (item.status === 'done') text = '已完成';
+  if (item.status === 'uploading') {
+    if (item.phase === 'hash') text = item.progress > 0 ? `校验 ${item.progress}%` : '校验中…';
+    else if (item.phase === 'instant') text = '秒传检查…';
+    else text = item.progress > 0 ? item.progress + '%' : '上传中…';
+  } else if (item.status === 'done') text = '已完成';
   else if (item.status === 'canceled') text = item.error || '已取消';
   else if (item.status === 'error') text = item.error || '失败';
   r.status.textContent = text;
@@ -2092,6 +2604,8 @@ function refreshUploadRow(item) {
   } else {
     r.action.classList.add('hidden');
   }
+  updateUploadTitle();
+  if (group) refreshGroupHeader(group);
 }
 
 function updateUploadTitle() {
@@ -2104,19 +2618,24 @@ function updateUploadTitle() {
   else $('upTitle').textContent = done === total ? `上传完成（${done}）` : '上传结束';
 }
 
-// finishUploadBatch 队列空闲后的收尾：刷新当前目录并高亮新文件（同目录才刷新，
-// 用户已导航到别处时只提示，避免打断浏览）。
+// finishUploadBatch 队列空闲后的收尾：刷新当前目录并高亮新文件/新文件夹。
 function finishUploadBatch() {
   updateUploadTitle();
   if (uploadState.refreshed) return;
-  const names = uploadState.items.filter((it) => it.status === 'done').map((it) => it.name);
-  if (!names.length) return;
+  const names = new Set();
+  for (const it of uploadState.items) {
+    if (it.status !== 'done') continue;
+    names.add(it.name);
+    const g = groupOfItem(it);
+    if (g) names.add(g.actualRoot || g.root);
+  }
+  if (!names.size) return;
   uploadState.refreshed = true;
   if (uploadState.target === state.path) {
     const done = state.searching ? doSearch(state.query) : loadList(state.path);
-    Promise.resolve(done).then(() => highlightUploaded(names));
+    Promise.resolve(done).then(() => highlightUploaded(Array.from(names)));
   } else {
-    toast(`已上传 ${names.length} 个文件到 ${uploadState.target}`);
+    toast(`已上传 ${names.size} 项到 ${uploadState.target}`);
   }
 }
 
@@ -2131,8 +2650,8 @@ function highlightUploaded(names) {
   });
 }
 
-function showUploadConflict(names, item) {
-  uploadState.conflictItem = item;
+function showUploadConflict(names, conflict) {
+  uploadState.conflict = conflict || { type: 'file', names };
   const list = $('ucList');
   list.innerHTML = '';
   for (const n of names) {
@@ -2146,12 +2665,11 @@ function showUploadConflict(names, item) {
 }
 
 function closeUploadConflict(choice) {
-  const item = uploadState.conflictItem;
-  uploadState.conflictItem = null;
+  const conflict = uploadState.conflict;
+  uploadState.conflict = null;
   $('uploadConflict').classList.add('hidden');
-  if (!item) return;
+  if (!conflict) return;
   if (choice === 'cancel') {
-    // 取消整批未完成项：已完成的不动，等待中的标记取消。
     for (const it of uploadState.items) {
       if (it.status === 'waiting' || it.status === 'uploading') {
         it.status = 'canceled';
@@ -2164,11 +2682,60 @@ function closeUploadConflict(choice) {
     return;
   }
   uploadState.mode = choice === 'overwrite' ? 'overwrite' : 'rename';
-  item.status = 'waiting';
-  item.progress = 0;
-  item.error = '';
-  refreshUploadRow(item);
+  if (conflict.group) conflict.group.mode = uploadState.mode;
+  if (conflict.item) {
+    conflict.item.status = 'waiting';
+    conflict.item.progress = 0;
+    conflict.item.error = '';
+    refreshUploadRow(conflict.item);
+  }
   pumpUploads();
+}
+
+// ---- 文件夹遍历（webkitGetAsEntry）----
+
+function readAllEntries(reader) {
+  return new Promise((resolve, reject) => {
+    const all = [];
+    const next = () => {
+      reader.readEntries((batch) => {
+        if (!batch.length) { resolve(all); return; }
+        for (const e of batch) all.push(e);
+        next();
+      }, reject);
+    };
+    next();
+  });
+}
+
+async function walkDropEntry(entry, prefix, out) {
+  const rel = prefix ? prefix + '/' + entry.name : entry.name;
+  if (entry.isFile) {
+    if (out.files.length >= UPLOAD_MAX_FILES) throw new Error(`单次最多上传 ${UPLOAD_MAX_FILES} 个文件`);
+    const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
+    out.files.push({ file, name: entry.name, relPath: rel });
+    return;
+  }
+  if (entry.isDirectory) {
+    out.dirs.add(rel);
+    const children = await readAllEntries(entry.createReader());
+    for (const child of children) await walkDropEntry(child, rel, out);
+  }
+}
+
+async function collectDropEntries(dt) {
+  const items = Array.from((dt && dt.items) || []);
+  const entries = [];
+  for (const item of items) {
+    if (item.kind !== 'file' || typeof item.webkitGetAsEntry !== 'function') continue;
+    const entry = item.webkitGetAsEntry();
+    if (entry) entries.push(entry);
+  }
+  if (!entries.length) return null;
+  const out = { files: [], dirs: new Set() };
+  for (const entry of entries) await walkDropEntry(entry, '', out);
+  out.dirs = Array.from(out.dirs);
+  return out;
 }
 
 $('btnUpload').addEventListener('click', () => $('uploadInput').click());
@@ -2177,12 +2744,15 @@ $('uploadInput').addEventListener('change', () => {
   enqueueUploadFiles(input.files);
   input.value = ''; // 允许连续选择同一文件
 });
+$('btnUploadDir').addEventListener('click', () => $('uploadDirInput').click());
+$('uploadDirInput').addEventListener('change', () => {
+  const input = $('uploadDirInput');
+  enqueueFolderFiles(input.files);
+  input.value = '';
+});
 $('upClose').addEventListener('click', () => {
   if (uploadBusy()) { toast('上传进行中，暂不能关闭', true); return; }
-  uploadState.items = [];
-  uploadState.target = null;
-  uploadState.conflictItem = null;
-  uploadState.refreshed = false;
+  resetUploadBatch(null);
   $('uploadPanel').classList.add('hidden');
 });
 $('ucCancel').addEventListener('click', () => closeUploadConflict('cancel'));
@@ -2234,11 +2804,18 @@ document.addEventListener('dragleave', (e) => {
   uploadState.dragDepth = Math.max(0, uploadState.dragDepth - 1);
   if (uploadState.dragDepth === 0) hideDropOverlay();
 });
-document.addEventListener('drop', (e) => {
+document.addEventListener('drop', async (e) => {
   if (!dropUploadAllowed() || !dragHasFiles(e)) { hideDropOverlay(); return; }
   e.preventDefault();
   hideDropOverlay();
-  if (e.dataTransfer && e.dataTransfer.files) enqueueUploadFiles(e.dataTransfer.files);
+  const dt = e.dataTransfer;
+  try {
+    const collected = await collectDropEntries(dt);
+    if (collected) enqueueUploadCollected(collected);
+    else if (dt && dt.files) enqueueUploadFiles(dt.files);
+  } catch (err) {
+    toast(err && err.message ? err.message : '读取拖入内容失败', true);
+  }
 });
 window.addEventListener('blur', hideDropOverlay);
 window.addEventListener('dragend', hideDropOverlay);
@@ -2498,6 +3075,8 @@ function startApp() {
       if (info.text_max_bytes) state.textMaxBytes = info.text_max_bytes; // 可编辑上限
       state.uploadAllowed = !!info.allow_upload; // 上传开关（默认关闭）
       if (info.upload_max_bytes) state.uploadMaxBytes = info.upload_max_bytes;
+      if (info.upload_chunk_threshold) state.uploadChunkThreshold = info.upload_chunk_threshold;
+      if (info.upload_chunk_max) state.uploadChunkMax = info.upload_chunk_max;
       state.manageAllowed = !!info.manage; // 文件管理仅登录会话可用
       if (window.FSManage) FSManage.applyCapabilities();
       setUploadUI();

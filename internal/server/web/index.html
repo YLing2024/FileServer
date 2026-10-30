@@ -35,7 +35,11 @@
       <button id="btnUpload" class="icon-btn hidden" title="上传文件到当前目录" aria-label="上传文件">
         <svg viewBox="0 0 24 24"><path d="M12 20V9m0 0l-4 4m4-4l4 4"/><path d="M4 5h16"/></svg>
       </button>
+      <button id="btnUploadDir" class="icon-btn hidden" title="上传文件夹到当前目录" aria-label="上传文件夹">
+        <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/><path d="M12 16v-4m0 0l-2.5 2.5M12 12l2.5 2.5"/></svg>
+      </button>
       <input id="uploadInput" type="file" multiple class="hidden" aria-hidden="true" tabindex="-1">
+      <input id="uploadDirInput" type="file" webkitdirectory directory multiple class="hidden" aria-hidden="true" tabindex="-1">
       <button id="btnNewText" class="icon-btn" title="新建文件 / 文件夹" aria-label="新建文件或文件夹">
         <svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M12 11v6M9 14h6"/></svg>
       </button>
@@ -309,6 +313,7 @@
 </div>
 
 <script src="/manage.js"></script>
+<script src="/sha256.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>
