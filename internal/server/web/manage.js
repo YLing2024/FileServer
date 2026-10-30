@@ -38,7 +38,7 @@ window.FSManage = (() => {
     return Array.from(sel);
   }
   function modalOpen() {
-    return ['renameModal', 'transferModal', 'trashModal', 'confirmModal', 'resultModal'].some((id) => {
+    return ['renameModal', 'transferModal', 'trashModal', 'confirmModal', 'resultModal', 'shareCreate', 'shareResult', 'shareList'].some((id) => {
       const el = $(id);
       return el && !el.classList.contains('hidden');
     });
@@ -51,6 +51,10 @@ window.FSManage = (() => {
   }
 
   /* ---------- 选择状态 ---------- */
+
+  // canSelect 是否允许进入选择模式：文件管理需要登录；仅分享时也允许单选，
+  // 便于认证关闭的部署直接生成分享链接。
+  function canSelect() { return !!state.manageAllowed || !!state.shareAllowed; }
 
   function setSelection(paths) {
     sel.clear();
@@ -86,7 +90,7 @@ window.FSManage = (() => {
     selState.anchor = state.entries.length ? entryPath(state.entries[0]) : null;
   }
   function decorate() {
-    const on = !!state.manageAllowed;
+    const on = canSelect();
     document.querySelectorAll('#grid .card, #listBody tr').forEach((el) => {
       el.classList.toggle('selected', on && sel.has(el.dataset.full));
     });
@@ -96,17 +100,31 @@ window.FSManage = (() => {
     bar.classList.toggle('hidden', !on || n === 0);
     $('selCount').textContent = `已选 ${n} 项`;
     $('selRename').disabled = n !== 1;
+    ['selRename', 'selMove', 'selCopy', 'selDelete'].forEach((id) => {
+      if ($(id)) $(id).classList.toggle('hidden', !state.manageAllowed);
+    });
+    if ($('selShare')) {
+      $('selShare').classList.toggle('hidden', !state.shareAllowed);
+      $('selShare').disabled = n !== 1;
+    }
     document.body.classList.toggle('has-selection', on && n > 0);
   }
 
   // handleClick 返回 true 表示已处理（阻止默认打开）；false 交给 app.js 打开。
   function handleClick(e, ev) {
-    if (!state.manageAllowed) return false;
+    if (!canSelect()) return false;
     const p = entryPath(e);
     if (isCoarse()) {
       if (Date.now() < selState.suppressUntil) return true;
       if (selState.mode) { toggleOne(p); return true; }
       return false; // 移动端未进入选择模式：轻点直接打开
+    }
+    // 仅分享（认证关闭）时保留原来的单击打开：分享入口走右键菜单/长按，
+    // 不能为了分享把最常用的打开动作改成单击选中。
+    if (!state.manageAllowed) {
+      if (ev && (ev.ctrlKey || ev.metaKey)) { toggleOne(p); return true; }
+      if (ev && ev.shiftKey) { selectRange(p); return true; }
+      return false;
     }
     if (ev && (ev.ctrlKey || ev.metaKey)) { toggleOne(p); return true; }
     if (ev && ev.shiftKey) { selectRange(p); return true; }
@@ -125,7 +143,7 @@ window.FSManage = (() => {
       openEntryByEntry(e);
     });
     el.addEventListener('contextmenu', (ev) => {
-      if (!state.manageAllowed) return;
+      if (!canSelect()) return;
       ev.preventDefault();
       if (isCoarse()) return; // 触屏长按已有选择模式，不弹桌面菜单
       if (!sel.has(path)) { setSelection([path]); selState.anchor = path; }
@@ -137,7 +155,7 @@ window.FSManage = (() => {
     let sx = 0, sy = 0;
     const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
     el.addEventListener('pointerdown', (ev) => {
-      if (!state.manageAllowed || ev.button !== 0) return;
+      if (!canSelect() || ev.button !== 0) return;
       sx = ev.clientX; sy = ev.clientY;
       longPressed = false;
       cancel();
@@ -193,13 +211,18 @@ window.FSManage = (() => {
     if (n === 1) {
       menu.appendChild(menuButton('打开', () => openEntryByEntry(ents[0])));
       menu.appendChild(menuButton('下载', () => downloadSelected()));
-      menu.appendChild(menuButton('重命名', openRename));
+      if (window.FSShare && state.shareAllowed) {
+        menu.appendChild(menuButton('分享', () => FSShare.openCreate(selectedPaths())));
+      }
+      if (state.manageAllowed) menu.appendChild(menuButton('重命名', openRename));
     } else {
       menu.appendChild(menuButton(`下载 ${n} 项`, () => downloadSelected()));
     }
-    menu.appendChild(menuButton('移动到…', () => openTransfer('move')));
-    menu.appendChild(menuButton('复制到…', () => openTransfer('copy')));
-    menu.appendChild(menuButton('删除（移入回收站）', deleteSelected, true));
+    if (state.manageAllowed) {
+      menu.appendChild(menuButton('移动到…', () => openTransfer('move')));
+      menu.appendChild(menuButton('复制到…', () => openTransfer('copy')));
+      menu.appendChild(menuButton('删除（移入回收站）', deleteSelected, true));
+    }
     menu.classList.remove('hidden');
     const r = menu.getBoundingClientRect();
     menu.style.left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8)) + 'px';
@@ -710,7 +733,7 @@ window.FSManage = (() => {
   function applyCapabilities() {
     const btn = $('btnTrash');
     if (btn) btn.classList.toggle('hidden', !state.manageAllowed);
-    if (!state.manageAllowed) {
+    if (!canSelect()) {
       clearSelection();
       hideContextMenu();
     }
@@ -718,7 +741,7 @@ window.FSManage = (() => {
   }
 
   function shortcut(ev) {
-    if (!state.manageAllowed) return false;
+    if (!canSelect()) return false;
     const tag = (ev.target.tagName || '').toLowerCase();
     const typing = tag === 'input' || tag === 'textarea' || tag === 'select' || ev.target.isContentEditable;
     if (ev.key === 'Escape') {
@@ -733,6 +756,9 @@ window.FSManage = (() => {
       if ($('transferModal') && !$('transferModal').classList.contains('hidden')) { $('transferModal').classList.add('hidden'); return true; }
       if ($('trashModal') && !$('trashModal').classList.contains('hidden')) { $('trashModal').classList.add('hidden'); return true; }
       if ($('resultModal') && !$('resultModal').classList.contains('hidden')) { $('resultModal').classList.add('hidden'); return true; }
+      if ($('shareCreate') && !$('shareCreate').classList.contains('hidden')) { $('shareCreate').classList.add('hidden'); return true; }
+      if ($('shareResult') && !$('shareResult').classList.contains('hidden')) { $('shareResult').classList.add('hidden'); return true; }
+      if ($('shareList') && !$('shareList').classList.contains('hidden')) { $('shareList').classList.add('hidden'); return true; }
       if (typing) return false;
       if (sel.size || selState.mode) { clearSelection(); return true; }
       return false;
@@ -744,12 +770,12 @@ window.FSManage = (() => {
       return true;
     }
     if (ev.key === 'Delete') {
-      if (!sel.size) return false;
+      if (!state.manageAllowed || !sel.size) return false;
       deleteSelected();
       return true;
     }
     if (ev.key === 'F2') {
-      if (sel.size !== 1) return false;
+      if (!state.manageAllowed || sel.size !== 1) return false;
       openRename();
       return true;
     }
@@ -827,5 +853,6 @@ window.FSManage = (() => {
     handleClick,
     onNavigate,
     decorate,
+    selectedPaths,
   };
 })();

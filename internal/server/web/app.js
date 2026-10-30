@@ -212,6 +212,7 @@ const state = {
   uploadChunkThreshold: 8 * 1024 * 1024, // 超过该大小走分片（/api/info 可覆盖）
   uploadChunkMax: 64 * 1024 * 1024, // 单个分片上限
   manageAllowed: false, // 文件管理是否可用（仅登录会话；/api/info 下发）
+  shareAllowed: true, // 分享功能是否可用（/api/info 下发；默认可用）
 };
 
 // 单次目录列表页大小（唯一来源，取代旧的分页常量）
@@ -3061,6 +3062,7 @@ $('ssClose').addEventListener('click', () => $('sessions').classList.add('hidden
 function startApp() {
   initTheme();
   if (window.FSManage) FSManage.init();
+  if (window.FSShare) FSShare.init();
   document.documentElement.dataset.order = state.order;
   $('sortSelect').value = state.sort;
   setView(state.view);
@@ -3078,7 +3080,9 @@ function startApp() {
       if (info.upload_chunk_threshold) state.uploadChunkThreshold = info.upload_chunk_threshold;
       if (info.upload_chunk_max) state.uploadChunkMax = info.upload_chunk_max;
       state.manageAllowed = !!info.manage; // 文件管理仅登录会话可用
+      state.shareAllowed = info.share !== false; // 分享功能（默认可用）
       if (window.FSManage) FSManage.applyCapabilities();
+      if (window.FSShare) FSShare.applyCapabilities();
       setUploadUI();
       const ffavail = !!info.ffmpeg;
       // 用户上次的开关选择（localStorage）优先于服务端默认（--ffmpeg 参数）

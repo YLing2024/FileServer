@@ -25,6 +25,11 @@
 | 回收站弹窗（`#trashModal`） | 列出/恢复/彻底删除/清空回收站 | `GET /api/trash`、`POST /api/trash/restore|empty` | 工具栏回收站按钮打开 | 恢复冲突可自动改名；彻底删除与清空二次确认；显示总占用 |
 | 通用确认/失败明细（`#confirmModal`/`#resultModal`） | 操作确认与批量失败逐项展示 | `confirmBox({title,message,okLabel,thirdLabel,danger})`；`showFailures(title,failed)` | 删除、冲突、回收站与批量操作调用 | `confirmBox` 返回 `ok|third|cancel`；失败项列出路径与原因 |
 
+| 分享创建弹窗（`#shareCreate`，`FSShare.openCreate`） | 为单个文件/文件夹生成公开链接：有效期、提取码、下载上限、预览开关、备注 | `openCreate(paths)`；`POST /api/share`；`#scDays`/`#scCodeOn`/`#scCode`/`#scMax`/`#scPreview`/`#scNote` | 工具栏/右键菜单/选择栏的「分享」调用 `FSShare.openCreate(FSManage.selectedPaths())` | 只支持单选；开启提取码时自动生成 4 位（可手改，仅字母数字）；目录分享提示包含后续新增内容；服务端二次校验 |
+| 分享结果弹窗（`#shareResult`） | 展示链接与提取码并复制 | `#srLink`/`#srCode`；`navigator.clipboard` 失败回退 `execCommand` | 创建成功后由 `FSShare` 自动打开 | 链接用 `location.origin` 拼绝对地址；提取码只在创建时可见，关闭后无法找回 |
+| 分享管理弹窗（`#shareList`，`FSShare.openList`） | 列出分享、复制、撤销、删除记录 | `GET /api/share`、`POST /api/share/revoke`、`DELETE /api/share/record` | 工具栏「分享链接」按钮打开 | 过期/撤销/超次项标灰但保留；撤销立即失效；删除记录不影响源文件；状态文案走设计令牌 |
+| 公开分享页（`share.html` / `share.js` / `share.css`） | 独立免登录页面：文件信息/预览/下载、目录列表/单文件下载/zip、提取码 | URL `/s/<token>`；`GET info/list/download/zip/preview`、`POST verify` | `GET /s/<token>` 由服务端直接返回模板 | 不加载 `app.js`/`manage.js`；文本预览写 `textContent` 不当 HTML；错误页不显示路径；375px 可用 |
+
 ## 可访问性要点（通用）
 
 - 所有交互一律用原生 `<button>` / `<input>` / `<textarea>`，原生可获得键盘焦点与语义。

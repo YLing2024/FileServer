@@ -10,6 +10,10 @@ web/
 ├── index.html   单页壳：浏览视图 + 预览视图 + 播放器骨架
 ├── app.js       全部逻辑（模块化注释分区）
 ├── manage.js    文件管理（多选/右键/回收站）
+├── share-admin.js 分享创建/结果/管理（管理页，依赖 app.js 全局）
+├── share.html   独立公开分享页（不加载 app.js/manage.js）
+├── share.js     公开页逻辑（token + 可选提取码）
+├── share.css    公开页与管理端分享弹窗样式
 ├── sha256.js    可增量更新的 SHA-256（秒传指纹，无依赖）
 ├── hash-worker.js 大文件哈希 Worker（importScripts sha256.js）
 ├── style.css    深浅双主题
@@ -176,3 +180,32 @@ web/
   同时 toast 汇总成功/失败数量；不会整体静默失败。
 - 所有弹窗复用 `.modal` + `role="dialog" aria-modal="true"`，Esc 关闭；新增按钮均为原生
   `<button>` 并带可见文案或 `aria-label`。
+
+## 11. 分享链接
+
+### 11.1 公开页（`share.html` / `share.js` / `share.css`）
+
+- **独立模板**：`GET /s/{token}` 直接返回 `share.html`，只加载 `share.css` 与
+  `share.js`，不加载 `app.js`/`manage.js`，也不渲染管理界面骨架。
+- 启动后读取 URL 末段 token 调 `GET /api/public/share/{token}/info`；有提取码且未通过时
+  只显示输入框（info 不返回文件名/大小），通过 `POST .../verify` 后写 30 分钟 cookie
+  并重新加载。
+- 文件页：名称/大小/时间 + 按类型预览（图片 `<img>`、视频/音频原生控件、PDF
+  `<iframe>`、文本/代码 fetch 后写入 `<pre>` 的 `textContent`），主按钮直链下载。
+- 目录页：面包屑 + 列表（名称/大小/时间）+ 单文件下载 + 当前目录 zip；子目录点击进入。
+- 过期/撤销/超次/无效链接显示通用错误页；文案不包含路径。移动端 375px 下隐藏时间列、
+  下载按钮占满宽度。
+
+### 11.2 管理端（`share-admin.js`）
+
+- `window.FSShare` 暴露 `init()` / `applyCapabilities()` / `openCreate(paths)` /
+  `openList()`，由 `startApp()` 初始化；工具栏「分享链接」打开管理列表，文件/文件夹
+  右键菜单与选择栏「分享」打开创建弹窗。
+- 创建弹窗：有效期（1/7/30 天/永久）、提取码开关（开启自动生成 4 位，可手改，仅
+  `A-Z0-9`）、下载上限（不限/10/100）、允许预览、分享者备注；目录分享会提示「包含生成后
+  新增的内容」。
+- 结果弹窗：展示绝对链接与提取码，支持「复制链接」「复制链接+提取码」；复制优先
+  `navigator.clipboard`，不可用时回退 `execCommand`。
+- 管理列表：文件名、链接、有效期、已下载/上限、创建时间、状态（有效/已过期/已撤销/
+  次数用完）；过期项标灰保留；每项可复制、撤销（确认后立即失效）、删除记录（确认后
+  仅删记录）。认证关闭时也允许通过选择栏分享；文件管理按钮仍只在登录后显示。
