@@ -48,12 +48,14 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 
 // authExempt 免鉴权路径：
 //   - /api/auth/*：登录/引导/状态自身，必须匿名可达；
+//   - /api/public/*：分享链接的公开访问接口，只凭 token + 可选提取码授权，
+//     不能再叠加登录门禁（否则「别人无需登录即可下载」不成立）；
 //   - GET /api/health：运维探活（看门狗、反代健康检查、容器 healthcheck）
 //     需要匿名可达，且响应体只有进程/版本信息，不含目录/文件/会话内容。
 //
-// 其余 /api/*（含 /api/info、/api/list）仍要求有效会话。
+// 其余 /api/*（含 /api/info、/api/list、/api/share）仍要求有效会话。
 func (s *Server) authExempt(r *http.Request) bool {
-	if strings.HasPrefix(r.URL.Path, "/api/auth/") {
+	if strings.HasPrefix(r.URL.Path, "/api/auth/") || strings.HasPrefix(r.URL.Path, "/api/public/") {
 		return true
 	}
 	return r.Method == http.MethodGet && r.URL.Path == "/api/health"

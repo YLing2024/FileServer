@@ -44,6 +44,7 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"upload_chunk_threshold": uploadChunkThreshold, // 超过该大小走分片上传
 		"upload_chunk_max":       uploadChunkMax,       // 单个分片上限
 		"manage":                 s.authEnabled(),      // 文件管理是否可用（仅登录会话）
+		"share":                  true,                 // 分享功能（认证关闭时同样可用）
 	})
 }
 

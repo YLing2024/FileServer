@@ -549,6 +549,286 @@ curl -s -X POST http://127.0.0.1:8080/api/trash/empty \
 - 成功：`200 {"hls": true|false}`；参数非法：`400`。
 - 副作用：改变 `transcodeEnabled` 运行时开关（进程内，不持久化）。
 
+## 分享链接
+
+分享把**单个文件或目录**以不可枚举 token 公开出去，公开页与公开接口不需要登录。
+管理接口（`/api/share*`）在认证启用时必须携带有效登录会话；认证未启用（默认
+`--auth-mode none`）时随全站敞开，与项目其他管理能力一致。
+
+- token：16 字节 `crypto/rand` 随机数，base32 无填充小写（26 字符），不含路径信息。
+- 记录：`.FileServer/shares.json`（0600，同目录临时文件 + rename 原子写）。
+- 提取码只保存 `sha256(token + "\x00" + code)`，**不保存明文**；创建响应只返回一次。
+- 目录分享针对**路径**：生成后新增到该目录的文件也会出现在公开列表里。
+
+### POST /api/share
+
+创建分享。请求体 `application/json`，上限 64 KiB。
+
+| 参数 | 位置 | 类型 | 必填 | 默认 | 校验 |
+|---|---|---|---|---|---|
+| `path` | body | string | 是 | — | 服务根内相对路径；拒绝 `..`/绝对路径/越界符号链接/隐藏项/`.FileServer` |
+| `days` | body | int | 否 | `7` | 只能是 `0`（永久）/`1`/`7`/`30` |
+| `code` | body | string | 否 | 无 | 4 位 ASCII 字母或数字，区分大小写 |
+| `max_downloads` | body | int | 否 | `0` | 只能是 `0`（不限）/`10`/`100` |
+| `allow_preview` | body | bool | 否 | `true` | — |
+| `note` | body | string | 否 | `共享文件` | 去空白后 ≤60 字符，不含控制字符 |
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/api/share \
+  -H 'Authorization: Bearer <token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"path":"/docs/report.pdf","days":7,"code":"AB12","max_downloads":10,"allow_preview":true,"note":"给同事"}'
+```
+
+成功 `200`：
+
+```json
+{
+  "token": "mfrggzdfmztwq2lknnwg23tpob",
+  "url": "/s/mfrggzdfmztwq2lknnwg23tpob",
+  "code": "AB12",
+  "name": "report.pdf",
+  "is_dir": false,
+  "note": "给同事",
+  "created": 1761782400,
+  "expires": 1762387200,
+  "downloads": 0,
+  "code_set": true,
+  "status": "active",
+  "allow_preview": true,
+  "max_downloads": 10
+}
+```
+
+`url` 是相对地址，前端用 `location.origin` 拼成可复制链接；`code` 只在本次响应出现。
+
+| 状态码 | 场景 | 响应 |
+|---|---|---|
+| `200` | 创建成功 | 上述 JSON |
+| `400` | 参数格式错误、天数/提取码/下载上限非法、路径越界或不存在、备注超长 | `{"error":"..."}` |
+| `401` | 认证启用但未登录/会话无效 | `{"error":"需要登录后管理文件"}` |
+| `403` | 隐藏项或 `.FileServer` | `{"error":"该路径不可分享"}` |
+| `413` | 请求体超 64 KiB | `{"error":"请求体过大"}` |
+| `500` | `shares.json` 写入失败 | `{"error":"创建分享失败"}` |
+
+- 副作用：写入 `shares.json`；服务端日志记录 token 前 8 位、是否目录、有效期、
+  下载上限、是否设置提取码与来源 IP，**不记录文件路径/内容/提取码**。
+- 幂等性：无（每次创建都生成新 token）。限流：无。
+
+### GET /api/share
+
+列出全部分享（新建在前，过期/撤销记录保留）。管理接口鉴权同上。
+
+```bash
+curl -s http://127.0.0.1:8080/api/share -H 'Authorization: Bearer <token>'
+```
+
+成功 `200`：
+
+```json
+{
+  "shares": [{
+    "token": "mfrggzdfmztwq2lknnwg23tpob",
+    "url": "/s/mfrggzdfmztwq2lknnwg23tpob",
+    "name": "report.pdf",
+    "is_dir": false,
+    "note": "给同事",
+    "created": 1761782400,
+    "expires": 1762387200,
+    "downloads": 3,
+    "max_downloads": 10,
+    "allow_preview": true,
+    "code_set": true,
+    "status": "active"
+  }]
+}
+```
+
+`status` 取值 `active` / `expired` / `revoked` / `exhausted`（由记录与当前时间实时计算）。
+列表不返回提取码哈希或磁盘路径。无副作用；无缓存（`Cache-Control` 由认证门禁之外的
+常规 JSON 响应处理，前端每次打开管理页重新拉取）。
+
+### POST /api/share/revoke
+
+撤销分享：`{"token":"..."}`。撤销立即生效，记录保留用于展示。
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/api/share/revoke \
+  -H 'Authorization: Bearer <token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"token":"mfrggzdfmztwq2lknnwg23tpob"}'
+```
+
+- 成功 `200 {"ok":true}`；token 不存在 `404 {"error":"分享不存在"}`；参数缺失 `400`。
+- 幂等：重复撤销返回 `200`。副作用：写 `shares.json`，服务端日志记录 token 前 8 位与 IP。
+
+### DELETE /api/share/record
+
+只删除分享记录，**不删除源文件**。请求体 `{"token":"..."}`（DELETE 带 JSON body）。
+
+```bash
+curl -s -X DELETE http://127.0.0.1:8080/api/share/record \
+  -H 'Authorization: Bearer <token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"token":"mfrggzdfmztwq2lknnwg23tpob"}'
+```
+
+- 成功 `200 {"ok":true}`；不存在 `404`；参数缺失 `400`；写盘失败 `500`。
+- 副作用：从 `shares.json` 移除记录，公开链接随即 404。不影响文件。
+
+## GET /s/{token}
+
+独立公开页（不复用管理页脚本/HTML），无需登录。页面本身不区分 token 是否存在，
+不包含任何文件信息；数据由下方公开接口按 token + 可选提取码返回。
+
+- 响应头：`X-Robots-Tag: noindex, nofollow`、`Referrer-Policy: no-referrer`、
+  `Cache-Control: no-store`、严格 CSP（仅同源脚本/样式，禁止被嵌入）。
+- 页面支持单文件（信息 + 预览 + 下载）与目录（列表 + 单文件下载 + 打包 zip），
+  375px 窄屏可用。
+- 过期/撤销/超次/无效链接：页面显示明确原因，不显示路径或服务器信息。
+
+## GET /api/public/share/{token}/info
+
+公开页读取分享元信息。无需登录。
+
+| 参数 | 位置 | 必填 | 说明 |
+|---|---|---|---|
+| `token` | path | 是 | 分享 token |
+
+成功 `200`（无提取码或已通过）：
+
+```json
+{
+  "note": "给同事", "has_code": false, "verified": true,
+  "allow_preview": true, "created": 1761782400, "expires": 1762387200,
+  "max_downloads": 10, "downloads": 3, "status": "active",
+  "kind": "file", "name": "report.pdf", "size": 12345, "mtime": 1761782300
+}
+```
+
+有提取码但未通过时仍返回 `200`，但 `verified=false`，且**不返回** `kind`/`name`/
+`size`/`mtime`，避免绕过提取码探测内容。
+
+| 状态码 | `code` | 说明 |
+|---|---|---|
+| `404` | `not_found` | token 不存在/记录已删除/内容已不存在 |
+| `403` | `expired` | 已过期 |
+| `403` | `revoked` | 已撤销 |
+| `403` | `exhausted` | 下载次数已用完 |
+
+错误响应形如 `{"error":"分享已过期","code":"expired"}`。每次请求实时校验记录状态，
+不缓存授权。无副作用。
+
+## POST /api/public/share/{token}/verify
+
+提交提取码。请求体 `{"code":"AB12"}`，上限 64 KiB。无需登录。
+
+- 成功 `200 {"ok":true}`，并下发 cookie：名 `fs_share_<token>`，`HttpOnly`、
+  `SameSite=Lax`、`Path=/api/public/share/<token>`、有效期 30 分钟、HTTPS 时 `Secure`。
+- cookie 值是服务端 HMAC 签名（绑定 token + 签发时间），改值或超过 30 分钟即失效；
+  服务重启后旧 cookie 失效，需要重新输入。
+- 无提取码的分享直接 `200 {"ok":true}`，不下发 cookie。
+- 错误码：`403 bad_code`（文案统一为「提取码不正确」，不区分具体原因）、
+  `403 expired/revoked/exhausted`、`404 not_found`、`429 rate_limited`。
+- 限速：同一 IP 每分钟最多 10 次失败；第 10 次失败即返回 `429`
+  （`{"error":"尝试过于频繁，请稍后再试","code":"rate_limited"}`），成功后该 IP 的
+  失败计数清零。限速只影响提取码校验，不影响页面与已通过 cookie 的访问。
+- 副作用：仅成功时设置 cookie；不写库、不改变下载次数。
+
+## GET /api/public/share/{token}/list
+
+目录分享的文件列表。需要 token；有提取码时需有效 cookie。
+
+| 参数 | 位置 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|---|
+| `token` | path | string | 是 | — | 分享 token |
+| `path` | query | string | 否 | `/` | 分享根内的相对路径；拒绝 `..`/越界符号链接 |
+| `limit` | query | int | 否 | 2000 | 上限 2000 |
+| `offset` | query | int | 否 | 0 | 分页偏移 |
+
+成功 `200`：
+
+```json
+{
+  "path": "/sub",
+  "entries": [
+    {"name": "b.txt", "is_dir": false, "size": 12, "mtime": 1761782300, "ext": "txt", "kind": "text"}
+  ],
+  "total": 1,
+  "truncated": false
+}
+```
+
+- 条目按「目录在前、名称升序」排列；未开启 `--hidden` 时不返回点开头条目，
+  `.FileServer` 任何情况都不返回。
+- 分享是文件时 `400 {"error":"该分享不是目录","code":"not_a_dir"}`。
+- 越界路径 `400 bad_path`；不存在 `404 not_found`；状态错误同 info。
+- 无副作用；每次请求重新校验状态。
+
+## GET /api/public/share/{token}/download
+
+下载单个文件（附件）。需要 token；有提取码时需有效 cookie。
+
+| 参数 | 位置 | 必填 | 说明 |
+|---|---|---|---|
+| `token` | path | 是 | 分享 token |
+| `path` | query | 目录分享必填 | 分享根内文件路径；文件分享可省略或传自身文件名 |
+
+- 成功 `200`，`Content-Disposition: attachment`，支持 Range（`http.ServeContent`）。
+- 每次成功发起下载占用 1 次额度；额度在响应头写出前于锁内校验并落盘，并发请求不能
+  突破 `max_downloads`。
+- `403 expired/revoked/exhausted`、`404 not_found`、`400 bad_path`。
+- 预览接口不占用下载次数。
+- 无缓存（`Cache-Control: no-store`）；响应不包含真实磁盘路径。
+
+## GET /api/public/share/{token}/zip
+
+目录分享打包下载。需要 token；有提取码时需有效 cookie。
+
+| 参数 | 位置 | 必填 | 说明 |
+|---|---|---|---|
+| `token` | path | 是 | 分享 token |
+| `path` | query | 否 | 分享根内子目录，默认根 |
+
+- 成功 `200`，`Content-Type: application/zip`、`Content-Disposition: attachment`。
+- zip 内结构为 `<目录名>/<相对路径>`；隐藏项与 `.FileServer` 不打包，符号链接不跟随。
+- 一次 zip 请求占用 1 次下载额度（不是按包内文件数累加）。
+- 分享是文件 `400 not_a_dir`；状态与路径错误同上。
+
+## GET /api/public/share/{token}/preview
+
+在线预览（图片/视频/音频/PDF/文本/代码）。需要 token；有提取码时需有效 cookie。
+
+| 参数 | 位置 | 必填 | 说明 |
+|---|---|---|---|
+| `token` | path | 是 | 分享 token |
+| `path` | query | 目录分享必填 | 分享根内文件路径 |
+
+- `allow_preview=false` 时 `403 {"error":"该分享未开启预览","code":"preview_disabled"}`。
+- 成功 `200`，`Content-Disposition: inline`，支持 Range。文本/代码与可脚本扩展名
+  （`.html/.svg/.js` 等）统一以 `text/plain; charset=utf-8` 输出，避免在服务源内执行。
+- 不占用下载次数；不支持的类型 `403 preview_unsupported`。
+- 公开页的文本预览由前端 fetch 后写入 `textContent`，不把内容当 HTML 渲染。
+
+## 分享数据模型
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `token` | string | 分享唯一标识与能力凭据；26 字符 base32，**禁止当数字处理** |
+| `path` | string | 服务根内相对路径，仅服务端使用，不对外返回 |
+| `is_dir` | bool | 创建时是否为目录（访问时仍以磁盘当前状态为准） |
+| `note` | string | 展示用备注名，默认「共享文件」 |
+| `created` / `expires` | int64 | Unix 秒；`expires=0` 表示永久 |
+| `code_hash` | string | `sha256(token + NUL + code)` 十六进制；不返回前端 |
+| `max_downloads` | int | `0` 不限；可选 10/100 |
+| `downloads` | int | 已占用下载次数（zip 记 1 次） |
+| `allow_preview` | bool | 是否允许预览接口 |
+| `revoked` | bool | 是否已撤销 |
+| `status` | string | 仅响应计算字段：`active/expired/revoked/exhausted` |
+
+状态判定顺序：撤销 → 过期 → 次数耗尽 → 有效。所有公开接口每次请求都重新读取
+`shares.json` 的内存视图并校验状态，不复用上一次授权。
+
 ## 认证端点
 
 认证默认关闭（`--auth-mode none`）。启用后，除 `/api/auth/*` 与 `GET /api/health`

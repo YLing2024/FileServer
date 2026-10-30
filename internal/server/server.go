@@ -55,6 +55,10 @@ type Server struct {
 	pb      *playbackState // 直链播放活动跟踪（预热据此让路）
 	started time.Time
 
+	shares      *shareStore   // 分享记录（.FileServer/shares.json）
+	shareLimit  *shareLimiter // 提取码失败限速（按 IP 滑动窗口）
+	shareSecret []byte        // 提取码通过 cookie 的 HMAC 密钥（进程级随机）
+
 	cleanupStop chan struct{} // 每日清理协程退出信号
 	cleanupOnce sync.Once     // Close 幂等关闭清理协程
 }
@@ -168,6 +172,9 @@ func New(root string, opts Options) *Server {
 		started:     time.Now(),
 		pw:          &prewarmState{warmed: make(map[string]time.Time)},
 		pb:          &playbackState{},
+		shares:      newShareStore(filepath.Join(base, shareFileName)),
+		shareLimit:  newShareLimiter(),
+		shareSecret: newShareCookieSecret(),
 		cleanupStop: make(chan struct{}),
 	}
 	srv.cfg.transcodeEnabled.Store(opts.FFmpeg && ff != nil && ff.Available())
@@ -238,6 +245,19 @@ func (s *Server) apiRoutes() []route {
 		{"POST", "/api/trash/restore", s.handleTrashRestore},
 		{"POST", "/api/trash/empty", s.handleTrashEmpty},
 		{"POST", "/api/settings/ffmpeg", s.handleSetFFmpeg},
+		// 分享管理（认证启用时需登录；公开访问见 /api/public/share/*）
+		{"POST", "/api/share", s.handleShareCreate},
+		{"GET", "/api/share", s.handleShareList},
+		{"POST", "/api/share/revoke", s.handleShareRevoke},
+		{"DELETE", "/api/share/record", s.handleShareDelete},
+		// 公开分享页与访问接口：不经过登录门禁，只凭 token + 可选提取码授权
+		{"GET", "/s/{token}", s.handleSharePage},
+		{"GET", "/api/public/share/{token}/info", s.handlePublicShareInfo},
+		{"POST", "/api/public/share/{token}/verify", s.handlePublicShareVerify},
+		{"GET", "/api/public/share/{token}/list", s.handlePublicShareList},
+		{"GET", "/api/public/share/{token}/download", s.handlePublicShareDownload},
+		{"GET", "/api/public/share/{token}/zip", s.handlePublicShareZip},
+		{"GET", "/api/public/share/{token}/preview", s.handlePublicSharePreview},
 		// 认证：/api/auth/* 不受门禁
 		{"GET", "/api/auth/status", s.handleAuthStatus},
 		{"GET", "/api/auth/setup", s.handleAuthSetupGet},

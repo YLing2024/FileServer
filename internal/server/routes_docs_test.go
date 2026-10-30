@@ -28,8 +28,8 @@ func TestAPIRoutesMatchDocs(t *testing.T) {
 	}
 
 	// 文档端点标题形如 "## GET /api/list?path=" 或 "### POST /api/auth/login"；
-	// 提取方法 + 路径（去查询串）
-	re := regexp.MustCompile(`(?m)^#{2,3}\s+(GET|POST)\s+(/api/[^\s?]*)`)
+	// 提取方法 + 路径（去查询串）。公开分享页 /s/{token} 与 DELETE 接口也要覆盖。
+	re := regexp.MustCompile(`(?m)^#{2,3}\s+(GET|POST|DELETE)\s+((?:/api/|/s/)[^\s?]*)`)
 	doc := map[string]bool{}
 	for _, m := range re.FindAllStringSubmatch(string(data), -1) {
 		doc[m[1]+" "+m[2]] = true
