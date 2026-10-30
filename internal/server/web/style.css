@@ -119,6 +119,14 @@ a { color: var(--accent); text-decoration: none; }
 .icon-btn:active { transform: scale(.92); }
 .icon-btn svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
+.brand-mark {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  color: var(--text);
+  opacity: 0.92;
+}
+
 .brand-btn svg { fill: var(--accent); stroke: none; width: 24px; height: 24px; }
 
 /* 面包屑 */
