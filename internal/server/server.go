@@ -57,15 +57,18 @@ type Server struct {
 
 // Options 服务器选项
 type Options struct {
-	Hidden       bool
-	Auth         string // 兼容：--auth user:pass（等价 password 模式预置口令）
-	Verbose      bool
-	FFmpeg       bool   // 开启冷门格式（MKV/RMVB/HEVC 等）的在线转码播放 + 服务端缩略图
-	TextMaxBytes int64  // 可编辑文本大小上限（0 用默认 2 MiB）
-	AuthMode     string // none|totp|password|password+totp（空视为 none）
-	TokenDays    int    // 会话 token 有效期天数（0 用默认 7）
-	TrustProxy   bool   // 信任 X-Forwarded-For（取最左）
-	CookieSecure bool   // 强制 cookie Secure
+	Hidden         bool
+	Auth           string // 兼容：--auth user:pass（等价 password 模式预置口令）
+	Verbose        bool
+	FFmpeg         bool   // 开启冷门格式（MKV/RMVB/HEVC 等）的在线转码播放 + 服务端缩略图
+	TextMaxBytes   int64  // 可编辑文本大小上限（0 用默认 2 MiB）
+	AllowUpload    bool   // 是否允许上传（默认关闭）
+	MaxUploadMB    int64  // 单文件上传上限（MiB，0 用默认 1024）
+	MaxUploadBytes int64  // 单文件上传上限（字节，优先于 MaxUploadMB；测试/嵌入用）
+	AuthMode       string // none|totp|password|password+totp（空视为 none）
+	TokenDays      int    // 会话 token 有效期天数（0 用默认 7）
+	TrustProxy     bool   // 信任 X-Forwarded-For（取最左）
+	CookieSecure   bool   // 强制 cookie Secure
 }
 
 // New 创建文件服务器
@@ -141,12 +144,13 @@ func New(root string, opts Options) *Server {
 
 	srv := &Server{
 		cfg: config{
-			root:         root,
-			hidden:       opts.Hidden,
-			verbose:      opts.Verbose,
-			textMaxBytes: opts.TextMaxBytes,
-			trustProxy:   opts.TrustProxy,
-			cookieSecure: opts.CookieSecure,
+			root:          root,
+			hidden:        opts.Hidden,
+			verbose:       opts.Verbose,
+			textMaxBytes:  opts.TextMaxBytes,
+			uploadAllowed: opts.AllowUpload,
+			trustProxy:    opts.TrustProxy,
+			cookieSecure:  opts.CookieSecure,
 		},
 		deps: deps{
 			thumbs: NewThumbCache(root),
@@ -166,6 +170,14 @@ func New(root string, opts Options) *Server {
 	srv.cfg.auth = authMan
 	if srv.cfg.textMaxBytes <= 0 {
 		srv.cfg.textMaxBytes = textMaxDefaultBytes
+	}
+	if opts.MaxUploadBytes > 0 {
+		srv.cfg.uploadMaxBytes = opts.MaxUploadBytes
+	} else if opts.MaxUploadMB > 0 {
+		srv.cfg.uploadMaxBytes = opts.MaxUploadMB << 20
+	}
+	if srv.cfg.uploadMaxBytes <= 0 {
+		srv.cfg.uploadMaxBytes = uploadMaxDefaultBytes
 	}
 	return srv
 }
@@ -203,6 +215,7 @@ func (s *Server) apiRoutes() []route {
 		{"POST", "/api/text", s.handleTextSave},
 		{"POST", "/api/text/new", s.handleTextNew},
 		{"POST", "/api/create", s.handleCreate},
+		{"POST", "/api/upload", s.handleUpload},
 		{"POST", "/api/settings/ffmpeg", s.handleSetFFmpeg},
 		// 认证：/api/auth/* 不受门禁
 		{"GET", "/api/auth/status", s.handleAuthStatus},

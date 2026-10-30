@@ -104,6 +104,8 @@ func main() {
 		Verbose:      cfg.Verbose,
 		FFmpeg:       cfg.FFmpeg,
 		TextMaxBytes: cfg.TextMax,
+		AllowUpload:  cfg.AllowUpload,
+		MaxUploadMB:  cfg.MaxUploadMB,
 		AuthMode:     cfg.AuthMode,
 		TokenDays:    cfg.TokenDays,
 		TrustProxy:   cfg.TrustProxy,

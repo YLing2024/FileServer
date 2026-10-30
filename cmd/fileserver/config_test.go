@@ -7,6 +7,7 @@ func clearEnv(t *testing.T) {
 	for _, k := range []string{
 		"FILESERVER_PORT", "FILESERVER_HOST", "FILESERVER_DIR", "FILESERVER_AUTH",
 		"FILESERVER_FFMPEG", "FILESERVER_HIDDEN",
+		"FILESERVER_ALLOW_UPLOAD", "FILESERVER_MAX_UPLOAD_MB",
 	} {
 		t.Setenv(k, "")
 	}
@@ -17,8 +18,24 @@ func TestParseConfigDefaults(t *testing.T) {
 	clearEnv(t)
 	cfg := parseConfig(nil)
 	if cfg.Port != 0 || cfg.Dir != "" || cfg.Auth != "" ||
-		cfg.FFmpeg || cfg.Hidden || cfg.Browser || cfg.Verbose || cfg.NoQR || cfg.Version {
+		cfg.FFmpeg || cfg.Hidden || cfg.Browser || cfg.Verbose || cfg.NoQR || cfg.Version ||
+		cfg.AllowUpload || cfg.MaxUploadMB != 0 {
 		t.Fatalf("默认配置不符: %+v", cfg)
+	}
+}
+
+// TestParseConfigUpload 上传开关与上限的环境变量 / 命令行优先级。
+func TestParseConfigUpload(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("FILESERVER_ALLOW_UPLOAD", "true")
+	t.Setenv("FILESERVER_MAX_UPLOAD_MB", "256")
+	cfg := parseConfig(nil)
+	if !cfg.AllowUpload || cfg.MaxUploadMB != 256 {
+		t.Fatalf("上传环境变量未生效: %+v", cfg)
+	}
+	cfg2 := parseConfig([]string{"-allow-upload=false", "-max-upload-mb", "32"})
+	if cfg2.AllowUpload || cfg2.MaxUploadMB != 32 {
+		t.Fatalf("命令行应覆盖环境变量: %+v", cfg2)
 	}
 }
 

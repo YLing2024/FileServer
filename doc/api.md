@@ -1,6 +1,8 @@
 # HTTP API 参考
 
-所有接口都是 `GET`，JSON 或文件字节。统一错误格式：`{"error": "..."}`。
+接口以 `GET` 为主（读取/下载/媒体流），写入类为 `POST`（新建、编辑文本、上传、认证、设置），
+响应为 JSON 或文件字节。统一错误格式：`{"error": "..."}`；上传冲突额外带
+`code` / `existing`（见 `POST /api/upload`）。
 
 ## 公共约定
 
@@ -22,6 +24,8 @@
 | `list_limit` / `search_limit` | 列表/搜索上限 |
 | `text_exts` | 可新建/编辑的文本扩展名白名单 |
 | `text_max_bytes` | 可编辑文本大小上限（字节） |
+| `allow_upload` | 是否允许上传（`FILESERVER_ALLOW_UPLOAD` / `--allow-upload`，默认 false） |
+| `upload_max_bytes` | 单文件上传上限（字节，默认 1024 MiB） |
 
 ## GET /api/health
 
@@ -168,6 +172,92 @@ moov 预读预热：把 MP4 头部/尾部最多 8MB 顺序读进 OS 缓存（512
   `403` 路径穿越或符号链接逃逸 / 目录只读 / 隐藏名；`409` 同名文件或文件夹已存在。
 - 副作用：文件 `O_CREATE|O_EXCL|O_WRONLY 0o644`；目录 `os.Mkdir 0o755`
   （**不**递归创建父目录）。失败不留半截产物；成功后失效目录列表缓存。
+
+## POST /api/upload
+
+上传一个或多个文件到指定目录。**默认关闭**：需启动时显式开启
+`--allow-upload`（或环境变量 `FILESERVER_ALLOW_UPLOAD=1`），否则返回 `403`。
+开启后前端工具栏才显示「上传」按钮，并支持整页拖拽投放。
+
+### 请求
+
+- 路径：`POST /api/upload?dir=<相对路径>&mode=ask|overwrite|rename`
+  - `dir`（query，必填）：目标目录相对路径；`/` 表示根目录。必须已存在且为目录。
+  - `mode`（query，可选，默认 `ask`）：同名冲突处理方式。
+    - `ask`：不覆盖；有冲突时整批拒绝并返回 `409`，由前端弹窗询问。
+    - `overwrite`：覆盖同名**普通文件**；目标是文件夹时返回 `409`（不覆盖目录）。
+    - `rename`：自动改名为 `name (1).ext`、`name (2).ext`……（保留扩展名）。
+  - `file`（multipart，1..64 个）：文件字段，可重复；文件名保留中文与空格。
+- 请求体：`multipart/form-data`。单文件上限由 `--max-upload-mb`
+  （默认 1024，环境变量 `FILESERVER_MAX_UPLOAD_MB`）配置，超限 `413`。
+- 鉴权：与全站一致。认证启用时必须是有效会话（`Authorization: Bearer <token>`），
+  未登录 `401`；**认证未启用（默认 `--auth-mode none`）时该端点与全站一样敞开**，
+  因此公网/不可信网络部署必须同时启用认证。
+
+```bash
+# 先登录拿 token（认证启用时）
+TOKEN=$(curl -s -X POST http://127.0.0.1:8080/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"password":"secret123","remember":true}' | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+
+# 上传两个文件到 /docs（默认 ask，不覆盖）
+curl -s -X POST 'http://127.0.0.1:8080/api/upload?dir=%2Fdocs&mode=ask' \
+  -H "Authorization: Bearer $TOKEN" \
+  -F 'file=@./a.txt' \
+  -F 'file=@./报告 2026.pdf'
+```
+
+### 成功响应
+
+`200`：
+
+```json
+{
+  "uploaded": [
+    {"name": "a.txt", "size": 123, "mtime": 1761782400},
+    {"name": "报告 2026.pdf", "size": 456789, "mtime": 1761782401}
+  ]
+}
+```
+
+`name` 是最终落盘名（`rename` 模式下可能与请求文件名不同）；`size` 为字节数，
+`mtime` 为 Unix 秒。
+
+### 冲突响应（`409`）
+
+```json
+{"error":"同名文件已存在","code":"conflict","existing":["a.txt","b.txt"]}
+```
+
+`existing` 按字典序去重。前端据此弹窗，用户选择后带 `mode=overwrite` 或
+`mode=rename` 重新提交整批。覆盖目录时 `code` 为 `"target_is_dir"`。
+
+### 错误码
+
+| 状态码 | 场景 | 响应 |
+|---|---|---|
+| `400` | `dir` 越界/绝对路径/不存在/不是目录、`mode` 非法、文件名为空或含 `/ \`、隐藏名（点开头）、Windows 保留名、无 `file` 字段、超过 64 个文件 | `{"error":"..."}` |
+| `401` | 认证启用但未登录/会话无效 | `{"error":"需要访问口令"}` |
+| `403` | 未开启上传开关、隐藏目录或 `.FileServer`、目录只读 | `{"error":"..."}` |
+| `409` | `ask` 模式同名冲突 / `overwrite` 目标是目录 | `{"error":"...","code":"conflict|target_is_dir","existing":[...]}` |
+| `413` | 单文件或请求体超过上限 | `{"error":"单个文件超过大小上限"}` |
+| `500` | 临时文件创建/写入/落位失败（磁盘满、权限等） | `{"error":"..."}` |
+
+### 安全边界与副作用
+
+- **路径**：沿用 `safePath`（拒绝 `..`、绝对路径、符号链接逃逸）+ `pathWithin`
+  二次校验；目标目录解析后必须仍在服务根目录内。文件名不允许路径分隔符，
+  因此不能借文件名逃逸。
+- **禁止写入**：隐藏文件/目录（点开头，无论 `--hidden`）、保留目录 `.FileServer`
+  及其大小写变体、Windows 保留设备名（`CON`/`NUL` 等）、UTF-8 超过 255 字节的名称。
+- **原子写**：每个文件先写入目标目录内的 `.upload-*` 临时文件，全部校验通过后再
+  `rename` 到最终名；任一步失败都会删除尚未落位的临时文件，不留半截文件。
+  POSIX 覆盖为原子 `rename`；Windows 的 `rename` 不能覆盖已存在文件，`overwrite`
+  模式会先删除目标再改名（该模式下存在极小的非原子窗口）。
+- **并发**：`ask` 与 `rename` 在落位前检查目标是否存在；若本地其他进程在检查与
+  `rename` 之间创建同名文件，仍可能被替换（与既有文本写入相同的残余 TOCTOU 面）。
+- **不覆盖目录**：任何模式下目标为文件夹都拒绝（`409`），不会删除目录。
+- **副作用**：成功后失效目录列表缓存；不修改任何其他文件。
 
 ## GET /api/zip?path=
 

@@ -25,6 +25,8 @@ type Config struct {
 	ResetAuth    bool   // --reset-auth
 	ResetTOTP    bool   // --reset-totp
 	TextMax      int64  // FILESERVER_TEXT_MAX_BYTES
+	AllowUpload  bool   // FILESERVER_ALLOW_UPLOAD
+	MaxUploadMB  int64  // FILESERVER_MAX_UPLOAD_MB（默认 1024）
 	Verbose      bool
 	NoQR         bool
 	Version      bool
@@ -62,6 +64,10 @@ func parseConfig(args []string) *Config {
 		"仅清除 TOTP 绑定后退出（服务未启动时使用，用于丢失验证器后的自救）")
 	fs.Int64Var(&cfg.TextMax, "text-max-bytes", envInt64("FILESERVER_TEXT_MAX_BYTES", 0),
 		"可编辑文本大小上限（字节，默认 2097152=2MiB；环境变量 FILESERVER_TEXT_MAX_BYTES）")
+	fs.BoolVar(&cfg.AllowUpload, "allow-upload", envBool("FILESERVER_ALLOW_UPLOAD"),
+		"允许通过网页上传文件（默认关闭；环境变量 FILESERVER_ALLOW_UPLOAD）")
+	fs.Int64Var(&cfg.MaxUploadMB, "max-upload-mb", envInt64("FILESERVER_MAX_UPLOAD_MB", 0),
+		"单文件上传上限（MiB，默认 1024；环境变量 FILESERVER_MAX_UPLOAD_MB）")
 	fs.BoolVar(&cfg.Verbose, "v", false, "详细访问日志")
 	fs.BoolVar(&cfg.NoQR, "no-qr", false, "不在终端显示地址二维码")
 	fs.BoolVar(&cfg.Version, "version", false, "打印版本信息后退出")
