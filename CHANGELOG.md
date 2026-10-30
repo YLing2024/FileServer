@@ -8,6 +8,16 @@
 
 ### Added
 
+- **文件夹上传、分片断点续传与秒传（仅登录会话）**：新增
+  `POST /api/upload/chunk`、`GET /api/upload/status`、`POST /api/upload/complete`、
+  `POST /api/upload/instant`、`POST /api/upload/mkdir`。前端支持拖入/选择文件夹
+  （`webkitGetAsEntry` + `webkitdirectory`，保留结构与空目录，单次上限 2000 文件，
+  顶层目录冲突按目录整体三选一）；>8 MiB 文件按 8 MiB 分片，`upload_id` 由前 1 MiB +
+  大小 + 名称派生，中断后重新选择同一文件只补缺片；浏览器流式 SHA-256 先查秒传，
+  命中用 `.FileServer/blobs/<前缀>/<sha256>` 硬链接落位，删除只减少链接、无引用后回收。
+  服务端 24 小时清理残缺分片，启动与每日清理同时回收孤儿 blob；单文件仍可走原
+  `/api/upload`（可选 `sha256` 登记索引）。文档新增 `doc/api.md` 端点说明、前端/
+  安全边界与组件登记。
 - **文件管理（仅登录会话）**：新增 `POST /api/rename`、`POST /api/move`、
   `POST /api/copy`、`POST /api/delete`、`GET /api/trash`、
   `POST /api/trash/restore`、`POST /api/trash/empty`。删除只移入

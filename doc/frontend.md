@@ -8,7 +8,10 @@
 ```
 web/
 ├── index.html   单页壳：浏览视图 + 预览视图 + 播放器骨架
-├── app.js       全部逻辑（~2500 行，模块化注释分区）
+├── app.js       全部逻辑（模块化注释分区）
+├── manage.js    文件管理（多选/右键/回收站）
+├── sha256.js    可增量更新的 SHA-256（秒传指纹，无依赖）
+├── hash-worker.js 大文件哈希 Worker（importScripts sha256.js）
 ├── style.css    深浅双主题
 └── vendor/hls.min.js  hls.js（内嵌 ~415KB，首次转码前预加载）
 ```
@@ -117,26 +120,35 @@ web/
 服务端开关 `--allow-upload` / `FILESERVER_ALLOW_UPLOAD` 关闭时，`/api/info`
 的 `allow_upload=false`，前端**不渲染**上传按钮、不绑定拖拽，端点自身也返回 403。
 
-- **入口**：工具栏「上传」按钮（图标 + `aria-label`）+ 隐藏的
-  `<input type=file multiple>`；点击按钮触发系统多选。整页拖拽投放层
-  （`#dropOverlay`）只在桌面细指针、浏览视图、未打开认证/冲突弹窗时启用；
-  移动端 `pointer: coarse` 不显示投放层。
-- **目标目录**：选择/投放时快照当前 `state.path`。上传完成后仅当用户仍在同一
-  目录才自动刷新并高亮新文件（高亮 3.2s，`upload-new` 动画）；已导航到别处则只
-  弹提示，避免打断浏览。
-- **队列与并发**：每个文件一个 `XMLHttpRequest`、单路顺序上传；`upload.upload.onprogress`
-  驱动独立进度条，可单独取消（`xhr.abort()`）或失败后重试。面板 `#uploadPanel`
-  列出全部条目（等待/上传中/完成/失败原因/已取消）。大文件单请求，不做分片。
-- **同名冲突**：默认 `mode=ask`。服务端 `409 {code:"conflict", existing:[...]}`
-  （此时整批临时文件已回滚）→ 前端弹窗列出冲突名，选择「覆盖 / 自动改名 / 取消」，
-  选择对本次剩余整批生效；自动改名后以服务端返回的实际落盘名更新条目并用于高亮。
+- **入口**：工具栏「上传」按钮（文件多选）与「上传文件夹」按钮（`webkitdirectory`，
+  不支持该属性或未登录时隐藏）；隐藏的 `<input type=file>` 由按钮触发。桌面端整页
+  拖拽投放层（`#dropOverlay`）支持文件与文件夹，移动端 `pointer: coarse` 不显示。
+- **目标目录**：选择/投放时快照当前 `state.path`。上传完成后仅当用户仍在同一目录
+  才自动刷新并高亮新文件（高亮 3.2s）；已导航到别处则只弹提示。
+- **队列**：每个文件一条记录，单路顺序上传；进度条区分「校验 / 秒传检查 / 上传」，
+  可单独取消或失败重试。文件夹按顶层目录分组，面板标题显示 `已完成/总数`。
+- **文件夹上传**：`webkitGetAsEntry` 递归读取拖入目录（`readEntries` 分批），或使用
+  `webkitdirectory` 选择器；用相对路径还原目录结构，并在上传文件前调用
+  `POST /api/upload/mkdir` 逐级创建目录（含空目录）。单次最多 2000 个文件；顶层目录
+  同名时按目录整体三选一（覆盖=合并、自动改名=整目录改名、取消）。
+- **大文件分片**：`size > /api/info 的 upload_chunk_threshold`（默认 8 MiB）时按
+  8 MiB 切片，先 `GET /api/upload/status` 取已收索引，只传缺少分片，最后
+  `POST /api/upload/complete` 合并。刷新/断网后重新选择同一文件，`upload_id`
+  由「前 1 MiB + 大小 + 名称」派生，命中同一会话即可续传；服务端 24 小时后清理残缺会话。
+- **秒传**：所有走会话上传的文件先计算整文件 SHA-256（>200 MiB 用
+  `/hash-worker.js` Worker，避免卡 UI；不支持 Worker 时主线程分片读取），再调
+  `POST /api/upload/instant`。命中直接落位并标记完成；未命中继续上传并在完成后登记索引。
+  内容索引是 `.FileServer/blobs/<前缀>/<sha256>` 硬链接；删除只少一个链接，最后一条
+  用户链接消失后回收。认证关闭时前端回退为第 1 段的单请求上传（分片/秒传/目录接口
+  仅登录会话可用）。
+- **同名冲突**：默认 `mode=ask`。服务端 `409 {code:"conflict", existing:[...]}` →
+  弹窗选择「覆盖 / 自动改名 / 取消」，对剩余整批生效；自动改名以服务端返回的
+  实际落盘名为准。
 - **上限**：`/api/info` 的 `upload_max_bytes`（默认 1024 MiB）用于选择后即时提示；
-  超限文件不发请求，服务端仍会以 413 兜底。
-- **离开确认**：队列中存在等待/上传中的条目时注册 `beforeunload`，浏览器弹出
-  通用离开确认；全部结束后自动失效。
-- **认证**：XHR 直接带 `Authorization: Bearer <token>`（与 `authFetch` 同源凭据），
-  `401` 走统一 `handleUnauthorized()` 清凭据回登录页。上传目标 URL 只含目录与
-  mode，不含 token。
+  超限文件不发请求，服务端仍以 413 兜底。
+- **离开确认**：队列中存在等待/上传中的条目时注册 `beforeunload`。
+- **认证**：XHR 直接带 `Authorization: Bearer <token>`；401 走统一
+  `handleUnauthorized()` 清凭据回登录页。URL 只含目录/文件名/分片参数，不含 token。
 
 ## 10. 文件管理（`manage.js`）
 
