@@ -33,7 +33,7 @@ const uploadMaxFiles = 64
 // uploadTempPattern 临时文件模式：与目标同目录，隐藏且可被启动清理识别。
 const uploadTempPattern = ".upload-*"
 
-// uploadModes 支持的冲突处理模式。
+// 上传支持的冲突处理模式。
 const (
 	uploadModeAsk       = "ask"
 	uploadModeOverwrite = "overwrite"
@@ -96,7 +96,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	// 请求体总量兜底：单文件上限 × 最多文件数 + multipart 头开销。
 	// 单文件是否超限仍按 maxBytes 精确判定（413），此处只防无限灌流。
-	r.Body = http.MaxBytesReader(w, r.Body, maxBytes*uploadMaxFiles+1<<20)
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes*uploadMaxFiles+(1<<20))
 
 	items, status, msg := s.receiveUploadParts(r, dirAbs, maxBytes)
 	if status != 0 {
