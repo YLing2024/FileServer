@@ -2,7 +2,7 @@
 
 # FileServer
 
-A cross-platform file server (Windows / Linux / macOS): a single executable lets phones and computers on the same LAN read-only browse, preview and download a chosen directory; optional password + TOTP two-factor authentication; and new/edit text files.
+A cross-platform file server (Windows / Linux / macOS): a single executable lets phones and computers on the same LAN browse, preview and download a chosen directory; optional password + TOTP two-factor authentication; new/edit text files; and optional file upload.
 
 ## What it does
 
@@ -12,13 +12,14 @@ A cross-platform file server (Windows / Linux / macOS): a single executable lets
 - **Terminal QR code**: renders a QR code for each address so phones can scan directly (`--no-qr` disables it)
 - **Optional authentication**: `--auth-mode totp|password|password+totp`; a first-run guide sets it up, with "remember me", logout and session management; a CLI reset recovers a lost authenticator
 - **Text new/edit**: whitelisted text files can be created and edited in the browser (atomic writes + conflict detection); oversized files are read-only
+- **File upload (optional, off by default)**: enable it to pick files from the toolbar or drop them anywhere on the page; per-file progress/cancel, overwrite or auto-rename on name conflicts, 1024 MiB single-file limit by default
 - **Online video playback**: native formats stream directly; with support for less common formats enabled, MKV/RMVB/AVI/WMV/HEVC etc. are transcoded to H.264 in real time and played while transcoding
 - **Odd-container MP4 detection**: identifies MP4 files with fragmented mdat / oversized moov; use the separate mp4norm project when you need permanent normalization (see below)
 - **Video thumbnails**: ordinary MP4/WebM frames are extracted by the browser at zero server cost; less common formats are frame-extracted server-side once support is enabled
 - **Hand-drawn player**: progress seeking, speed, volume, fullscreen, with space / arrow keys / M / F shortcuts
 - **Image lightbox and online preview**: the lightbox supports zoom, rotation, keyboard and touch; video, audio, PDF, text and code can be previewed
 - **Directory zip download**: streams any folder as a zip; **recursive search** with depth and count limits
-- **Limited write scope**: only text file create/edit; delete, rename, move and upload are intentionally not supported. Cache lives in the hidden `.FileServer` folder under the served directory
+- **Limited write scope**: text create/edit plus optional file upload; delete, rename and move are intentionally not supported. Cache lives in the hidden `.FileServer` folder under the served directory
 - **Path safety**: prevents directory traversal and symlink escapes
 
 ## Quick start
@@ -49,6 +50,8 @@ Stopping the service: close the window, or press `Ctrl+C` (graceful exit that al
 | `--reset-auth` | clear all credentials and sessions then exit (recovery while the service is stopped) |
 | `--reset-totp` | clear only the TOTP binding then exit (recovery after losing an authenticator) |
 | `--text-max-bytes N` | editable text size limit in bytes, default 2097152 (2 MiB) |
+| `--allow-upload` | allow browser uploads (off by default); shows the toolbar upload button and enables drag-and-drop |
+| `--max-upload-mb N` | single-file upload limit in MiB, default 1024 |
 | `--ffmpeg` | enable real-time transcoding of less common formats and server-side thumbnail frame extraction (needs ffmpeg; CPU/GPU cost; off by default), also toggleable from the web toolbar |
 | `--no-qr` | do not show address QR codes in the terminal |
 | `-v` | output access logs |
@@ -56,7 +59,8 @@ Stopping the service: close the window, or press `Ctrl+C` (graceful exit that al
 Same-named environment variables act as defaults (command-line wins): `FILESERVER_PORT`,
 `FILESERVER_HOST`, `FILESERVER_DIR`, `FILESERVER_HIDDEN`, `FILESERVER_FFMPEG`,
 `FILESERVER_AUTH`, `FILESERVER_AUTH_MODE`, `FILESERVER_TOKEN_DAYS`,
-`FILESERVER_TRUST_PROXY`, `FILESERVER_COOKIE_SECURE`, `FILESERVER_TEXT_MAX_BYTES`.
+`FILESERVER_TRUST_PROXY`, `FILESERVER_COOKIE_SECURE`, `FILESERVER_TEXT_MAX_BYTES`,
+`FILESERVER_ALLOW_UPLOAD`, `FILESERVER_MAX_UPLOAD_MB`.
 When locating ffmpeg it also checks `%LOCALAPPDATA%\FileServer\ffmpeg`.
 
 ## Authentication
