@@ -26,6 +26,7 @@
 | `text_max_bytes` | 可编辑文本大小上限（字节） |
 | `allow_upload` | 是否允许上传（`FILESERVER_ALLOW_UPLOAD` / `--allow-upload`，默认 false） |
 | `upload_max_bytes` | 单文件上传上限（字节，默认 1024 MiB） |
+| `manage` | 是否可用文件管理（重命名/删除/移动/复制/回收站）；仅在启用认证时为 true |
 
 ## GET /api/health
 
@@ -258,6 +259,163 @@ curl -s -X POST 'http://127.0.0.1:8080/api/upload?dir=%2Fdocs&mode=ask' \
   `rename` 之间创建同名文件，仍可能被替换（与既有文本写入相同的残余 TOCTOU 面）。
 - **不覆盖目录**：任何模式下目标为文件夹都拒绝（`409`），不会删除目录。
 - **副作用**：成功后失效目录列表缓存；不修改任何其他文件。
+
+## 文件管理
+
+重命名、移动、复制、删除（回收站）与回收站操作。**仅登录会话可用**：即使认证未启用
+（`--auth-mode none`），这些端点也一律返回 `401`，不存在匿名文件管理。前端在
+`/api/info` 的 `manage=false` 时不渲染选择/操作入口。
+
+- 所有路径均为服务根目录下的相对路径，服务端拒绝 `..`、绝对路径、盘符（Windows）、
+  `.FileServer` 与隐藏项、以及指向根目录外的符号链接；`../` 等越界路径返回 `400`。
+- 单批最多 **200** 项；超限返回 `400`，需分批操作。
+- 批量操作逐项执行并返回 `{moved|copied|restored, failed}`；部分失败仍是 `200`，
+  `failed` 里逐项给出路径与中文原因，不会整体静默失败。
+- 同名冲突策略：`ask`（默认，整批 `409` 等前端询问）、`overwrite`（覆盖同名文件；
+  同名目录整体替换，失败自动回滚备份）、`rename`（生成 `name (1).ext`）。
+- 副作用：成功后失效目录列表缓存；服务端日志只记录操作类型、数量、结果、会话短 id
+  与来源 IP，不记录文件名/内容。
+- 回收站条目 id 为字符串（`YYYYMMDD-HHMMSS-<8位十六进制>`），客户端必须按字符串处理。
+
+### 公共请求头
+
+```bash
+# 先登录拿 token（认证启用时）
+TOKEN=$(curl -s -X POST http://127.0.0.1:8080/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"password":"secret123","remember":true}' | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+```
+
+### POST /api/rename
+
+重命名当前目录内的文件或文件夹；只改名，不移动位置。
+
+- 请求体：`{path, name}`。
+  - `path`：源相对路径（必填）。
+  - `name`：新名称（必填），沿用跨平台命名校验：非空、不含 `/ \` 与 NUL、
+    不以 `.` 开头、不含控制字符与 Windows 非法字符、非保留设备名、UTF-8 ≤ 255 字节。
+- 成功：`200 {ok:true, path, name}`，`path` 为新相对路径。
+- 冲突：同目录已有同名项 `409 {"error":"同名文件或文件夹已存在"}`。
+- 错误：非法名称/越界路径 `400`；源目录只读 `403`；源不存在 `404`。
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/api/rename \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"path":"/docs/old.md","name":"new.md"}'
+# {"name":"new.md","ok":true,"path":"/docs/new.md"}
+```
+
+### POST /api/move
+
+把一个或多个条目移动到目标目录。目标不能是条目自身或其子目录。
+
+- 请求体：`{paths, dir, mode?}`；`mode` 也可用查询串 `?mode=ask|overwrite|rename`，查询串优先。
+  - `paths`：源相对路径数组（1..200）。
+  - `dir`：目标目录相对路径，必须存在且可写。
+  - `mode`：默认 `ask`。
+- 成功：`200 {ok, moved:[{from,to}], failed:[{path,error}]}`。
+- 冲突（`ask`）：`409 {"error":"目标目录已有同名项","code":"conflict","existing":[...]}`，
+  本次不做任何移动；前端选择后用 `overwrite` 或 `rename` 重试。
+- 错误：越界路径/目标是自身子目录/批量超限/同一批次重名目标 `400`；目标只读 `403`。
+
+```bash
+curl -s -X POST 'http://127.0.0.1:8080/api/move?mode=rename' \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"paths":["/a.txt","/docs"],"dir":"/backup"}'
+# {"ok":true,"moved":[{"from":"/a.txt","to":"/backup/a.txt"}],"failed":[]}
+```
+
+### POST /api/copy
+
+复制文件或目录到目标目录；目录递归复制，保留目录结构、权限位与修改时间。
+
+- 请求体/响应/冲突规则与 `POST /api/move` 相同，成功字段为 `copied`。
+- 复制符号链接不跟随（逐项失败 `不支持复制符号链接`）；目标位于源目录内返回 `400`。
+- 单文件同样保留 mtime。
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/api/copy \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"paths":["/photos"],"dir":"/backup"}'
+# {"ok":true,"copied":[{"from":"/photos","to":"/backup/photos"}],"failed":[]}
+```
+
+### POST /api/delete
+
+把条目移入回收站（**不是物理删除**），可恢复。
+
+- 请求体：`{paths}`（1..200）。
+- 成功：`200 {ok, moved:[{path,id}], failed:[{path,error}]}`；`id` 为回收站条目 id（字符串）。
+- 每条目拥有独立 id 目录，原相对路径完整保留在 `.FileServer/trash/<id>/` 下。
+- 错误：任一路径越界/指向 `.FileServer`/隐藏项 → 整批 `400`；不存在的条目进入 `failed`。
+- 副作用：文件从原位置消失并出现在 `GET /api/trash`；普通浏览/搜索/缩略图不索引回收站。
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/api/delete \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"paths":["/docs/a.txt","/docs/b.txt"]}'
+# {"ok":true,"moved":[{"id":"20261030-153045-a1b2c3d4","path":"/docs/a.txt"}],"failed":[]}
+```
+
+### GET /api/trash
+
+列出回收站条目及总占用。
+
+- 成功：`200 {items:[{id,path,name,kind,is_dir,size,deleted_at}], count, total_size}`。
+  - `path` 为原相对路径；`deleted_at` 为 Unix 秒；`size` 对目录递归统计。
+  - 按删除时间倒序。
+- 回收站为空时 `items:[]`、`count:0`、`total_size:0`。
+
+```bash
+curl -s http://127.0.0.1:8080/api/trash -H "Authorization: Bearer $TOKEN"
+# {"count":1,"items":[{"id":"...","path":"/docs/a.txt","name":"a.txt","kind":"text","is_dir":false,"size":123,"deleted_at":1761782400}],"total_size":123}
+```
+
+### POST /api/trash/restore
+
+把回收站条目恢复到原位置（父目录不存在时自动创建）。
+
+- 请求体：`{ids, mode?}`；`mode` 也可用查询串，取值 `ask`（默认）| `rename`。
+- 成功：`200 {ok, restored:[{id,path,from}], failed:[{path,error}]}`。
+- 原位置已有同名项且 `mode=ask`：`409 {code:"conflict", existing:[原路径...]}`，本次不恢复；
+  前端询问后用 `mode=rename`（自动改名）重试或取消。
+- 错误：id 非法/越界/元信息路径非法 `400`；条目不存在进入 `failed`。
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/api/trash/restore \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"ids":["20261030-153045-a1b2c3d4"],"mode":"ask"}'
+# {"ok":true,"restored":[{"from":"/docs/a.txt","id":"...","path":"/docs/a.txt"}],"failed":[]}
+```
+
+### POST /api/trash/empty
+
+彻底删除回收站条目（不可恢复）。
+
+- 请求体：`{ids?, all?}`。
+  - `ids` 非空：只删除指定条目（1..200）。
+  - `ids` 为空、缺省或 `all=true`：清空整个回收站。
+- 成功：`200 {ok, deleted:[id...], failed:[{path,error}]}`。
+- 错误：id 格式非法 `400`；条目已不存在进入 `failed`。
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/api/trash/empty \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"all":true}'
+# {"deleted":["20261030-153045-a1b2c3d4"],"ok":true,"failed":[]}
+```
+
+### 文件管理错误码
+
+| 状态码 | 场景 | 响应 |
+|---|---|---|
+| `400` | 路径为 `..`/绝对路径/越界链接、`.FileServer` 或隐藏项、非法名称、目标不是目录、移动到自身子目录、单批超过 200、`mode` 非法 | `{"error":"..."}` |
+| `401` | 未登录、会话无效，或认证未启用（不存在登录会话） | `{"error":"需要登录后管理文件"}` |
+| `403` | 目标/源目录只读；回收站条目路径越界 | `{"error":"..."}` |
+| `404` | 重命名的源不存在 | `{"error":"源路径不存在"}` |
+| `409` | 同名冲突（`ask`）；重命名目标已存在 | `{"error":"...","code":"conflict","existing":[...]}` |
+| `413` | 请求体超过 1 MiB（管理接口只接受短 JSON） | `{"error":"请求体过大"}` |
+| `500` | 磁盘/权限等底层错误 | `{"error":"操作失败"}` |
 
 ## GET /api/zip?path=
 

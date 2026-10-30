@@ -216,6 +216,13 @@ func (s *Server) apiRoutes() []route {
 		{"POST", "/api/text/new", s.handleTextNew},
 		{"POST", "/api/create", s.handleCreate},
 		{"POST", "/api/upload", s.handleUpload},
+		{"POST", "/api/rename", s.handleRename},
+		{"POST", "/api/move", s.handleMove},
+		{"POST", "/api/copy", s.handleCopy},
+		{"POST", "/api/delete", s.handleDelete},
+		{"GET", "/api/trash", s.handleTrash},
+		{"POST", "/api/trash/restore", s.handleTrashRestore},
+		{"POST", "/api/trash/empty", s.handleTrashEmpty},
 		{"POST", "/api/settings/ffmpeg", s.handleSetFFmpeg},
 		// 认证：/api/auth/* 不受门禁
 		{"GET", "/api/auth/status", s.handleAuthStatus},

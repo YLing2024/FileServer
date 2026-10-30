@@ -41,6 +41,7 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"text_max_bytes":   s.cfg.textMaxBytes,   // 可编辑文本大小上限
 		"allow_upload":     s.cfg.uploadAllowed,  // 是否允许上传（工具栏按钮据此显隐）
 		"upload_max_bytes": s.cfg.uploadMaxBytes, // 单文件上传上限
+		"manage":           s.authEnabled(),      // 文件管理是否可用（仅登录会话）
 	})
 }
 
