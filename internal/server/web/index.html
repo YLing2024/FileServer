@@ -32,6 +32,10 @@
       <button id="btnFFmpeg" class="icon-btn" title="冷门格式支持（MKV/RMVB/HEVC 等在线播放与缩略图，需 ffmpeg）" aria-label="冷门格式开关">
         <svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/><path d="M3 8h3M5 6v4M16 3v3M14.5 4.5h3"/></svg>
       </button>
+      <button id="btnUpload" class="icon-btn hidden" title="上传文件到当前目录" aria-label="上传文件">
+        <svg viewBox="0 0 24 24"><path d="M12 20V9m0 0l-4 4m4-4l4 4"/><path d="M4 5h16"/></svg>
+      </button>
+      <input id="uploadInput" type="file" multiple class="hidden" aria-hidden="true" tabindex="-1">
       <button id="btnNewText" class="icon-btn" title="新建文件 / 文件夹" aria-label="新建文件或文件夹">
         <svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M12 11v6M9 14h6"/></svg>
       </button>
@@ -133,6 +137,41 @@
     <button class="lb-nav lb-prev" id="lbPrev" aria-label="上一张">‹</button>
     <div class="lb-img-wrap"><img id="lbImg" alt=""></div>
     <button class="lb-nav lb-next" id="lbNext" aria-label="下一张">›</button>
+  </div>
+</div>
+
+<!-- ============ 拖拽投放层 ============ -->
+<div id="dropOverlay" class="drop-overlay hidden" aria-hidden="true">
+  <div class="drop-card">
+    <svg viewBox="0 0 24 24"><path d="M12 16V4m0 0L7 9m5-5l5 5"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+    <strong>松开即可上传</strong>
+    <span>上传到当前目录</span>
+  </div>
+</div>
+
+<!-- ============ 上传队列 ============ -->
+<div id="uploadPanel" class="upload-panel hidden" role="region" aria-label="上传队列">
+  <div class="up-head">
+    <span id="upTitle">上传</span>
+    <button id="upClose" class="icon-btn up-close" title="关闭上传队列" aria-label="关闭上传队列">
+      <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  <div id="upList" class="up-list"></div>
+</div>
+
+<!-- ============ 同名冲突对话框 ============ -->
+<div id="uploadConflict" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="ucTitle">
+  <div class="modal-box">
+    <h3 id="ucTitle">文件已存在</h3>
+    <p class="modal-hint">以下文件在目标目录中已存在，请选择处理方式（对本次上传的全部文件生效）。</p>
+    <ul id="ucList" class="conflict-list"></ul>
+    <p id="ucError" class="modal-error hidden"></p>
+    <div class="modal-actions">
+      <button id="ucCancel" class="btn">取消</button>
+      <button id="ucRename" class="btn">自动改名</button>
+      <button id="ucOverwrite" class="btn primary">覆盖</button>
+    </div>
   </div>
 </div>
 

@@ -27,6 +27,7 @@ const listURL = (p, sort, order, limit, offset) => `/api/list?path=${pathParam(p
 const searchURL = (q, p, limit) => `/api/search?q=${pathParam(q)}&path=${pathParam(p)}&limit=${limit}`;
 const videoInfoURL = (p) => '/api/video-info?path=' + pathParam(p);
 const hlsURL = (p) => '/api/hls?path=' + pathParam(p) + '&f=index.m3u8';
+const uploadURL = (dir, mode) => `/api/upload?dir=${pathParam(dir)}&mode=${enc(mode || 'ask')}`;
 
 /* ============================================================
    凭据存储 / 短票 / 鉴权请求
@@ -206,6 +207,8 @@ const state = {
   textMaxBytes: 2 * 1024 * 1024, // 可编辑文本大小上限（从 /api/info 取）
   hasMore: false,     // 目录列表是否还有更多页（服务端分页 3.1）
   listSeq: 0,         // 列表加载序列号（竞态保护）
+  uploadAllowed: false, // 服务端是否允许上传（/api/info 下发，默认关闭）
+  uploadMaxBytes: 1024 * 1024 * 1024, // 单文件上传上限（字节）
 };
 
 // 单次目录列表页大小（唯一来源，取代旧的分页常量）
@@ -1830,6 +1833,414 @@ $('btnLoadMore').addEventListener('click', async () => {
   }
 });
 
+/* ---------- 上传 ---------- */
+
+// 上传队列：单文件单请求（进度/取消独立），mode 在批内共享。
+// ask 冲突时服务端整批回滚临时文件，前端弹窗后带 overwrite / rename 重试。
+const uploadState = {
+  items: [],        // {id, file, name, size, status, progress, error, xhr}
+  active: null,     // 当前在传的条目
+  target: null,     // 本批目标目录（选择文件时快照）
+  mode: 'ask',
+  conflictItem: null,
+  refreshed: false,
+  seq: 0,
+  dragDepth: 0,
+};
+
+function uploadBusy() {
+  return uploadState.items.some((it) => it.status === 'waiting' || it.status === 'uploading');
+}
+
+// setUploadUI 按 /api/info 的 allow_upload 决定工具栏按钮显隐（未开启完全不出现）。
+function setUploadUI() {
+  $('btnUpload').classList.toggle('hidden', !state.uploadAllowed);
+  if (!state.uploadAllowed) hideDropOverlay();
+}
+
+// enqueueUploadFiles 把选中的文件加入队列；上传目标为调用时的当前目录。
+function enqueueUploadFiles(fileList) {
+  if (!state.uploadAllowed) return;
+  const files = Array.from(fileList || []).filter((f) => f && f.name);
+  if (!files.length) return;
+  const target = state.path;
+  if (uploadBusy() && uploadState.target !== target) {
+    toast('请等待当前上传完成', true);
+    return;
+  }
+  if (!uploadBusy()) {
+    // 新一轮选择：清空上一批结果，默认回到 ask（绝不默认覆盖）
+    uploadState.items = [];
+    uploadState.mode = 'ask';
+    uploadState.refreshed = false;
+    uploadState.target = target;
+    uploadState.seq = 0;
+  }
+  for (const f of files) {
+    const item = {
+      id: ++uploadState.seq,
+      file: f,
+      name: f.name,
+      size: f.size,
+      status: 'waiting',
+      progress: 0,
+      error: '',
+      xhr: null,
+    };
+    if (f.size > state.uploadMaxBytes) {
+      item.status = 'error';
+      item.error = `超过上限 ${fmtSize(state.uploadMaxBytes)}`;
+    }
+    uploadState.items.push(item);
+  }
+  renderUploadPanel();
+  pumpUploads();
+}
+
+function pumpUploads() {
+  updateUploadTitle();
+  if (uploadState.conflictItem || uploadState.active) return;
+  const next = uploadState.items.find((it) => it.status === 'waiting');
+  if (!next) {
+    finishUploadBatch();
+    return;
+  }
+  startUpload(next);
+}
+
+function startUpload(item) {
+  item.status = 'uploading';
+  item.progress = 0;
+  item.error = '';
+  uploadState.active = item;
+  refreshUploadRow(item);
+  updateUploadTitle();
+
+  const xhr = new XMLHttpRequest();
+  item.xhr = xhr;
+  xhr.open('POST', uploadURL(uploadState.target, uploadState.mode));
+  const token = authToken();
+  if (token) xhr.setRequestHeader('Authorization', 'Bearer ' + token);
+  xhr.upload.onprogress = (e) => {
+    if (!e.lengthComputable) return;
+    item.progress = Math.min(99, Math.round((e.loaded / e.total) * 100));
+    refreshUploadRow(item);
+  };
+  xhr.onload = () => handleUploadResponse(item, xhr);
+  xhr.onerror = () => finishUploadItem(item, 'error', '网络错误');
+  xhr.onabort = () => finishUploadItem(item, 'canceled', '已取消');
+  const fd = new FormData();
+  fd.append('file', item.file, item.name);
+  xhr.send(fd);
+}
+
+function handleUploadResponse(item, xhr) {
+  if (xhr.status === 401) {
+    finishUploadItem(item, 'error', '未认证');
+    handleUnauthorized();
+    return;
+  }
+  let j = {};
+  try { j = JSON.parse(xhr.responseText || '{}'); } catch (_) { /* 非 JSON 响应 */ }
+  if (xhr.status >= 200 && xhr.status < 300) {
+    // rename 模式下服务端返回实际落盘名（name (1).ext），同步用于刷新后高亮。
+    if (Array.isArray(j.uploaded) && j.uploaded[0] && j.uploaded[0].name) {
+      item.name = j.uploaded[0].name;
+    }
+    item.progress = 100;
+    finishUploadItem(item, 'done', '');
+    return;
+  }
+  if (xhr.status === 409 && j.code === 'conflict') {
+    // 服务端未落盘（临时文件已回滚）：暂停队列，等待用户选择整批处理方式。
+    uploadState.active = null;
+    item.xhr = null;
+    item.status = 'waiting';
+    item.progress = 0;
+    refreshUploadRow(item);
+    showUploadConflict(Array.isArray(j.existing) && j.existing.length ? j.existing : [item.name], item);
+    return;
+  }
+  if (xhr.status === 413) {
+    finishUploadItem(item, 'error', '超过大小上限 ' + fmtSize(state.uploadMaxBytes));
+    return;
+  }
+  finishUploadItem(item, 'error', j.error || ('上传失败 (' + xhr.status + ')'));
+}
+
+function finishUploadItem(item, status, msg) {
+  if (item.xhr) item.xhr = null;
+  if (uploadState.active === item) uploadState.active = null;
+  if (status === 'canceled' && item.status === 'canceled') return;
+  item.status = status;
+  item.error = msg || '';
+  if (status === 'done') item.progress = 100;
+  refreshUploadRow(item);
+  pumpUploads();
+}
+
+function cancelUpload(item) {
+  if (item.status === 'uploading' && item.xhr) {
+    item.status = 'canceled';
+    item.error = '已取消';
+    const xhr = item.xhr;
+    item.xhr = null;
+    try { xhr.abort(); } catch (_) { /* 已结束 */ }
+    if (uploadState.active === item) uploadState.active = null;
+    refreshUploadRow(item);
+    pumpUploads();
+    return;
+  }
+  if (item.status === 'waiting') {
+    item.status = 'canceled';
+    item.error = '已取消';
+    refreshUploadRow(item);
+    pumpUploads();
+  }
+}
+
+function retryUpload(item) {
+  if (item.status !== 'error' && item.status !== 'canceled') return;
+  if (item.size > state.uploadMaxBytes) {
+    item.status = 'error';
+    item.error = `超过上限 ${fmtSize(state.uploadMaxBytes)}`;
+    refreshUploadRow(item);
+    return;
+  }
+  item.status = 'waiting';
+  item.error = '';
+  item.progress = 0;
+  refreshUploadRow(item);
+  pumpUploads();
+}
+
+function renderUploadPanel() {
+  const panel = $('uploadPanel');
+  panel.classList.toggle('hidden', uploadState.items.length === 0);
+  const list = $('upList');
+  list.innerHTML = '';
+  for (const item of uploadState.items) {
+    const row = document.createElement('div');
+    row.className = 'up-item';
+    const head = document.createElement('div');
+    head.className = 'up-item-head';
+    const name = document.createElement('span');
+    name.className = 'up-name';
+    name.textContent = item.name;
+    name.title = item.name;
+    const status = document.createElement('span');
+    status.className = 'up-status';
+    head.appendChild(name);
+    head.appendChild(status);
+    const bar = document.createElement('div');
+    bar.className = 'up-bar';
+    const fill = document.createElement('i');
+    bar.appendChild(fill);
+    const foot = document.createElement('div');
+    foot.className = 'up-foot';
+    const meta = document.createElement('span');
+    meta.className = 'up-meta';
+    meta.textContent = fmtSize(item.size);
+    const action = document.createElement('button');
+    action.className = 'mini-btn up-act';
+    action.addEventListener('click', () => {
+      if (item.status === 'waiting' || item.status === 'uploading') cancelUpload(item);
+      else if (item.status === 'error' || item.status === 'canceled') retryUpload(item);
+    });
+    foot.appendChild(meta);
+    foot.appendChild(action);
+    row.appendChild(head);
+    row.appendChild(bar);
+    row.appendChild(foot);
+    item.refs = { row, name, status, fill, action };
+    list.appendChild(row);
+    refreshUploadRow(item);
+  }
+  updateUploadTitle();
+}
+
+function refreshUploadRow(item) {
+  const r = item.refs;
+  if (!r) return;
+  r.name.textContent = item.name;
+  r.name.title = item.name;
+  r.row.classList.toggle('done', item.status === 'done');
+  r.row.classList.toggle('failed', item.status === 'error' || item.status === 'canceled');
+  r.fill.style.width = (item.status === 'done' ? 100 : item.progress) + '%';
+  let text = '等待中';
+  if (item.status === 'uploading') text = item.progress > 0 ? item.progress + '%' : '上传中…';
+  else if (item.status === 'done') text = '已完成';
+  else if (item.status === 'canceled') text = item.error || '已取消';
+  else if (item.status === 'error') text = item.error || '失败';
+  r.status.textContent = text;
+  r.status.title = text;
+  if (item.status === 'waiting' || item.status === 'uploading') {
+    r.action.textContent = '取消';
+    r.action.classList.remove('hidden');
+  } else if (item.status === 'error' || item.status === 'canceled') {
+    r.action.textContent = '重试';
+    r.action.classList.remove('hidden');
+  } else {
+    r.action.classList.add('hidden');
+  }
+}
+
+function updateUploadTitle() {
+  const total = uploadState.items.length;
+  const done = uploadState.items.filter((it) => it.status === 'done').length;
+  const failed = uploadState.items.filter((it) => it.status === 'error').length;
+  if (!total) { $('upTitle').textContent = '上传'; return; }
+  if (uploadBusy()) $('upTitle').textContent = `上传中 ${done}/${total}`;
+  else if (failed) $('upTitle').textContent = `上传结束：${done} 成功，${failed} 失败`;
+  else $('upTitle').textContent = done === total ? `上传完成（${done}）` : '上传结束';
+}
+
+// finishUploadBatch 队列空闲后的收尾：刷新当前目录并高亮新文件（同目录才刷新，
+// 用户已导航到别处时只提示，避免打断浏览）。
+function finishUploadBatch() {
+  updateUploadTitle();
+  if (uploadState.refreshed) return;
+  const names = uploadState.items.filter((it) => it.status === 'done').map((it) => it.name);
+  if (!names.length) return;
+  uploadState.refreshed = true;
+  if (uploadState.target === state.path) {
+    const done = state.searching ? doSearch(state.query) : loadList(state.path);
+    Promise.resolve(done).then(() => highlightUploaded(names));
+  } else {
+    toast(`已上传 ${names.length} 个文件到 ${uploadState.target}`);
+  }
+}
+
+function highlightUploaded(names) {
+  const wanted = new Set(names);
+  const els = document.querySelectorAll('#grid .card, #listBody tr');
+  els.forEach((el) => {
+    if (wanted.has(el.dataset.path)) {
+      el.classList.add('upload-new');
+      setTimeout(() => el.classList.remove('upload-new'), 3200);
+    }
+  });
+}
+
+function showUploadConflict(names, item) {
+  uploadState.conflictItem = item;
+  const list = $('ucList');
+  list.innerHTML = '';
+  for (const n of names) {
+    const li = document.createElement('li');
+    li.textContent = n;
+    list.appendChild(li);
+  }
+  $('ucError').classList.add('hidden');
+  $('uploadConflict').classList.remove('hidden');
+  $('ucCancel').focus();
+}
+
+function closeUploadConflict(choice) {
+  const item = uploadState.conflictItem;
+  uploadState.conflictItem = null;
+  $('uploadConflict').classList.add('hidden');
+  if (!item) return;
+  if (choice === 'cancel') {
+    // 取消整批未完成项：已完成的不动，等待中的标记取消。
+    for (const it of uploadState.items) {
+      if (it.status === 'waiting' || it.status === 'uploading') {
+        it.status = 'canceled';
+        it.error = '已取消（同名冲突）';
+        refreshUploadRow(it);
+      }
+    }
+    updateUploadTitle();
+    finishUploadBatch();
+    return;
+  }
+  uploadState.mode = choice === 'overwrite' ? 'overwrite' : 'rename';
+  item.status = 'waiting';
+  item.progress = 0;
+  item.error = '';
+  refreshUploadRow(item);
+  pumpUploads();
+}
+
+$('btnUpload').addEventListener('click', () => $('uploadInput').click());
+$('uploadInput').addEventListener('change', () => {
+  const input = $('uploadInput');
+  enqueueUploadFiles(input.files);
+  input.value = ''; // 允许连续选择同一文件
+});
+$('upClose').addEventListener('click', () => {
+  if (uploadBusy()) { toast('上传进行中，暂不能关闭', true); return; }
+  uploadState.items = [];
+  uploadState.target = null;
+  uploadState.conflictItem = null;
+  uploadState.refreshed = false;
+  $('uploadPanel').classList.add('hidden');
+});
+$('ucCancel').addEventListener('click', () => closeUploadConflict('cancel'));
+$('ucRename').addEventListener('click', () => closeUploadConflict('rename'));
+$('ucOverwrite').addEventListener('click', () => closeUploadConflict('overwrite'));
+$('uploadConflict').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeUploadConflict('cancel');
+});
+
+// ---- 整页拖拽投放 ----
+
+function dragHasFiles(e) {
+  const dt = e.dataTransfer;
+  if (!dt) return false;
+  if (dt.types) {
+    for (let i = 0; i < dt.types.length; i++) if (dt.types[i] === 'Files') return true;
+  }
+  return false;
+}
+
+// 移动端/触屏指针不适用拖拽；预览、登录覆盖层也不接受投放。
+function dropUploadAllowed() {
+  return state.uploadAllowed
+    && !window.matchMedia('(pointer: coarse)').matches
+    && !$('browse').classList.contains('hidden')
+    && $('auth').classList.contains('hidden')
+    && $('uploadConflict').classList.contains('hidden');
+}
+
+function showDropOverlay() { $('dropOverlay').classList.remove('hidden'); }
+function hideDropOverlay() {
+  uploadState.dragDepth = 0;
+  $('dropOverlay').classList.add('hidden');
+}
+
+document.addEventListener('dragenter', (e) => {
+  if (!dropUploadAllowed() || !dragHasFiles(e)) return;
+  e.preventDefault();
+  uploadState.dragDepth++;
+  showDropOverlay();
+});
+document.addEventListener('dragover', (e) => {
+  if (!dropUploadAllowed() || !dragHasFiles(e)) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'copy';
+});
+document.addEventListener('dragleave', (e) => {
+  if (!dropUploadAllowed()) { hideDropOverlay(); return; }
+  uploadState.dragDepth = Math.max(0, uploadState.dragDepth - 1);
+  if (uploadState.dragDepth === 0) hideDropOverlay();
+});
+document.addEventListener('drop', (e) => {
+  if (!dropUploadAllowed() || !dragHasFiles(e)) { hideDropOverlay(); return; }
+  e.preventDefault();
+  hideDropOverlay();
+  if (e.dataTransfer && e.dataTransfer.files) enqueueUploadFiles(e.dataTransfer.files);
+});
+window.addEventListener('blur', hideDropOverlay);
+window.addEventListener('dragend', hideDropOverlay);
+
+// 上传中离开页面需要确认（浏览器只显示通用文案，不能自定义）。
+window.addEventListener('beforeunload', (e) => {
+  if (!uploadBusy()) return;
+  e.preventDefault();
+  e.returnValue = '';
+});
+
 /* ---------- 快捷键 ---------- */
 
 document.addEventListener('keydown', (e) => {
@@ -2075,6 +2486,9 @@ function startApp() {
       if (info.search_limit) state.searchLimit = info.search_limit; // 搜索上限（4.5）
       if (Array.isArray(info.text_exts)) state.textExts = new Set(info.text_exts); // 可编辑白名单
       if (info.text_max_bytes) state.textMaxBytes = info.text_max_bytes; // 可编辑上限
+      state.uploadAllowed = !!info.allow_upload; // 上传开关（默认关闭）
+      if (info.upload_max_bytes) state.uploadMaxBytes = info.upload_max_bytes;
+      setUploadUI();
       const ffavail = !!info.ffmpeg;
       // 用户上次的开关选择（localStorage）优先于服务端默认（--ffmpeg 参数）
       const saved = localStorage.getItem('fs.hls');

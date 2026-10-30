@@ -8,7 +8,7 @@
 ```
 web/
 ├── index.html   单页壳：浏览视图 + 预览视图 + 播放器骨架
-├── app.js       全部逻辑（~1500 行，模块化注释分区）
+├── app.js       全部逻辑（~2500 行，模块化注释分区）
 ├── style.css    深浅双主题
 └── vendor/hls.min.js  hls.js（内嵌 ~415KB，首次转码前预加载）
 ```
@@ -111,3 +111,29 @@ web/
   并可逐个撤销。登出清前端存储并调用 `/api/auth/logout` 使服务端 token 失效。
 - 文本编辑见 §4 与 `doc/COMPONENTS.md`：白名单内文件在预览页提供「编辑」，
   保存带版本标识，409 时提示并载入最新内容。
+
+## 9. 文件上传（可选，默认关闭）
+
+服务端开关 `--allow-upload` / `FILESERVER_ALLOW_UPLOAD` 关闭时，`/api/info`
+的 `allow_upload=false`，前端**不渲染**上传按钮、不绑定拖拽，端点自身也返回 403。
+
+- **入口**：工具栏「上传」按钮（图标 + `aria-label`）+ 隐藏的
+  `<input type=file multiple>`；点击按钮触发系统多选。整页拖拽投放层
+  （`#dropOverlay`）只在桌面细指针、浏览视图、未打开认证/冲突弹窗时启用；
+  移动端 `pointer: coarse` 不显示投放层。
+- **目标目录**：选择/投放时快照当前 `state.path`。上传完成后仅当用户仍在同一
+  目录才自动刷新并高亮新文件（高亮 3.2s，`upload-new` 动画）；已导航到别处则只
+  弹提示，避免打断浏览。
+- **队列与并发**：每个文件一个 `XMLHttpRequest`、单路顺序上传；`upload.upload.onprogress`
+  驱动独立进度条，可单独取消（`xhr.abort()`）或失败后重试。面板 `#uploadPanel`
+  列出全部条目（等待/上传中/完成/失败原因/已取消）。大文件单请求，不做分片。
+- **同名冲突**：默认 `mode=ask`。服务端 `409 {code:"conflict", existing:[...]}`
+  （此时整批临时文件已回滚）→ 前端弹窗列出冲突名，选择「覆盖 / 自动改名 / 取消」，
+  选择对本次剩余整批生效；自动改名后以服务端返回的实际落盘名更新条目并用于高亮。
+- **上限**：`/api/info` 的 `upload_max_bytes`（默认 1024 MiB）用于选择后即时提示；
+  超限文件不发请求，服务端仍会以 413 兜底。
+- **离开确认**：队列中存在等待/上传中的条目时注册 `beforeunload`，浏览器弹出
+  通用离开确认；全部结束后自动失效。
+- **认证**：XHR 直接带 `Authorization: Bearer <token>`（与 `authFetch` 同源凭据），
+  `401` 走统一 `handleUnauthorized()` 清凭据回登录页。上传目标 URL 只含目录与
+  mode，不含 token。
