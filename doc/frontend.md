@@ -70,6 +70,34 @@ web/
 - 进度条：拖拽 seek、缓冲进度显示、tooltip 预览时间；HLS 转码初期时长未知时
   用服务端 ffprobe 时长兜底显示。
 - 音频：一律直链（浏览器原生）。
+- 画中画（`#pbPip`，位于全屏按钮左侧）：Chromium 用
+  `document.pictureInPictureEnabled` + `video.requestPictureInPicture()`；iOS Safari 用
+  `video.webkitSupportsPresentationMode('picture-in-picture')` +
+  `video.webkitSetPresentationMode('picture-in-picture')`（退出传 `inline`）。两种能力都不支持时
+  按钮 `display:none`，不占位。`enterpictureinpicture` / `leavepictureinpicture` /
+  `webkitpresentationmodechanged` 同步图标与 `aria-pressed`；快捷键 `P`。
+  **离开预览页**：若仍在 PiP，先 `document.exitPictureInPicture()`（iOS 设回 `inline`），
+  再走 `stopPreview()` 的 `abandon=1` 与 `hls.destroy()`，避免演示窗口拖住媒体释放。
+- 移动端手势：仅在触摸设备注册（`matchMedia('(pointer: coarse)').matches ||
+  'ontouchstart' in window`），桌面鼠标环境完全不注册，键盘与按钮行为不变。
+  手势区域是播放器画面；`.player-bar` 与按钮上的触摸不参与判定。
+  | 手势 | 区域 | 行为 |
+  |---|---|---|
+  | 双击 | 左 1/3 | `currentTime -= 10s`，中央浮层提示 `-10s` |
+  | 双击 | 右 1/3 | `currentTime += 10s`，中央浮层提示 `+10s` |
+  | 双击 | 中间 1/3 | 播放 / 暂停 |
+  | 长按 350ms | 画面任意处 | 临时 2x，中央常驻「2x 倍速播放中」 |
+  | 横滑 | 画面任意处 | 累计位移 >10px 进入 seek 预览，松手提交 |
+  | 竖滑 | 右侧 1/3 | 调音量（同步 `#pbVol`），松手结束 |
+
+  - 双击间隔 <300ms；单击不做事（起播仍由大播放键负责）。
+  - 长按倍速会记录 `originalRate`（用户可能已选 1.5x），松手 / `touchcancel` / 位移超过 10px
+    时恢复原值，而不是重置为 1；长按结束后 300ms 内忽略 tap，防误触。
+  - 横滑只更新浮层里的「目标时间 / 总时长」，滑动期间不 seek（转码分片按需生成，连续 seek
+    会打爆服务端），松手才写 `currentTime`。
+  - 左侧竖滑不实现（浏览器无法调亮度，避免误导）。
+  - 手势区域 `touch-action: none`，播放器内滑动不滚动页面；进度条拖动仍用原有 `pointerdown`
+    逻辑。需要 `preventDefault()` 的监听统一 `{ passive: false }`。
 - 图片：灯箱预览；PDF/文本：内嵌查看；其余：下载。
 - 文本编辑：白名单扩展名（`/api/info` 的 `text_exts`）且未超限时可切到编辑态，
   保存走 `POST /api/text`（带读取时版本；409 时提示他人已修改并载入最新内容）；
