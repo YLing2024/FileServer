@@ -1250,6 +1250,7 @@ function attachPlayerGestures(player, video, opts) {
   let longPressTimer = null;
   let active = false;
   let moved = false;
+  let fromBigPlay = false;      // 起点在大播放键上：单击交给按钮自身，不参与双击判定
   let mode = '';                // '' | 'seek' | 'volume' | 'long' | 'cancel'
   let startX = 0, startY = 0;
   let startTime = 0, startVolume = 1, seekTarget = 0;
@@ -1289,8 +1290,12 @@ function attachPlayerGestures(player, video, opts) {
   const onStart = (e) => {
     if (e.touches.length !== 1) return; // 双指缩放等交给浏览器
     const t = e.target;
-    // 控制条与按钮保留原生行为，不参与手势判定
-    if (t && t.closest && t.closest('.player-bar, button, input, select, a')) return;
+    // 控制条与按钮保留原生行为，不参与手势判定。大播放键是画面中央的透明大按钮，
+    // 若也排除，长按/双击在画面正中会失效，故只让它保留单击起播、不参与双击判定。
+    const btn = t && t.closest ? t.closest('button') : null;
+    if (t && t.closest && t.closest('.player-bar, input, select, a')) return;
+    if (btn && btn.id !== 'bigPlay') return;
+    fromBigPlay = !!(btn && btn.id === 'bigPlay');
     const touch = e.touches[0];
     active = true;
     moved = false;
@@ -1320,7 +1325,7 @@ function attachPlayerGestures(player, video, opts) {
       moved = true;
       clearTimeout(longPressTimer);
       longPressTimer = null;
-      if (mode === 'long') { endLongPress(); return; } // 长按期间移动：立即恢复原速，不接管滑动
+      if (mode === 'long') { e.preventDefault(); endLongPress(); return; } // 长按期间移动：立即恢复原速，不接管滑动
     }
     if (!moved || mode === 'long' || mode === 'cancel') return;
     const rect = player.getBoundingClientRect();
@@ -1368,9 +1373,12 @@ function attachPlayerGestures(player, video, opts) {
   const onEnd = (e) => {
     if (!active) return;
     active = false;
+    const wasBigPlay = fromBigPlay;
+    fromBigPlay = false;
     clearTimeout(longPressTimer);
     longPressTimer = null;
-    if (mode === 'long') { endLongPress(); return; }
+    // 长按结束阻止默认行为，避免大播放键在松手时再合成一次 click（把预览变成起播）
+    if (mode === 'long') { e.preventDefault(); endLongPress(); return; }
     if (mode === 'seek') {
       e.preventDefault();
       video.currentTime = seekTarget;
@@ -1386,6 +1394,9 @@ function attachPlayerGestures(player, video, opts) {
     }
     if (mode === 'cancel') { mode = ''; return; }
     if (moved) { mode = ''; return; }
+    // 大播放键上的单击交给按钮自身（起播），不参与双击；否则「点大播放键起播」
+    // 紧接着的第二次点击会被误判成双击中间区域，播放立刻又暂停。
+    if (wasBigPlay) { lastTapAt = 0; mode = ''; return; }
     const now = Date.now();
     if (now < suppressTapUntil) { lastTapAt = 0; mode = ''; return; }
     const isDouble = now - lastTapAt < TAP_MAX &&
@@ -1405,6 +1416,7 @@ function attachPlayerGestures(player, video, opts) {
 
   const onCancel = () => {
     active = false;
+    fromBigPlay = false;
     clearTimeout(longPressTimer);
     longPressTimer = null;
     if (mode === 'long') endLongPress();
@@ -1428,6 +1440,7 @@ function attachPlayerGestures(player, video, opts) {
 
   return () => {
     active = false;
+    fromBigPlay = false;
     clearTimeout(longPressTimer);
     clearTimeout(hintTimer);
     if (mode === 'long') {
