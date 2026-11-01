@@ -906,8 +906,28 @@ let pvHls = null;        // 当前 hls.js 实例（如有）
 let pvHlsTimer = null;   // HLS manifest 刷新定时器
 let pvHlsPath = null;    // 当前 HLS 播放的文件路径（离开时通知服务端终止转码）
 let pvKeyHandler = null; // 播放器键盘监听（避免重复注册泄漏）
+let pvGestureCleanup = null; // 播放器触摸手势清理函数（触摸设备才存在）
+
+// exitPipOnLeave 离开预览前退出画中画：先让浏览器把视频移回文档，
+// 再走 stopPreview 的 abandon=1 / hls.destroy()，避免演示窗口拖住媒体释放。
+function exitPipOnLeave() {
+  const v = pvVideo;
+  try {
+    if (document.pictureInPictureElement && typeof document.exitPictureInPicture === 'function') {
+      document.exitPictureInPicture().catch(() => {});
+    }
+  } catch (_) { /* ignore */ }
+  if (v && typeof v.webkitSetPresentationMode === 'function' && v.webkitPresentationMode === 'picture-in-picture') {
+    try { v.webkitSetPresentationMode('inline'); } catch (_) { /* ignore */ }
+  }
+}
 
 function stopPreview() {
+  exitPipOnLeave();
+  if (pvGestureCleanup) {
+    pvGestureCleanup();
+    pvGestureCleanup = null;
+  }
   // 离开播放页：通知服务端终止该视频的转码会话。
   // 用户已不在这看，转码进程在机械硬盘上的持续读写会拖慢下一个视频的首片产出。
   if (pvHlsPath) {
@@ -1210,12 +1230,224 @@ function ensureHls() {
   });
 }
 
+// isTouchDevice 判断是否为触摸设备：pointer:coarse 覆盖手机/平板，
+// ontouchstart 兜底老浏览器与桌面触屏。桌面鼠标环境返回 false，手势监听完全不注册。
+function isTouchDevice() {
+  return (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) || ('ontouchstart' in window);
+}
+
+// attachPlayerGestures 为播放器挂载移动端手势，返回清理函数（离开预览时必须调用）。
+// 手势只在触摸设备启用；opts.onTogglePlay / opts.onVolume 复用播放器现有播放与音量逻辑，
+// 避免手势与按钮各自维护一份状态。滑动期间只更新浮层，不 seek——转码分片按需生成，
+// 连续 seek 会打爆服务端；松手才提交最终位置。
+function attachPlayerGestures(player, video, opts) {
+  if (!isTouchDevice()) return null;
+  const hint = player.querySelector('.gesture-hint');
+  const TAP_MAX = 300;          // 双击间隔上限（ms）
+  const LONG_PRESS_MS = 350;    // 长按触发时长（ms）
+  const MOVE_THRESHOLD = 10;    // 位移超过该值不再算 tap（px）
+  let hintTimer = null;
+  let longPressTimer = null;
+  let active = false;
+  let moved = false;
+  let mode = '';                // '' | 'seek' | 'volume' | 'long' | 'cancel'
+  let startX = 0, startY = 0;
+  let startTime = 0, startVolume = 1, seekTarget = 0;
+  let originalRate = 1;
+  let lastTapAt = 0, lastTapX = 0, lastTapY = 0;
+  let suppressTapUntil = 0;     // 长按结束后的防误触窗口
+
+  const showHint = (text, sticky) => {
+    if (!hint) return;
+    hint.textContent = text;
+    hint.classList.add('show');
+    clearTimeout(hintTimer);
+    if (!sticky) hintTimer = setTimeout(() => hint.classList.remove('show'), 1000);
+  };
+  const hideHint = () => {
+    clearTimeout(hintTimer);
+    if (hint) hint.classList.remove('show');
+  };
+  const fadeHintLater = () => {
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(() => { if (hint) hint.classList.remove('show'); }, 700);
+  };
+  const endLongPress = () => {
+    if (mode !== 'long') return;
+    // 必须恢复用户原本的速率（可能是 1.5x），不能写死 1
+    video.playbackRate = originalRate;
+    mode = 'cancel';
+    suppressTapUntil = Date.now() + TAP_MAX;
+    hideHint();
+  };
+  const duration = () => {
+    const d = opts.getDuration ? opts.getDuration() : 0;
+    return d > 0 && isFinite(d) ? d : 0;
+  };
+  const timeText = (v) => (opts.formatTime ? opts.formatTime(v) : String(Math.round(v)));
+
+  const onStart = (e) => {
+    if (e.touches.length !== 1) return; // 双指缩放等交给浏览器
+    const t = e.target;
+    // 控制条与按钮保留原生行为，不参与手势判定
+    if (t && t.closest && t.closest('.player-bar, button, input, select, a')) return;
+    const touch = e.touches[0];
+    active = true;
+    moved = false;
+    mode = '';
+    startX = touch.clientX;
+    startY = touch.clientY;
+    startTime = video.currentTime || 0;
+    startVolume = video.volume;
+    clearTimeout(longPressTimer);
+    longPressTimer = setTimeout(() => {
+      longPressTimer = null;
+      if (!active || moved || mode) return;
+      mode = 'long';
+      lastTapAt = 0; // 长按不参与双击判定
+      originalRate = video.playbackRate;
+      video.playbackRate = 2;
+      showHint('2x 倍速播放中', true);
+    }, LONG_PRESS_MS);
+  };
+
+  const onMove = (e) => {
+    if (!active || e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    const dx = touch.clientX - startX;
+    const dy = touch.clientY - startY;
+    if (!moved && (Math.abs(dx) > MOVE_THRESHOLD || Math.abs(dy) > MOVE_THRESHOLD)) {
+      moved = true;
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+      if (mode === 'long') { endLongPress(); return; } // 长按期间移动：立即恢复原速，不接管滑动
+    }
+    if (!moved || mode === 'long' || mode === 'cancel') return;
+    const rect = player.getBoundingClientRect();
+    if (!mode) {
+      if (Math.abs(dx) > Math.abs(dy)) {
+        mode = 'seek';
+      } else if (startX > rect.left + rect.width * 2 / 3) {
+        mode = 'volume'; // 仅右侧竖滑调音量；左侧竖滑不实现（无法调亮度）
+      } else {
+        mode = 'cancel';
+        return;
+      }
+    }
+    e.preventDefault();
+    if (mode === 'seek') {
+      const total = duration();
+      // 满宽滑动 ≈ 半个视频时长（15s–120s 之间），短视频不过于灵敏、长视频不磨人
+      const span = total > 0 ? Math.max(15, Math.min(120, total * 0.5)) : 60;
+      const raw = startTime + (dx / (rect.width || 1)) * span;
+      seekTarget = total > 0 ? Math.min(total, Math.max(0, raw)) : Math.max(0, raw);
+      showHint(`${timeText(seekTarget)} / ${timeText(total)}`, true);
+    } else if (mode === 'volume') {
+      const next = Math.min(1, Math.max(0, startVolume - (dy / (rect.height || 1)) * 1.2));
+      if (opts.onVolume) opts.onVolume(next);
+      showHint(`音量 ${Math.round(next * 100)}%`, true);
+    }
+  };
+
+  const commitDoubleTap = (clientX) => {
+    const rect = player.getBoundingClientRect();
+    const x = clientX - rect.left;
+    if (x < rect.width / 3) {
+      video.currentTime = Math.max(0, (video.currentTime || 0) - 10);
+      showHint('-10s', false);
+    } else if (x > rect.width * 2 / 3) {
+      const total = duration();
+      const target = (video.currentTime || 0) + 10;
+      video.currentTime = total > 0 ? Math.min(total, target) : target;
+      showHint('+10s', false);
+    } else if (opts.onTogglePlay) {
+      opts.onTogglePlay();
+    }
+  };
+
+  const onEnd = (e) => {
+    if (!active) return;
+    active = false;
+    clearTimeout(longPressTimer);
+    longPressTimer = null;
+    if (mode === 'long') { endLongPress(); return; }
+    if (mode === 'seek') {
+      e.preventDefault();
+      video.currentTime = seekTarget;
+      showHint(`${timeText(seekTarget)} / ${timeText(duration())}`, false);
+      mode = '';
+      return;
+    }
+    if (mode === 'volume') {
+      e.preventDefault();
+      fadeHintLater();
+      mode = '';
+      return;
+    }
+    if (mode === 'cancel') { mode = ''; return; }
+    if (moved) { mode = ''; return; }
+    const now = Date.now();
+    if (now < suppressTapUntil) { lastTapAt = 0; mode = ''; return; }
+    const isDouble = now - lastTapAt < TAP_MAX &&
+      Math.abs(startX - lastTapX) < 40 && Math.abs(startY - lastTapY) < 40;
+    if (isDouble) {
+      lastTapAt = 0;
+      e.preventDefault();
+      commitDoubleTap(startX);
+    } else {
+      // 单击不做事（大播放键仍负责起播）：只记下这次 tap 等待第二次
+      lastTapAt = now;
+      lastTapX = startX;
+      lastTapY = startY;
+    }
+    mode = '';
+  };
+
+  const onCancel = () => {
+    active = false;
+    clearTimeout(longPressTimer);
+    longPressTimer = null;
+    if (mode === 'long') endLongPress();
+    else hideHint();
+    mode = '';
+    moved = false;
+  };
+
+  // Android 长按 ~500ms 会弹原生菜单；手势区内的长按由倍速接管，屏蔽掉。
+  const onContextMenu = (e) => {
+    const t = e.target;
+    if (t && t.closest && t.closest('.player-bar, input, select, a')) return;
+    e.preventDefault();
+  };
+
+  player.addEventListener('touchstart', onStart, { passive: false });
+  player.addEventListener('touchmove', onMove, { passive: false });
+  player.addEventListener('touchend', onEnd, { passive: false });
+  player.addEventListener('touchcancel', onCancel, { passive: false });
+  player.addEventListener('contextmenu', onContextMenu);
+
+  return () => {
+    active = false;
+    clearTimeout(longPressTimer);
+    clearTimeout(hintTimer);
+    if (mode === 'long') {
+      try { video.playbackRate = originalRate; } catch (_) { /* ignore */ }
+    }
+    player.removeEventListener('touchstart', onStart);
+    player.removeEventListener('touchmove', onMove);
+    player.removeEventListener('touchend', onEnd);
+    player.removeEventListener('touchcancel', onCancel);
+    player.removeEventListener('contextmenu', onContextMenu);
+  };
+}
+
 function buildPlayer(container, path, entry, kind) {
   const isAudio = kind === 'audio';
   container.innerHTML = `
     <div class="player ${isAudio ? 'audio' : ''}" id="player">
       <video preload="auto" playsinline ${isAudio ? '' : 'poster=""'}></video>
       <button class="big-play" id="bigPlay"><svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg></button>
+      <div class="gesture-hint" id="gHint" aria-live="polite"></div>
       <div class="player-bar" id="playerBar">
         <button class="pb-btn" id="pbPlay" title="播放/暂停 (空格)"><svg viewBox="0 0 24 24" class="filled"><path d="M7 5v14l12-7z"/></svg></button>
         <div class="pb-progress" id="pbProgress">
@@ -1232,6 +1464,7 @@ function buildPlayer(container, path, entry, kind) {
           <input type="range" class="pb-vol-slider" id="pbVol" min="0" max="100" value="100">
         </div>
         ${isAudio ? '' : '<select class="pb-rate" id="pbRate" title="倍速"><option value="0.5">0.5x</option><option value="0.75">0.75x</option><option value="1" selected>1x</option><option value="1.25">1.25x</option><option value="1.5">1.5x</option><option value="2">2x</option></select>'}
+        ${isAudio ? '' : '<button class="pb-btn" id="pbPip" type="button" title="画中画 (P)" aria-label="画中画 (P)" aria-pressed="false"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="7" height="6" rx="1"/></svg></button>'}
         ${isAudio ? '' : '<button class="pb-btn" id="pbFull" title="全屏 (F)"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>'}
       </div>
     </div>`;
@@ -1250,6 +1483,7 @@ function buildPlayer(container, path, entry, kind) {
   const volSlider = $('pbVol');
   const muteBtn = $('pbMute');
   const rateSel = $('pbRate');
+  const pipBtn = $('pbPip');
   const fullBtn = $('pbFull');
 
   let hideTimer = null;
@@ -1385,15 +1619,19 @@ function buildPlayer(container, path, entry, kind) {
   });
 
   // 音量
-  muteBtn.addEventListener('click', () => {
-    video.muted = !video.muted;
+  const updateMuteIcon = () => {
     muteBtn.innerHTML = video.muted
       ? '<svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 9l5 6M21 9l-5 6"/></svg>'
       : '<svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4z"/></svg>';
+  };
+  muteBtn.addEventListener('click', () => {
+    video.muted = !video.muted;
+    updateMuteIcon();
   });
   volSlider.addEventListener('input', () => {
     video.volume = volSlider.value / 100;
     video.muted = false;
+    updateMuteIcon();
   });
 
   // 倍速与全屏
@@ -1404,6 +1642,53 @@ function buildPlayer(container, path, entry, kind) {
     else if (/iPhone|iPad|iPod/i.test(navigator.userAgent) && video.webkitEnterFullscreen) video.webkitEnterFullscreen();
     else player.requestFullscreen().catch(() => toast('全屏不可用', true));
   });
+
+  // 画中画：Chromium 走 requestPictureInPicture，iOS Safari 走 webkitSetPresentationMode。
+  // 两种能力都没有时按钮直接不占位（display:none）。
+  const PIP_ICON_OFF = '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="7" height="6" rx="1"/></svg>';
+  const PIP_ICON_ON = '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="7" height="6" rx="1" fill="currentColor" stroke="none"/></svg>';
+  const pipSupported = !!pipBtn && (
+    (document.pictureInPictureEnabled && typeof video.requestPictureInPicture === 'function') ||
+    (typeof video.webkitSupportsPresentationMode === 'function' &&
+      video.webkitSupportsPresentationMode('picture-in-picture'))
+  );
+  const setPipActive = (on) => {
+    if (!pipBtn) return;
+    pipBtn.classList.toggle('active', on);
+    pipBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    const label = on ? '退出画中画 (P)' : '画中画 (P)';
+    pipBtn.title = label;
+    pipBtn.setAttribute('aria-label', label);
+    pipBtn.innerHTML = on ? PIP_ICON_ON : PIP_ICON_OFF;
+  };
+  const togglePip = () => {
+    if (!pipSupported) return;
+    try {
+      if (document.pictureInPictureElement) {
+        document.exitPictureInPicture().catch(() => {});
+      } else if (document.pictureInPictureEnabled && typeof video.requestPictureInPicture === 'function') {
+        video.requestPictureInPicture().catch(() => toast('画中画不可用', true));
+      } else if (typeof video.webkitSupportsPresentationMode === 'function' &&
+                 video.webkitSupportsPresentationMode('picture-in-picture')) {
+        video.webkitSetPresentationMode(
+          video.webkitPresentationMode === 'picture-in-picture' ? 'inline' : 'picture-in-picture');
+      }
+    } catch (_) {
+      toast('画中画不可用', true);
+    }
+  };
+  if (pipBtn) {
+    if (!pipSupported) {
+      pipBtn.style.display = 'none';
+    } else {
+      pipBtn.addEventListener('click', togglePip);
+      video.addEventListener('enterpictureinpicture', () => setPipActive(true));
+      video.addEventListener('leavepictureinpicture', () => setPipActive(false));
+      video.addEventListener('webkitpresentationmodechanged', () => {
+        setPipActive(video.webkitPresentationMode === 'picture-in-picture');
+      });
+    }
+  }
 
   // 键盘快捷键（注册为模块级唯一监听，便于返回时移除）
   const keys = (e) => {
@@ -1417,12 +1702,29 @@ function buildPlayer(container, path, entry, kind) {
       case 'ArrowUp': e.preventDefault(); volSlider.value = Math.min(100, +volSlider.value + 10); volSlider.dispatchEvent(new Event('input')); break;
       case 'ArrowDown': e.preventDefault(); volSlider.value = Math.max(0, +volSlider.value - 10); volSlider.dispatchEvent(new Event('input')); break;
       case 'm': case 'M': muteBtn.click(); break;
+      case 'p': case 'P': if (pipSupported) togglePip(); break;
       case 'f': case 'F': if (fullBtn) fullBtn.click(); break;
     }
   };
   pvKeyHandler = keys;
   document.addEventListener('keydown', keys);
   pvVideo = video;
+
+  // 移动端手势（触摸设备才注册；清理函数在 stopPreview 中调用）
+  pvGestureCleanup = isAudio ? null : attachPlayerGestures(player, video, {
+    getDuration: realDur,
+    formatTime: fmt,
+    onVolume: (v) => {
+      video.volume = v;
+      video.muted = false;
+      volSlider.value = String(Math.round(v * 100));
+      updateMuteIcon();
+    },
+    onTogglePlay: () => {
+      if (video.paused) requestPlay();
+      else video.pause();
+    },
+  });
 
   // ---- 设置播放源 ----
   // 直链优先：立即设置 src 让浏览器立刻开始拉流/解析 moov，不等任何网络探测，
