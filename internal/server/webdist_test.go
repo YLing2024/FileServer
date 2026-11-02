@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-// TestV2FrontendRoutes 验证 /v2/ 的静态资源、缓存头、SPA fallback，
-// 并确认旧根路径 / 不受影响。
-func TestV2FrontendRoutes(t *testing.T) {
+// TestFrontendRoutes 验证 React 前端在根路径与 /v2/ 共用同一份构建产物，
+// 并确认静态资源、缓存头、SPA fallback、旧资源清理与分享页入口。
+func TestFrontendRoutes(t *testing.T) {
 	srv := New(t.TempDir(), Options{})
 	t.Cleanup(srv.Close)
 	handler := srv.Handler()
@@ -21,8 +21,8 @@ func TestV2FrontendRoutes(t *testing.T) {
 		return rec
 	}
 
-	t.Run("index", func(t *testing.T) {
-		rec := get("/v2/")
+	t.Run("root index", func(t *testing.T) {
+		rec := get("/")
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status = %d, want 200", rec.Code)
 		}
@@ -37,12 +37,23 @@ func TestV2FrontendRoutes(t *testing.T) {
 		}
 	})
 
-	t.Run("redirect without slash", func(t *testing.T) {
+	t.Run("v2 and root share one index", func(t *testing.T) {
+		root := get("/")
+		v2 := get("/v2/")
+		if v2.Code != http.StatusOK {
+			t.Fatalf("/v2/ status = %d, want 200", v2.Code)
+		}
+		if root.Body.String() != v2.Body.String() {
+			t.Error("/ 与 /v2/ 返回了不同的 index.html")
+		}
+	})
+
+	t.Run("v2 redirects to root", func(t *testing.T) {
 		rec := get("/v2?path=videos")
 		if rec.Code != http.StatusMovedPermanently {
 			t.Fatalf("status = %d, want 301", rec.Code)
 		}
-		if loc := rec.Header().Get("Location"); loc != "/v2/?path=videos" {
+		if loc := rec.Header().Get("Location"); loc != "/?path=videos" {
 			t.Errorf("Location = %q", loc)
 		}
 	})
@@ -53,24 +64,28 @@ func TestV2FrontendRoutes(t *testing.T) {
 			t.Fatalf("构建产物缺少 v2/assets/*.js: matches=%v err=%v", matches, err)
 		}
 		name := strings.TrimPrefix(matches[0], "web-dist/v2/")
-		rec := get("/v2/" + name)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200", rec.Code)
-		}
-		if cc := rec.Header().Get("Cache-Control"); !strings.Contains(cc, "immutable") {
-			t.Errorf("asset Cache-Control = %q, want immutable", cc)
-		}
-		if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "javascript") {
-			t.Errorf("asset Content-Type = %q, want javascript", ct)
-		}
-		if rec.Body.Len() == 0 {
-			t.Error("asset 响应体为空")
+		for _, target := range []string{"/v2/" + name, "/" + name} {
+			rec := get(target)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("%s status = %d, want 200", target, rec.Code)
+			}
+			if cc := rec.Header().Get("Cache-Control"); !strings.Contains(cc, "immutable") {
+				t.Errorf("%s asset Cache-Control = %q, want immutable", target, cc)
+			}
+			if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "javascript") {
+				t.Errorf("%s asset Content-Type = %q, want javascript", target, ct)
+			}
+			if rec.Body.Len() == 0 {
+				t.Errorf("%s asset 响应体为空", target)
+			}
 		}
 	})
 
 	t.Run("unknown asset is 404", func(t *testing.T) {
-		if rec := get("/v2/assets/not-exists.js"); rec.Code != http.StatusNotFound {
-			t.Errorf("status = %d, want 404", rec.Code)
+		for _, target := range []string{"/v2/assets/not-exists.js", "/assets/not-exists.js"} {
+			if rec := get(target); rec.Code != http.StatusNotFound {
+				t.Errorf("%s status = %d, want 404", target, rec.Code)
+			}
 		}
 	})
 
@@ -81,29 +96,28 @@ func TestV2FrontendRoutes(t *testing.T) {
 	})
 
 	t.Run("spa fallback", func(t *testing.T) {
-		rec := get("/v2/browse/deep/link")
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200", rec.Code)
-		}
-		if !strings.Contains(rec.Body.String(), `id="root"`) {
-			t.Error("SPA fallback 未返回 index.html")
+		for _, target := range []string{"/v2/browse/deep/link", "/browse/deep/link"} {
+			rec := get(target)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("%s status = %d, want 200", target, rec.Code)
+			}
+			if !strings.Contains(rec.Body.String(), `id="root"`) {
+				t.Errorf("%s SPA fallback 未返回 index.html", target)
+			}
 		}
 	})
 
-	t.Run("legacy root untouched", func(t *testing.T) {
-		rec := get("/")
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200", rec.Code)
+	t.Run("legacy assets are gone", func(t *testing.T) {
+		for _, target := range []string{"/app.js", "/style.css", "/manage.js", "/share.js", "/hls.min.js"} {
+			if rec := get(target); rec.Code != http.StatusNotFound {
+				t.Errorf("旧资源 %s status = %d, want 404", target, rec.Code)
+			}
 		}
-		if !strings.Contains(rec.Body.String(), "/app.js") {
-			t.Error("旧前端 index 未包含 app.js")
-		}
-		asset := get("/style.css")
-		if asset.Code != http.StatusOK {
-			t.Fatalf("旧 style.css status = %d, want 200", asset.Code)
-		}
-		if cc := asset.Header().Get("Cache-Control"); !strings.Contains(cc, "no-store") {
-			t.Errorf("旧静态资源 Cache-Control = %q, want no-store", cc)
+	})
+
+	t.Run("unknown api is not html", func(t *testing.T) {
+		if rec := get("/api/not-exists"); rec.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", rec.Code)
 		}
 	})
 

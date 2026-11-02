@@ -2,9 +2,7 @@
 package server
 
 import (
-	"embed"
 	"errors"
-	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -15,9 +13,6 @@ import (
 
 	"github.com/YLing2024/FileServer/internal/auth"
 )
-
-//go:embed web
-var webFS embed.FS
 
 var (
 	errForbidden = errors.New("路径访问被拒绝")
@@ -277,18 +272,20 @@ func (s *Server) Handler() http.Handler {
 	for _, rt := range s.apiRoutes() {
 		mux.HandleFunc(rt.method+" "+rt.pattern, rt.handler)
 	}
-	// V2 React 前端：/v2 静态重定向到 /v2/，不占用根路径，旧 / 行为保持不变。
+	// React 前端是唯一入口：/ 与 /v2/ 共用同一份构建产物（同一个 handler 与
+	// 同一个 index.html），不保留两套页面。旧 /v2 前缀统一 301 回根路径。
 	mux.HandleFunc("/v2", func(w http.ResponseWriter, r *http.Request) {
-		target := "/v2/"
+		target := "/"
 		if r.URL.RawQuery != "" {
 			target += "?" + r.URL.RawQuery
 		}
 		http.Redirect(w, r, target, http.StatusMovedPermanently)
 	})
-	mux.Handle("/v2/", s.v2Handler())
-	// 根路径兜底注册为任意方法：SPA 仅需 GET，但这样未匹配的旧 POST 接口
-	// 会落到前端文件服务并返回 404，而不是被 net/http 以「方法不允许」回成 405。
-	mux.Handle("/", s.frontendHandler())
+	spa := s.spaHandler()
+	mux.Handle("/v2/", spa)
+	// 根路径兜底注册为任意方法：SPA 仅需 GET，未匹配的 POST 会落到前端
+	// 文件服务并返回 404，而不是被 net/http 以「方法不允许」回成 405。
+	mux.Handle("/", spa)
 
 	var h http.Handler
 	// 全局安全头：nosniff 防止浏览器嗅探内容类型，
@@ -309,46 +306,3 @@ func (s *Server) Handler() http.Handler {
 	h = s.withRequestID(h)
 	return h
 }
-
-// frontendHandler 服务嵌入的前端（/、/style.css、/app.js）
-func (s *Server) frontendHandler() http.Handler {
-	sub, err := fs.Sub(webFS, "web")
-	if err != nil {
-		return http.NotFoundHandler()
-	}
-	fileSrv := http.FileServer(http.FS(sub))
-	// 禁用浏览器对前端静态资源的缓存：开发迭代/重新构建后必须拿到最新 JS/CSS，
-	// 否则旧缓存会让改动看似"无效"（用户点进去还是旧版行为）。
-	// 同时加严格安全响应头（登录/引导页与主应用同一入口）：
-	//   - CSP：脚本仅同源（含 hls.js 的 blob worker），禁外链/内联脚本/对象插件，
-	//     禁被嵌入（frame-ancestors），禁 base 改写；
-	//   - Referrer-Policy: no-referrer；Cache-Control: no-store。
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/") {
-			w.Header().Set("Cache-Control", "no-store")
-		} else {
-			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-		}
-		w.Header().Set("Pragma", "no-cache")
-		w.Header().Set("Expires", "0")
-		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Content-Security-Policy", contentSecurityPolicy)
-		fileSrv.ServeHTTP(w, r)
-	})
-}
-
-// contentSecurityPolicy 前端页面的严格 CSP：默认仅同源；脚本仅同源 + blob
-// （hls.js 的 Worker 由 blob 创建）；图片/媒体允许 data:/blob:（缩略图 dataURL、
-// MediaSource）；样式允许内联（布局用 CSS 变量在运行时写入）；PDF embed 走同源。
-const contentSecurityPolicy = "default-src 'self'; " +
-	"script-src 'self' blob:; " +
-	"style-src 'self' 'unsafe-inline'; " +
-	"img-src 'self' data: blob:; " +
-	"media-src 'self' data: blob:; " +
-	"connect-src 'self'; " +
-	"font-src 'self' data:; " +
-	"worker-src 'self' blob:; " +
-	"object-src 'self'; " +
-	"frame-ancestors 'none'; " +
-	"base-uri 'none'; " +
-	"form-action 'self'"

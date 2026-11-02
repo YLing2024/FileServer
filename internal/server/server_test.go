@@ -254,16 +254,14 @@ func TestAPIFrontend(t *testing.T) {
 	if resp.StatusCode != 200 || !strings.Contains(string(body), "html") {
 		t.Fatalf("前端页面异常: %d", resp.StatusCode)
 	}
-	// 静态资源可访问 + 禁用缓存（避免旧 JS 缓存让改动看似无效）
-	for _, p := range []string{"/style.css", "/app.js", "/"} {
-		r := get(t, ts.URL+p)
-		r.Body.Close()
-		if r.StatusCode != 200 {
-			t.Fatalf("静态资源 %s 异常: %d", p, r.StatusCode)
-		}
-		cc := r.Header.Get("Cache-Control")
-		if !strings.Contains(cc, "no-store") && !strings.Contains(cc, "no-cache") {
-			t.Errorf("%s 缺少禁用缓存头: %q", p, cc)
-		}
+	if cc := resp.Header.Get("Cache-Control"); !strings.Contains(cc, "no-store") {
+		t.Errorf("前端入口缺少禁用缓存头: %q", cc)
+	}
+	// 根路径与 /v2/ 指向同一份构建产物，不再提供旧版静态资源。
+	v2Resp := get(t, ts.URL+"/v2/")
+	v2Body, _ := io.ReadAll(v2Resp.Body)
+	v2Resp.Body.Close()
+	if v2Resp.StatusCode != 200 || string(v2Body) != string(body) {
+		t.Fatalf("/v2/ 未返回同一份前端页面: %d", v2Resp.StatusCode)
 	}
 }
