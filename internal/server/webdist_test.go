@@ -106,4 +106,25 @@ func TestV2FrontendRoutes(t *testing.T) {
 			t.Errorf("旧静态资源 Cache-Control = %q, want no-store", cc)
 		}
 	})
+
+	t.Run("share page uses v2 entry", func(t *testing.T) {
+		rec := get("/s/test-token")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rec.Code)
+		}
+		body := rec.Body.String()
+		if !strings.Contains(body, `id="root"`) {
+			t.Error("公开分享页未包含 #root 挂载点")
+		}
+		if !strings.Contains(body, "/v2/assets/") {
+			t.Error("公开分享页未引用 /v2/assets 资源")
+		}
+		csp := rec.Header().Get("Content-Security-Policy")
+		if !strings.Contains(csp, "style-src 'self'") || strings.Contains(csp, "unsafe-inline") {
+			t.Errorf("公开分享页 CSP 不应允许内联样式: %q", csp)
+		}
+		if !strings.Contains(rec.Header().Get("X-Robots-Tag"), "noindex") {
+			t.Error("公开分享页缺少 noindex")
+		}
+	})
 }

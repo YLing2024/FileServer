@@ -168,10 +168,20 @@ func shareRel(root, abs string) string {
 	return "/" + filepath.ToSlash(rel)
 }
 
+// sharePageData 读取公开分享页模板：优先用 Vite 多入口产物 share.html，
+// 尚未构建前端时回退到旧内嵌模板（保证服务仍可用）。两个模板都只引用同源
+// 静态资源，页面本身不含任何分享内容。
+func sharePageData() ([]byte, error) {
+	if data, err := fs.ReadFile(webDistFS, "web-dist/share.html"); err == nil {
+		return data, nil
+	}
+	return fs.ReadFile(webFS, "web/share.html")
+}
+
 // handleSharePage GET /s/{token} 独立公开页。页面本身不区分 token 是否存在，
 // 数据由公开接口返回；这样无效链接也不会在 HTML 里泄露任何信息。
 func (s *Server) handleSharePage(w http.ResponseWriter, r *http.Request) {
-	data, err := fs.ReadFile(webFS, "web/share.html")
+	data, err := sharePageData()
 	if err != nil {
 		http.NotFound(w, r)
 		return
