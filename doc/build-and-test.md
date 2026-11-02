@@ -181,6 +181,9 @@ $env:PYTHONIOENCODING='utf-8'   # 控制台中文输出
 | `hls_e2e_test.py` | HLS 起播/seek（生成 HEVC/MKV 测试片） |
 | `thumbspeed_test.py` | **缩略图速度验收**：大目录冷浏览出图速度 + 抽帧中播放不受影响 |
 | `starvation_test.py` | **播放饥饿验收**：大目录浏览抽帧正忙时点开视频，起播快、播放不卡、缩略图恢复 |
+| `v2_phase1_test.py` | V2 浏览：网格/列表、搜索、排序、缩略图与 375 宽 |
+| `v2_phase2_test.py` | V2 预览：灯箱、文本、视频播放与移动端手势 |
+| `v2_phase3_test.py` | V2 上传与管理：临时目录副本 + 自动起服务；上传/冲突三选项/重命名/移动/复制/删除/回收站/多选/375 宽 |
 
 `starvation_test.py`（真实目录验收，有头浏览器）：
 

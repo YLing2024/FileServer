@@ -6,7 +6,8 @@ React + TypeScript + Vite 前端，产物由 `go:embed` 嵌入单文件 exe，�
 Phase 0 交付工具链与骨架，Phase 1 交付浏览视图：工具栏、网格/列表、搜索、
 排序、分页、图片/视频缩略图、空态/骨架/错误态与窄屏适配。Phase 2 交付预览与
 播放：`?view=` 路由、图片灯箱、PDF/文本预览、音频、视频播放器（直链/HLS）与
-移动端手势。
+移动端手势。Phase 3 交付上传与文件管理：文件/文件夹上传、分片断点续传、秒传、
+同名冲突三选一、多选、重命名/移动/复制/删除/回收站。
 
 ## 命令
 
@@ -89,9 +90,30 @@ make web-check                    # typecheck + lint + test + build
     - 进度记忆键为 `fs.progress.<path>:<size>`，文件大小变化时旧进度自动失效。
 - **无障碍**：控制条全部使用原生 button/input/select，带 `aria-label`；375 宽不溢出。
 
+## 上传与管理（Phase 3）
+
+- **上传入口**：工具栏「上传文件」「上传文件夹」、整页拖拽（含目录递归与空目录）
+  与粘贴；入口按 `/api/info` 的 `allow_upload` 显隐，文件夹上传额外要求登录。
+- **上传队列**：最多 3 个文件并发；逐文件进度 + 总进度；暂停/继续、取消、重试；
+  上传完成后自动刷新当前目录并高亮完成数量，面板约 1.8 秒后自动关闭。
+- **分片与断点续传**：超过 `upload_chunk_threshold` 的文件按 8 MiB 分片，先查
+  `/api/upload/status` 跳过已收分片，失败按 500/网络错误重试 2 次；`upload_id`
+  公式与服务端 `deriveUploadID` 一致。
+- **秒传**：Worker 流式计算整文件 SHA-256（4 MiB 分片，不支持 Worker 时主线程
+  回退），先调 `/api/upload/instant`；`sha256.ts` 为纯 TS 实现，不依赖安全上下文。
+- **同名冲突**：409 弹出「跳过 / 自动改名 / 覆盖」；覆盖与改名对整批生效，跳过
+  只处理当前文件或当前目录分组。目录上传先按层级调用 `/api/upload/mkdir`。
+- **多选**：桌面单击选中、双击打开；Ctrl/Cmd 切换、Shift 连选、`Ctrl/Cmd+A`
+  全选、Esc 退出；触屏长按 500ms 进入选择。选择条提供下载、重命名（仅单选）、
+  移动、复制、删除与退出。
+- **管理对话框**：重命名（实时校验 + 409 文案）、移动/复制（目录树、就地新建
+  文件夹、冲突三选一）、删除确认、回收站（恢复/彻底删除/清空）、批量失败明细。
+  下载单文件走 `/api/file`，目录走 `/api/zip`。
+- **错误文案**：401/403/404/409/413 与网络错误分别给出中文提示，不使用 `any`。
+
 ## 验收脚本
 
-先启动服务（HLS 用例需要 `--ffmpeg`），再运行：
+Phase 1/2 先启动服务（HLS 用例需要 `--ffmpeg`），再运行：
 
 ```bash
 go run ./cmd/fileserver --dir testdata --host 127.0.0.1 --port 18080 --no-qr --ffmpeg
@@ -104,34 +126,57 @@ Phase 1 覆盖根目录 7 项、进入 photos、图片/视频缩略图、网格/
 预览、视频播放/空格暂停/画中画、375×780 双击/长按/横滑/竖滑、返回滚动位置与
 HLS `abandon=1`；没有 ffmpeg 时跳过 HLS 并打印原因。两个脚本都会输出截图路径。
 
+Phase 3 自包含：脚本复制 `testdata` 到临时目录、随机高位端口启动带认证的服务，
+结束后清理，不会改动源 testdata。
+
+```bash
+/root/.venv/cdp/bin/python scripts/v2_phase3_test.py
+```
+
+覆盖 <5 MiB 上传与进度 UI、同名冲突三选项、重命名/移动/复制/删除/回收站恢复、
+Ctrl 多选批量删除、Shift 连选、目录 zip 下载、375 宽上传面板，以及上传中/选择条/
+冲突对话框三张截图。
+
 ## 目录
 
 ```
 src/
-├── api/        fetch 封装、token/短票、错误归一、目录/搜索/能力探测
+├── api/        fetch 封装、token/短票、错误归一、目录/搜索/能力探测/上传/管理
 ├── domain/     文件类型、大小/时间格式化、路径工具、排序
-├── components/ Toast、ErrorBoundary、ThemeToggle
+├── components/ Toast、ErrorBoundary、ThemeToggle、Modal
 ├── features/browse/
-│   ├── BrowsePage.tsx        页面组合（路径/预览/搜索/排序/分页/滚动恢复）
-│   ├── Toolbar.tsx           品牌/面包屑/搜索/刷新/视图/排序/主题/冷门格式
+│   ├── BrowsePage.tsx        页面组合（路径/预览/搜索/排序/分页/多选/上传/管理）
+│   ├── Toolbar.tsx           品牌/面包屑/搜索/刷新/上传/回收站/视图/排序/主题
 │   ├── GridView.tsx          网格卡片与骨架
 │   ├── ListView.tsx          列表三列与骨架
+│   ├── SelectionBar.tsx      批量操作条
+│   ├── useSelection.ts       单击/Ctrl/Shift/全选/长按多选
 │   ├── FileThumb.tsx         图片/视频/图标缩略图
 │   ├── videoThumb.ts         视频抽帧队列（3 路并发 + 缓存 + 取消）
 │   ├── useDirectory.ts       目录分页数据
 │   ├── useSearch.ts          搜索数据
-│   ├── useCapabilities.ts    /api/info + /api/health 与冷门格式开关
+│   ├── useCapabilities.ts    /api/info + /api/health 与上传/管理能力
 │   └── useBrowseRoute.ts     ?path= / ?view= 同步
-├── features/preview/
-│   ├── PreviewPage.tsx       预览分发与返回/下载
-│   ├── Lightbox.tsx          图片灯箱（缩放/旋转/切图）
-│   ├── VideoPlayer.tsx       视频播放器（直链/HLS、控制条、快捷键、手势）
-│   ├── AudioPlayer.tsx       原生音频 + 进度记忆
-│   ├── PdfPreview.tsx        PDF 内嵌 + 下载兜底
-│   ├── TextPreview.tsx       文本/代码只读预览
-│   ├── attachHls.ts          hls.js 挂载/轮询/seek 收敛
-│   ├── usePlayerGestures.ts  移动端手势
-│   └── progress.ts           path+size 进度记忆
-├── styles/     tokens.css（复用旧变量）+ global.css
+├── features/preview/         预览与播放器（见 Phase 2）
+├── features/upload/
+│   ├── uploadQueue.ts        上传状态机（并发/分片/秒传/冲突/重试）
+│   ├── useUploadQueue.ts     React 绑定
+│   ├── UploadPanel.tsx       队列、总进度与逐文件操作
+│   ├── UploadConflictDialog.tsx  跳过/自动改名/覆盖
+│   ├── sha256.ts             纯 TS 增量 SHA-256
+│   ├── sha256.worker.ts      大文件哈希 Worker
+│   ├── hashFile.ts           Worker 与主线程回退
+│   ├── uploadId.ts           upload_id 派生与分片长度
+│   ├── collect.ts            文件/文件夹/拖拽/粘贴收集
+│   ├── pageDrop.ts           整页拖拽与粘贴监听
+│   └── DropOverlay.tsx       投放遮罩
+├── features/manage/
+│   ├── RenameDialog.tsx      重命名
+│   ├── TransferDialog.tsx    移动/复制目录树
+│   ├── TrashDialog.tsx       回收站
+│   ├── ConfirmDialog.tsx     通用确认
+│   ├── FailuresDialog.tsx    批量失败明细
+│   └── messages.ts           状态码 → 中文文案
+├── styles/     tokens.css（复用旧变量）+ global.css + buttons.module.css
 └── test/       Vitest 全局 setup
 ```
