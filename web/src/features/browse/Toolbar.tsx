@@ -1,0 +1,311 @@
+/** 浏览页工具栏：品牌/回根、面包屑、搜索、刷新、视图、排序、主题、冷门格式。 */
+import { useEffect, useRef } from 'react';
+import type { SortKey, SortOrder } from '../../api/list';
+import { ThemeToggle } from '../../components/ThemeToggle';
+import { SORT_LABELS } from '../../domain/sort';
+import { pathSegments } from '../../domain/path';
+import styles from './Toolbar.module.css';
+
+export type ViewMode = 'grid' | 'list';
+
+interface ToolbarProps {
+  path: string;
+  view: ViewMode;
+  sort: SortKey;
+  order: SortOrder;
+  query: string;
+  searching: boolean;
+  hls: boolean;
+  ffmpeg: boolean;
+  hlsBusy: boolean;
+  onHome: () => void;
+  onNavigate: (path: string) => void;
+  onViewChange: (view: ViewMode) => void;
+  onSortChange: (sort: SortKey) => void;
+  onOrderToggle: () => void;
+  onQueryChange: (value: string) => void;
+  onClearSearch: () => void;
+  onRefresh: () => void;
+  onToggleHls: () => void;
+}
+
+function BrandMark() {
+  return (
+    <svg className={styles.brandMark} viewBox="0 0 512 512" aria-hidden="true">
+      <rect x="128" y="112" width="256" height="288" rx="20" />
+      <line x1="128" y1="208" x2="384" y2="208" />
+      <line x1="128" y1="304" x2="384" y2="304" />
+      <rect x="232" y="148" width="48" height="22" rx="11" className={styles.slot} />
+      <rect x="232" y="244" width="48" height="22" rx="11" className={styles.slotActive} />
+      <rect x="232" y="340" width="48" height="22" rx="11" className={styles.slot} />
+    </svg>
+  );
+}
+
+function Breadcrumbs({ path, onNavigate }: { path: string; onNavigate: (path: string) => void }) {
+  const segments = pathSegments(path);
+  return (
+    <nav className={styles.crumbs} aria-label="面包屑">
+      <button
+        type="button"
+        className={styles.crumb}
+        aria-current={segments.length === 0 ? 'page' : undefined}
+        onClick={() => onNavigate('')}
+      >
+        根目录
+      </button>
+      {segments.map((segment, index) => {
+        const target = segments.slice(0, index + 1).join('/');
+        const current = index === segments.length - 1;
+        return (
+          <span className={styles.crumbGroup} key={target}>
+            <span className={styles.sep} aria-hidden="true">
+              ›
+            </span>
+            <button
+              type="button"
+              className={styles.crumb}
+              title={segment}
+              aria-current={current ? 'page' : undefined}
+              onClick={() => onNavigate(target)}
+            >
+              {segment}
+            </button>
+          </span>
+        );
+      })}
+    </nav>
+  );
+}
+
+function SearchBox({
+  query,
+  onQueryChange,
+  onClearSearch,
+}: {
+  query: string;
+  onQueryChange: (value: string) => void;
+  onClearSearch: () => void;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      const target = event.target;
+      if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
+      event.preventDefault();
+      inputRef.current?.focus();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  return (
+    <div className={styles.searchBox}>
+      <svg className={styles.searchIcon} viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="11" cy="11" r="7" />
+        <path d="M20 20l-3.5-3.5" />
+      </svg>
+      <input
+        ref={inputRef}
+        className={styles.searchInput}
+        type="text"
+        value={query}
+        placeholder="搜索文件…"
+        aria-label="搜索文件"
+        autoComplete="off"
+        spellCheck={false}
+        onChange={(event) => onQueryChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            onClearSearch();
+          }
+        }}
+      />
+      {query ? (
+        <button
+          type="button"
+          className={styles.searchClear}
+          aria-label="清除搜索"
+          title="清除搜索"
+          onClick={onClearSearch}
+        >
+          ×
+        </button>
+      ) : (
+        <kbd className={styles.kbd}>/</kbd>
+      )}
+    </div>
+  );
+}
+
+function GridIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="4" y="4" width="7" height="7" rx="1.5" />
+      <rect x="13" y="4" width="7" height="7" rx="1.5" />
+      <rect x="4" y="13" width="7" height="7" rx="1.5" />
+      <rect x="13" y="13" width="7" height="7" rx="1.5" />
+    </svg>
+  );
+}
+
+function ListIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 6h16M4 12h16M4 18h16" />
+    </svg>
+  );
+}
+
+function RefreshIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v4h-4" />
+    </svg>
+  );
+}
+
+function HlsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M8 5.5v13l11-6.5z" />
+      <path d="M3 8h3M5 6v4M16 3v3M14.5 4.5h3" />
+    </svg>
+  );
+}
+
+function OrderIcon({ order }: { order: SortOrder }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      className={order === 'desc' ? styles.orderDesc : undefined}
+    >
+      <path d="M6 20V4m0 0L2.5 7.5M6 4l3.5 3.5M12 6h8M12 12h8M12 18h5" />
+    </svg>
+  );
+}
+
+/** 工具栏；所有控件都是原生 button/select/input，键盘可达。 */
+export function Toolbar({
+  path,
+  view,
+  sort,
+  order,
+  query,
+  searching,
+  hls,
+  ffmpeg,
+  hlsBusy,
+  onHome,
+  onNavigate,
+  onViewChange,
+  onSortChange,
+  onOrderToggle,
+  onQueryChange,
+  onClearSearch,
+  onRefresh,
+  onToggleHls,
+}: ToolbarProps) {
+  const hlsTitle = !ffmpeg
+    ? '冷门格式支持不可用（服务端无 ffmpeg）'
+    : hls
+      ? '冷门格式支持已开启（MKV/RMVB/HEVC 等可在线播放）— 点击关闭'
+      : '冷门格式支持已关闭 — 点击开启';
+
+  return (
+    <header className={styles.toolbar}>
+      <div className={styles.main}>
+        <button
+          type="button"
+          className={styles.brand}
+          aria-label="回到根目录"
+          title="回到根目录"
+          onClick={onHome}
+        >
+          <BrandMark />
+          <span className={styles.brandName}>文件服务器</span>
+          <span className={styles.badge}>V2 预览</span>
+        </button>
+        <Breadcrumbs path={path} onNavigate={onNavigate} />
+      </div>
+
+      <div className={styles.actions}>
+        <SearchBox query={query} onQueryChange={onQueryChange} onClearSearch={onClearSearch} />
+
+        <button
+          type="button"
+          className={styles.iconButton}
+          aria-label="刷新"
+          title="刷新"
+          onClick={onRefresh}
+        >
+          <RefreshIcon />
+        </button>
+
+        <button
+          type="button"
+          className={`${styles.iconButton} ${hls ? styles.active : ''}`}
+          aria-label="冷门格式开关"
+          aria-pressed={hls}
+          title={hlsTitle}
+          disabled={!ffmpeg || hlsBusy}
+          onClick={onToggleHls}
+        >
+          <HlsIcon />
+        </button>
+
+        <div className={styles.seg} role="group" aria-label="视图切换">
+          <button
+            type="button"
+            className={`${styles.segButton} ${view === 'grid' ? styles.active : ''}`}
+            aria-label="网格视图"
+            aria-pressed={view === 'grid'}
+            title="网格视图"
+            onClick={() => onViewChange('grid')}
+          >
+            <GridIcon />
+          </button>
+          <button
+            type="button"
+            className={`${styles.segButton} ${view === 'list' ? styles.active : ''}`}
+            aria-label="列表视图"
+            aria-pressed={view === 'list'}
+            title="列表视图"
+            onClick={() => onViewChange('list')}
+          >
+            <ListIcon />
+          </button>
+        </div>
+
+        <select
+          className={styles.sortSelect}
+          aria-label="排序方式"
+          title="排序方式"
+          value={sort}
+          onChange={(event) => onSortChange(event.target.value as SortKey)}
+        >
+          <option value="name">{SORT_LABELS.name}</option>
+          <option value="time">{SORT_LABELS.time}</option>
+          <option value="size">{SORT_LABELS.size}</option>
+        </select>
+
+        <button
+          type="button"
+          className={styles.iconButton}
+          aria-label={order === 'asc' ? '升序，点击切换为降序' : '降序，点击切换为升序'}
+          title={order === 'asc' ? '升序' : '降序'}
+          onClick={onOrderToggle}
+        >
+          <OrderIcon order={order} />
+        </button>
+
+        <ThemeToggle />
+        {searching ? <span className={styles.srOnly}>搜索中</span> : null}
+      </div>
+    </header>
+  );
+}

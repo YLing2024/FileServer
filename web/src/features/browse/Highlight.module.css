@@ -1,0 +1,6 @@
+.mark {
+  padding: 0 1px;
+  color: inherit;
+  background: var(--accent-soft);
+  border-radius: 3px;
+}
