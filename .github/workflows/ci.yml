@@ -74,6 +74,37 @@ jobs:
       - name: coverage
         run: make cover
 
+  # 前端 job：独立于 Go 矩阵，证明 pnpm 锁文件可复现、四段检查全绿，
+  # 且构建产物与仓库中提交的 internal/server/web-dist 完全一致。
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.14.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.nvmrc
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile
+      - name: typecheck
+        run: pnpm typecheck
+      - name: lint
+        run: pnpm lint
+      - name: test
+        run: pnpm test
+      - name: build
+        run: pnpm build
+      - name: verify committed build output
+        working-directory: .
+        run: git diff --exit-code internal/server/web-dist
+
   # 正确性 lint：只开 .golangci.yml 声明的规则，版本钉死。
   # 分别在 linux 原生与 windows 交叉下各跑一次，覆盖两套 build tag 分支。
   lint:

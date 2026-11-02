@@ -15,8 +15,12 @@
 #   make test-race      go race 测试
 #   make cover          覆盖率
 #   make check          fmt-check + vet-all + build-all + test（一条命令，必须 exit 0）
+#   make web-install    安装前端依赖（需要 pnpm；不参与 check）
+#   make web-build      构建前端到 internal/server/web-dist
+#   make web-check      前端四段：typecheck + lint + test + build（不参与 check）
 
 GO         ?= go
+PNPM       ?= pnpm
 GOOS_TGT   ?= windows
 GOARCH_TGT ?= amd64
 MODULE     := github.com/YLing2024/FileServer
@@ -34,7 +38,7 @@ XFLAGS     := -X $(MODULE)/internal/version.Version=$(VERSION) \
               -X $(MODULE)/internal/version.Commit=$(COMMIT) \
               -X $(MODULE)/internal/version.BuildDate=$(BUILD_DATE)
 
-.PHONY: all fmt fmt-check vet vet-all build build-all dist test test-race cover check clean
+.PHONY: all fmt fmt-check vet vet-all build build-all dist test test-race cover check clean web-install web-build web-check
 
 all: check
 
@@ -89,6 +93,16 @@ cover:
 
 check: fmt-check vet-all build-all test
 	@echo "check: all green"
+
+# 前端独立目标：没有 pnpm 的环境仍可跑 make check；web-check 只在前端任务里调用。
+web-install:
+	cd web && $(PNPM) install --frozen-lockfile
+
+web-build:
+	cd web && $(PNPM) build
+
+web-check:
+	cd web && $(PNPM) typecheck && $(PNPM) lint && $(PNPM) test && $(PNPM) build
 
 clean:
 	rm -rf dist
