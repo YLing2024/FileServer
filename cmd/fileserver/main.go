@@ -134,9 +134,10 @@ func main() {
 	}
 	fmt.Println("------------------------------------------------------------------")
 	fmt.Println("  手机/其他电脑连接同一 WiFi 后，在浏览器打开上面的局域网地址即可")
-	if runtime.GOOS == "windows" {
+	switch runtime.GOOS {
+	case "windows":
 		fmt.Println("  首次运行如弹出 Windows 防火墙提示，请勾选“专用网络”并允许")
-	} else if runtime.GOOS == "darwin" {
+	case "darwin":
 		fmt.Println("  首次运行如弹出“允许传入连接”防火墙提示，请点击允许")
 	}
 	fmt.Println("  按 Ctrl+C 或关闭本窗口即可停止服务")

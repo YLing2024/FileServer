@@ -194,10 +194,13 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 			failed = append(failed, manageFailure{Path: rel, Error: "回收站目标路径不合法"})
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o700); err == nil {
-			err = os.Rename(abs, target)
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			_ = os.RemoveAll(idDir)
+			s.removeTrashMeta(id)
+			failed = append(failed, manageFailure{Path: rel, Error: manageOpError(err)})
+			continue
 		}
-		if err != nil {
+		if err := os.Rename(abs, target); err != nil {
 			_ = os.RemoveAll(idDir)
 			s.removeTrashMeta(id)
 			failed = append(failed, manageFailure{Path: rel, Error: manageOpError(err)})

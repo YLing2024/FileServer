@@ -275,7 +275,7 @@ func readUploadPrefix(path string, n int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	buf := make([]byte, n)
 	if _, err := io.ReadFull(f, buf); err != nil {
 		return nil, err
