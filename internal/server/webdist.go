@@ -18,6 +18,14 @@ import (
 //go:embed all:web-dist
 var webDistFS embed.FS
 
+// init 补两个系统 mime.types 里通常缺失的类型：
+//   - .webmanifest：PWA 清单，缺了会按 octet-stream 下发，浏览器仍能解析但不够规范
+//   - .ico：部分精简发行版没有登记，图标会被当成二进制下载
+func init() {
+	_ = mime.AddExtensionType(".webmanifest", "application/manifest+json")
+	_ = mime.AddExtensionType(".ico", "image/x-icon")
+}
+
 // spaContentSecurityPolicy 前端页面的严格 CSP：默认仅同源；脚本仅同源 + blob
 // （hls.js 的 Worker 由 blob 创建）；图片/媒体允许 data:/blob:（缩略图 dataURL、
 // MediaSource）；样式允许内联（布局用 CSS 变量在运行时写入）；PDF embed 走同源。
