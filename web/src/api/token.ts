@@ -41,6 +41,21 @@ export function readToken(): string {
   return readTokenState()?.token ?? '';
 }
 
+/**
+ * 登录成功后写入凭据。沿用旧前端约定：勾选“记住我”写 localStorage，
+ * 否则写 sessionStorage；写入前先清另一处，避免同浏览器出现两份凭据。
+ */
+export function writeToken(token: string, expires: number, remember: boolean): void {
+  clearToken();
+  try {
+    const store = remember ? localStorage : sessionStorage;
+    store.setItem(TOKEN_KEY, token);
+    store.setItem(TOKEN_EXP_KEY, String(expires || 0));
+  } catch {
+    // 隐私模式或禁用存储时本次页面仍可用，只是刷新后需要重新登录。
+  }
+}
+
 /** 清除两处存储中的凭据（401 或主动退出时调用）。 */
 export function clearToken(): void {
   try {
