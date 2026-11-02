@@ -277,6 +277,15 @@ func (s *Server) Handler() http.Handler {
 	for _, rt := range s.apiRoutes() {
 		mux.HandleFunc(rt.method+" "+rt.pattern, rt.handler)
 	}
+	// V2 React 前端：/v2 静态重定向到 /v2/，不占用根路径，旧 / 行为保持不变。
+	mux.HandleFunc("/v2", func(w http.ResponseWriter, r *http.Request) {
+		target := "/v2/"
+		if r.URL.RawQuery != "" {
+			target += "?" + r.URL.RawQuery
+		}
+		http.Redirect(w, r, target, http.StatusMovedPermanently)
+	})
+	mux.Handle("/v2/", s.v2Handler())
 	// 根路径兜底注册为任意方法：SPA 仅需 GET，但这样未匹配的旧 POST 接口
 	// 会落到前端文件服务并返回 404，而不是被 net/http 以「方法不允许」回成 405。
 	mux.Handle("/", s.frontendHandler())
