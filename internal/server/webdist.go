@@ -15,7 +15,7 @@ import (
 // .keep 占位文件，保证前端尚未构建时 //go:embed 也能通过编译；
 // 运行时再检查 index.html，缺失时 /v2/ 返回 503 而不是 panic。
 //
-//go:embed web-dist
+//go:embed all:web-dist
 var webDistFS embed.FS
 
 // v2ContentSecurityPolicy 与旧前端保持同一套限制；新前端不使用内联脚本，

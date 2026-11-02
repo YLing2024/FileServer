@@ -37,7 +37,7 @@ make web-check                    # typecheck + lint + test + build
     - `index.html` 与 SPA fallback：`Cache-Control: no-store`；
     - `/v2/assets/*`：一年 immutable；
     - 缺失的 asset 返回 404，未知页面路径回退 index.html。
-- `pnpm build` 最后会写 `web-dist/.keep`，保证 `//go:embed web-dist`
+- `pnpm build` 最后会写 `web-dist/.keep`，保证 `//go:embed all:web-dist`
   在产物被清空时仍能编译；运行时若缺少 `index.html`，`/v2/` 返回 503。
 
 ## 鉴权与主题约定
