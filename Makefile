@@ -15,6 +15,8 @@
 #   make test-race      go race 测试
 #   make cover          覆盖率
 #   make check          fmt-check + vet-all + 前端检查（有 pnpm 时）+ build-all + test（必须 exit 0）
+#   make ci             与 GitHub CI 等价的全量门禁（fmt/lint 双 GOOS/vet/race/前端/产物一致性）；
+#                       push 前必须绿，pre-push 钩子会自动调用（make hooks 安装）
 #   make web-install    安装前端依赖（需要 pnpm）
 #   make web-build      构建前端到 internal/server/web-dist
 #   make web-check      前端四段：typecheck + lint + test + build
@@ -39,7 +41,7 @@ XFLAGS     := -X $(MODULE)/internal/version.Version=$(VERSION) \
               -X $(MODULE)/internal/version.Commit=$(COMMIT) \
               -X $(MODULE)/internal/version.BuildDate=$(BUILD_DATE)
 
-.PHONY: all fmt fmt-check vet vet-all build build-all dist test test-race cover check clean web-install web-build web-check web-check-optional
+.PHONY: all fmt fmt-check vet vet-all build build-all dist test test-race cover check clean web-install web-build web-check web-check-optional ci lint-all ci-web-dist hooks
 
 all: check
 
@@ -115,6 +117,47 @@ web-build:
 
 web-check:
 	cd web && $(PNPM) typecheck && $(PNPM) lint && $(PNPM) test && $(PNPM) build
+
+# ---- 与 .github/workflows/ci.yml 等价的门禁 ----
+# CI 比 make check 多三样东西：golangci-lint（钉版本、双 GOOS）、-race、前端产物一致性。
+# 本地缺哪一样，就会出现「本地绿、push 红」。make ci 把它们一次跑全。
+
+CI_LINT_VERSION ?= v2.14.0
+
+ci: fmt-check lint-all vet-all build-all test-race web-check ci-web-dist
+	@echo "ci: all green"
+
+lint-all:
+	@command -v golangci-lint >/dev/null 2>&1 || { \
+		echo "缺少 golangci-lint $(CI_LINT_VERSION)："; \
+		echo "  curl -sSL https://github.com/golangci/golangci-lint/releases/download/$(CI_LINT_VERSION)/golangci-lint-$(patsubst v%,%,$(CI_LINT_VERSION))-linux-amd64.tar.gz | tar xz -C /tmp && sudo install -m755 /tmp/golangci-lint-$(patsubst v%,%,$(CI_LINT_VERSION))-linux-amd64/golangci-lint /usr/local/bin/"; \
+		exit 1; }
+	@v=$$(golangci-lint version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1); \
+	if [ "v$$v" != "$(CI_LINT_VERSION)" ]; then \
+		echo "golangci-lint 版本不一致：本地 v$$v，CI $(CI_LINT_VERSION)（请安装 CI 版本，否则结论不可比）"; exit 1; \
+	fi
+	GOOS=linux GOARCH=amd64 golangci-lint run
+	GOOS=windows GOARCH=amd64 golangci-lint run
+
+# CI 会校验提交进仓库的 web-dist 与源码构建结果一致；本地构建后如产生 diff 必须一并提交。
+ci-web-dist:
+	@if ! git diff --quiet -- internal/server/web-dist; then \
+		echo "internal/server/web-dist 与源码构建结果不一致，请提交构建产物："; \
+		git diff --stat -- internal/server/web-dist; \
+		exit 1; \
+	fi
+
+# 安装 pre-push 钩子：push 前自动跑 make ci（可用 SKIP_CI=1 git push 临时跳过）。
+hooks:
+	@mkdir -p .git/hooks
+	@printf '%s\n' \
+		'#!/bin/sh' \
+		'# 由 make hooks 安装：push 前跑与 CI 等价的门禁，避免远端红。' \
+		'if [ "$$SKIP_CI" = "1" ]; then echo "pre-push: SKIP_CI=1，跳过门禁"; exit 0; fi' \
+		'make ci || { echo "pre-push: make ci 未通过，已阻止 push（临时跳过：SKIP_CI=1 git push）"; exit 1; }' \
+		> .git/hooks/pre-push
+	@chmod +x .git/hooks/pre-push
+	@echo "已安装 .git/hooks/pre-push"
 
 clean:
 	rm -rf dist

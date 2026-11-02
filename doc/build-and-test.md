@@ -16,7 +16,9 @@
 （linux/darwin 的 amd64+arm64、windows amd64）交叉 vet/build。
 
 ```bash
-make check                 # fmt-check + 三平台 vet + 前端检查（有 pnpm 时）+ 三平台 build + go test（提交前必跑）
+make check                 # 快速门禁：fmt-check + 三平台 vet + 前端检查（有 pnpm 时）+ 三平台 build + go test
+make ci                    # 与 GitHub CI 等价：再加 golangci-lint（双 GOOS，版本钉死）+ go test -race + web-dist 一致性（push 前必跑）
+make hooks                 # 安装 pre-push 钩子，自动执行 make ci
 make fmt                   # gofmt -w .
 make fmt-check             # 断言无未格式化文件
 make vet                   # GOOS=windows GOARCH=amd64 go vet ./...（单目标）
