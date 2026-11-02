@@ -1,0 +1,30 @@
+.list {
+  max-height: 320px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 2px;
+  border-bottom: 1px solid var(--border);
+}
+
+.item:last-child {
+  border-bottom: 0;
+}
+
+.path {
+  color: var(--text);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.reason {
+  color: var(--danger);
+  font-size: 12px;
+}

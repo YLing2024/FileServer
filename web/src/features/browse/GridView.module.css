@@ -34,6 +34,12 @@
   outline-offset: 3px;
 }
 
+.card.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+  background: var(--card-hover);
+}
+
 .card:hover img {
   transform: scale(1.045);
 }

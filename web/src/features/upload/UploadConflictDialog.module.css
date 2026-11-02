@@ -1,0 +1,27 @@
+.hint {
+  margin: 0 0 10px;
+  color: var(--text-2);
+}
+
+.list {
+  max-height: 160px;
+  margin: 0;
+  padding: 8px 10px;
+  list-style: none;
+  overflow: auto;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.name {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.name + .name {
+  margin-top: 4px;
+}

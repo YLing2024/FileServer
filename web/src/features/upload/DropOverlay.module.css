@@ -1,0 +1,43 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(10 14 22 / 55%);
+  backdrop-filter: blur(2px);
+  pointer-events: none;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 30px 44px;
+  background: var(--bg-soft);
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  color: var(--text);
+}
+
+.card svg {
+  width: 38px;
+  height: 38px;
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.card strong {
+  font-size: 15px;
+}
+
+.card span {
+  color: var(--text-2);
+  font-size: 12.5px;
+}

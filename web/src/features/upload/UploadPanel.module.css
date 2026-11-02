@@ -1,0 +1,166 @@
+.panel {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 40;
+  width: min(360px, calc(100vw - 32px));
+  max-height: min(60vh, 560px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-soft);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.head > div:first-child {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.headActions {
+  display: flex;
+  align-items: center;
+  flex: none;
+}
+
+.title {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.total {
+  color: var(--text-2);
+  font-size: 11.5px;
+}
+
+.totalBar {
+  height: 3px;
+  background: var(--hover);
+  flex: none;
+}
+
+.totalFill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.18s var(--ease);
+}
+
+.list {
+  overflow: auto;
+  min-height: 0;
+}
+
+.group {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 6px 12px;
+  background: var(--bg-soft);
+  border-bottom: 1px solid var(--border);
+}
+
+.groupName {
+  display: block;
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.item {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.item:last-child {
+  border-bottom: 0;
+}
+
+.item.failed .status {
+  color: var(--danger);
+}
+
+.item.failed .fill {
+  background: var(--danger);
+}
+
+.itemHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.name {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bar {
+  height: 4px;
+  margin: 6px 0;
+  border-radius: 3px;
+  background: var(--hover);
+  overflow: hidden;
+}
+
+.fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.15s var(--ease);
+}
+
+.foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.size {
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+.actions {
+  display: flex;
+  gap: 4px;
+}
+
+@media (width <= 480px) {
+  .panel {
+    right: 8px;
+    bottom: 8px;
+    width: calc(100vw - 16px);
+    max-height: 48vh;
+  }
+}

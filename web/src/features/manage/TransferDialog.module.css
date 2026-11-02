@@ -1,0 +1,140 @@
+.content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.hint {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.tree {
+  max-height: 300px;
+  padding: 6px;
+  overflow: auto;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+
+.treeRow {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 6px;
+  border-radius: 7px;
+}
+
+.treeRow:hover {
+  background: var(--hover);
+}
+
+.treeRow.active {
+  background: var(--accent-soft);
+}
+
+.treeRow.active .treeName {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.caret {
+  flex: none;
+  width: 22px;
+  height: 24px;
+  padding: 0;
+  color: var(--text-3);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.caret:hover {
+  color: var(--text);
+}
+
+.treeName {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 4px;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12.5px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.treeName:disabled {
+  color: var(--text-3);
+  cursor: not-allowed;
+  text-decoration: line-through;
+}
+
+.treeHint {
+  margin: 2px 0;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.newRow {
+  display: flex;
+  gap: 6px;
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  min-height: 34px;
+  padding: 6px 10px;
+  color: var(--text);
+  background: var(--card);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.target {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 12.5px;
+}
+
+.conflict {
+  padding: 9px 10px;
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
+  border-radius: 9px;
+}
+
+.conflict p {
+  margin: 0 0 8px;
+  color: var(--text);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.conflictActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}

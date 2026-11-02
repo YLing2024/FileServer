@@ -18,6 +18,10 @@ interface ToolbarProps {
   hls: boolean;
   ffmpeg: boolean;
   hlsBusy: boolean;
+  uploadAllowed: boolean;
+  folderUploadAllowed: boolean;
+  manageEnabled: boolean;
+  uploadBusy: boolean;
   onHome: () => void;
   onNavigate: (path: string) => void;
   onViewChange: (view: ViewMode) => void;
@@ -27,6 +31,9 @@ interface ToolbarProps {
   onClearSearch: () => void;
   onRefresh: () => void;
   onToggleHls: () => void;
+  onUpload: () => void;
+  onUploadFolder: () => void;
+  onTrash: () => void;
 }
 
 function BrandMark() {
@@ -189,6 +196,33 @@ function OrderIcon({ order }: { order: SortOrder }) {
   );
 }
 
+function UploadIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 20V9m0 0l-4 4m4-4l4 4" />
+      <path d="M4 5h16" />
+    </svg>
+  );
+}
+
+function FolderUploadIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
+      <path d="M12 16v-4m0 0l-2.5 2.5M12 12l2.5 2.5" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13" />
+      <path d="M10 11v5M14 11v5" />
+    </svg>
+  );
+}
+
 /** 工具栏；所有控件都是原生 button/select/input，键盘可达。 */
 export function Toolbar({
   path,
@@ -200,6 +234,10 @@ export function Toolbar({
   hls,
   ffmpeg,
   hlsBusy,
+  uploadAllowed,
+  folderUploadAllowed,
+  manageEnabled,
+  uploadBusy,
   onHome,
   onNavigate,
   onViewChange,
@@ -209,6 +247,9 @@ export function Toolbar({
   onClearSearch,
   onRefresh,
   onToggleHls,
+  onUpload,
+  onUploadFolder,
+  onTrash,
 }: ToolbarProps) {
   const hlsTitle = !ffmpeg
     ? '冷门格式支持不可用（服务端无 ffmpeg）'
@@ -245,6 +286,45 @@ export function Toolbar({
         >
           <RefreshIcon />
         </button>
+
+        {uploadAllowed ? (
+          <button
+            type="button"
+            className={styles.iconButton}
+            aria-label="上传文件"
+            title={uploadBusy ? '上传进行中，可继续添加到当前目录' : '上传文件到当前目录'}
+            onClick={onUpload}
+            data-testid="toolbar-upload"
+          >
+            <UploadIcon />
+          </button>
+        ) : null}
+
+        {uploadAllowed && folderUploadAllowed ? (
+          <button
+            type="button"
+            className={styles.iconButton}
+            aria-label="上传文件夹"
+            title="上传文件夹到当前目录"
+            onClick={onUploadFolder}
+            data-testid="toolbar-upload-folder"
+          >
+            <FolderUploadIcon />
+          </button>
+        ) : null}
+
+        {manageEnabled ? (
+          <button
+            type="button"
+            className={styles.iconButton}
+            aria-label="回收站"
+            title="回收站"
+            onClick={onTrash}
+            data-testid="toolbar-trash"
+          >
+            <TrashIcon />
+          </button>
+        ) : null}
 
         <button
           type="button"

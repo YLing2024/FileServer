@@ -1,0 +1,103 @@
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.usage {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.list {
+  max-height: 320px;
+  overflow: auto;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+
+.row {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.row:last-child {
+  border-bottom: 0;
+}
+
+.row:hover {
+  background: var(--hover);
+}
+
+.row input[type='checkbox'] {
+  margin-top: 3px;
+  flex: none;
+}
+
+.info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.name {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meta {
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+.hint {
+  margin: 8px 0;
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+
+.error {
+  margin: 8px 0 0;
+  color: var(--danger);
+  font-size: 12.5px;
+}
+
+.conflict {
+  margin-top: 10px;
+  padding: 9px 10px;
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
+  border-radius: 9px;
+}
+
+.conflict p {
+  margin: 0 0 8px;
+  color: var(--text);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.conflictActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}

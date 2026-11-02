@@ -1,0 +1,51 @@
+.bar {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  z-index: 38;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100vw - 24px);
+  padding: 8px 10px 8px 14px;
+  transform: translateX(-50%);
+  background: var(--bg-soft);
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+
+.count {
+  flex: none;
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+@media (width <= 640px) {
+  .bar {
+    right: 8px;
+    bottom: 8px;
+    left: 8px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    padding: 8px;
+    transform: none;
+  }
+
+  .count {
+    padding-left: 2px;
+  }
+
+  .actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}

@@ -3,7 +3,7 @@ import { formatBytes, formatTime } from '../../domain/format';
 import { kindOfEntry } from '../../domain/fileType';
 import { FileThumb } from './FileThumb';
 import { Highlight } from './Highlight';
-import type { BrowseEntry } from './types';
+import type { BrowseEntry, EntryInteraction } from './types';
 import styles from './GridView.module.css';
 
 interface GridViewProps {
@@ -11,25 +11,37 @@ interface GridViewProps {
   query: string;
   serverTranscode: boolean;
   onOpen: (entry: BrowseEntry) => void;
+  interaction?: EntryInteraction;
 }
 
 /** 网格卡片；目录/文件都由原生 button 承载，Tab/Enter/空格可直接操作。 */
-export function GridView({ entries, query, serverTranscode, onOpen }: GridViewProps) {
+export function GridView({ entries, query, serverTranscode, onOpen, interaction }: GridViewProps) {
   return (
     <div className={styles.grid} data-testid="grid">
       {entries.map((entry) => {
         const kind = kindOfEntry(entry);
+        const selected = interaction?.selected.has(entry.fullPath) ?? false;
         return (
           <button
             type="button"
             key={entry.fullPath}
-            className={styles.card}
+            className={`${styles.card} ${selected ? styles.selected : ''}`}
             aria-label={entry.name}
+            aria-pressed={interaction ? selected : undefined}
             title={entry.name}
             data-testid="entry-card"
             data-entry-name={entry.name}
             data-kind={kind}
-            onClick={() => onOpen(entry)}
+            data-selected={interaction ? selected : undefined}
+            onClick={(event) => {
+              if (interaction) interaction.onClick(entry, event);
+              else onOpen(entry);
+            }}
+            onDoubleClick={interaction ? () => interaction.onDoubleClick(entry) : undefined}
+            onPointerDown={interaction ? (event) => interaction.onPointerDown(entry, event) : undefined}
+            onPointerMove={interaction?.onPointerMove}
+            onPointerUp={interaction?.onPointerUp}
+            onPointerCancel={interaction?.onPointerUp}
           >
             <FileThumb entry={entry} path={entry.fullPath} serverTranscode={serverTranscode} />
             <span className={styles.info}>
