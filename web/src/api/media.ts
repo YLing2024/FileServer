@@ -79,6 +79,11 @@ export function fileDownloadUrl(path: string): string {
   return `/api/file?${new URLSearchParams({ path, dl: '1' }).toString()}`;
 }
 
+/** 目录打包下载 URL（流式 zip，含子目录）。 */
+export function zipDownloadUrl(path: string): string {
+  return `/api/zip?${new URLSearchParams({ path }).toString()}`;
+}
+
 /** 原始文件直链 URL（不强制附件下载）。 */
 export function fileUrl(path: string): string {
   return `/api/file?${new URLSearchParams({ path }).toString()}`;
@@ -105,6 +110,17 @@ export async function downloadFile(path: string, name: string): Promise<void> {
   const link = document.createElement('a');
   link.href = withTicket(fileDownloadUrl(path), ticket);
   link.download = name;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+/** 目录打包下载；文件名形如 `目录名.zip`。 */
+export async function downloadZip(path: string, name: string): Promise<void> {
+  const ticket = await ensureTicket();
+  const link = document.createElement('a');
+  link.href = withTicket(zipDownloadUrl(path), ticket);
+  link.download = `${name}.zip`;
   document.body.appendChild(link);
   link.click();
   link.remove();

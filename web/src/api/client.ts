@@ -37,13 +37,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+function stringList(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === 'string');
+}
+
 function errorFromResponse(status: number, body: unknown, text: string): ApiError {
   if (isRecord(body)) {
     const message = typeof body.error === 'string' ? body.error : '';
     const code = typeof body.code === 'string' ? body.code : undefined;
-    if (message) return new ApiError(status, message, code);
+    const existing = stringList(body.existing);
+    if (message) return new ApiError(status, message, code, existing);
   }
   return new ApiError(status, text.trim() || `请求失败（HTTP ${status}）`);
+}
+
+/**
+ * 401 统一处理：清凭据并触发已注册回调。
+ *
+ * XHR 上传拿不到 request() 的 401 分支，但它同样必须让会话失效对全局可见，
+ * 因此把这段逻辑收成一个显式函数供两条链路共用。
+ */
+export function reportUnauthorized(): void {
+  clearToken();
+  unauthorizedHandler?.();
 }
 
 /** 发送请求并返回原始 Response；401 会清凭据、触发全局回调并抛出 ApiError。 */
@@ -57,8 +74,7 @@ export async function request(path: string, init: RequestInit = {}): Promise<Res
   }
 
   if (response.status === 401) {
-    clearToken();
-    unauthorizedHandler?.();
+    reportUnauthorized();
     throw new ApiError(401, '登录状态已失效');
   }
   return response;

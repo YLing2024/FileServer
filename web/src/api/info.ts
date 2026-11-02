@@ -7,6 +7,16 @@ export interface ServerInfo {
   hls?: boolean;
   search_limit?: number;
   list_limit?: number;
+  /** 上传总开关（`--allow-upload`）。关闭时工具栏不渲染上传入口。 */
+  allow_upload?: boolean;
+  /** 单文件上传上限（字节）。 */
+  upload_max_bytes?: number;
+  /** 超过该大小走分片上传（字节）。 */
+  upload_chunk_threshold?: number;
+  /** 单个分片上限（字节）。 */
+  upload_chunk_max?: number;
+  /** 文件管理是否可用；仅登录会话为 true。 */
+  manage?: boolean;
 }
 
 /**

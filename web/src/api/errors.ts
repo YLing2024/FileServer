@@ -7,12 +7,15 @@
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string | undefined;
+  /** 同名冲突时服务端返回的已存在名称（`409 code=conflict`）。 */
+  readonly existing: readonly string[];
 
-  constructor(status: number, message: string, code?: string) {
+  constructor(status: number, message: string, code?: string, existing: readonly string[] = []) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
+    this.existing = existing;
   }
 }
 

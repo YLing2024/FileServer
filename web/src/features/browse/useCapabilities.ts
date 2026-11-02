@@ -10,14 +10,29 @@ interface CapabilitiesState {
   hls: boolean;
   searchLimit: number;
   listLimit: number;
+  manage: boolean;
+  uploadAllowed: boolean;
+  uploadMaxBytes: number;
+  chunkThreshold: number;
+  chunkMax: number;
   ready: boolean;
 }
+
+/** 上传默认值与后端 uploadMaxDefaultBytes / uploadChunkThreshold / uploadChunkMax 对齐。 */
+const DEFAULT_UPLOAD_MAX = 1024 * 1024 * 1024;
+const DEFAULT_CHUNK_THRESHOLD = 8 * 1024 * 1024;
+const DEFAULT_CHUNK_MAX = 64 * 1024 * 1024;
 
 const INITIAL_STATE: CapabilitiesState = {
   ffmpeg: false,
   hls: false,
   searchLimit: DEFAULT_SEARCH_LIMIT,
   listLimit: DEFAULT_LIST_LIMIT,
+  manage: false,
+  uploadAllowed: false,
+  uploadMaxBytes: DEFAULT_UPLOAD_MAX,
+  chunkThreshold: DEFAULT_CHUNK_THRESHOLD,
+  chunkMax: DEFAULT_CHUNK_MAX,
   ready: false,
 };
 
@@ -44,6 +59,11 @@ export function useCapabilities() {
         hls: hlsFromHealth ?? Boolean(info?.hls),
         searchLimit: info?.search_limit ?? DEFAULT_SEARCH_LIMIT,
         listLimit: info?.list_limit ?? DEFAULT_LIST_LIMIT,
+        manage: Boolean(info?.manage),
+        uploadAllowed: Boolean(info?.allow_upload),
+        uploadMaxBytes: info?.upload_max_bytes ?? DEFAULT_UPLOAD_MAX,
+        chunkThreshold: info?.upload_chunk_threshold ?? DEFAULT_CHUNK_THRESHOLD,
+        chunkMax: info?.upload_chunk_max ?? DEFAULT_CHUNK_MAX,
         ready: true,
       });
     });
