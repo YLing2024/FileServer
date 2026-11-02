@@ -19,6 +19,17 @@ export function parentPath(path: string): string {
   return parts.join('/');
 }
 
+/** 文件所在目录；根目录文件返回空串。与 `/` 分隔符约定一致。 */
+export function dirname(path: string): string {
+  return parentPath(path);
+}
+
+/** 路径最后一段；空路径返回空串。 */
+export function basename(path: string): string {
+  const parts = normalizePath(path).split('/').filter(Boolean);
+  return parts[parts.length - 1] ?? '';
+}
+
 /** 拆成面包屑片段（含空白根节点）。 */
 export function pathSegments(path: string): string[] {
   return normalizePath(path).split('/').filter(Boolean);

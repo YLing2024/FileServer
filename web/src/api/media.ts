@@ -42,6 +42,14 @@ export function ensureTicket(): Promise<string> {
   return state.inflight;
 }
 
+/**
+ * 同步读取已缓存的短票，供 hls.js 的 xhrSetup 在每次请求前重写 `?t=`。
+ * 尚未签发时返回空串；调用方应先 await ensureTicket()。
+ */
+export function cachedTicket(): string {
+  return state.value;
+}
+
 /** 清除缓存的短票（401 或主动登出后调用）。 */
 export function clearTicket(): void {
   state.value = '';
@@ -74,4 +82,30 @@ export function fileDownloadUrl(path: string): string {
 /** 原始文件直链 URL（不强制附件下载）。 */
 export function fileUrl(path: string): string {
   return `/api/file?${new URLSearchParams({ path }).toString()}`;
+}
+
+/** HLS 播放列表或分片 URL；`abandon=1` 用于离开预览时终止服务端转码。 */
+export function hlsUrl(path: string, abandon = false): string {
+  const params = new URLSearchParams({ path, f: 'index.m3u8' });
+  if (abandon) params.set('abandon', '1');
+  return `/api/hls?${params.toString()}`;
+}
+
+/** 视频播放决策 URL。 */
+export function videoInfoUrl(path: string): string {
+  return `/api/video-info?${new URLSearchParams({ path }).toString()}`;
+}
+
+/**
+ * 触发浏览器下载。原生 `<a download>` 不能带 Authorization，
+ * 因此先换短票再拼到 URL 上。
+ */
+export async function downloadFile(path: string, name: string): Promise<void> {
+  const ticket = await ensureTicket();
+  const link = document.createElement('a');
+  link.href = withTicket(fileDownloadUrl(path), ticket);
+  link.download = name;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
 }
