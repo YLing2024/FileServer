@@ -48,7 +48,9 @@ func writeShareStatusError(w http.ResponseWriter, status int, code, msg string) 
 func writeShareRecordFailure(w http.ResponseWriter, rec shareRecord, now time.Time) bool {
 	switch rec.status(now) {
 	case shareStatusRevoked:
-		writeShareStatusError(w, http.StatusForbidden, shareStatusRevoked, "分享已撤销")
+		// Phase 5 起撤销统一按「不存在」处理：对外返回 404，避免继续暴露
+		// 该 token 曾经有效；code 仍保留 revoked 供页面展示明确原因。
+		writeShareStatusError(w, http.StatusNotFound, shareStatusRevoked, "分享已撤销")
 	case shareStatusExpired:
 		writeShareStatusError(w, http.StatusForbidden, shareStatusExpired, "分享已过期")
 	case shareStatusExhausted:
@@ -430,7 +432,7 @@ func (s *Server) handlePublicShareDownload(w http.ResponseWriter, r *http.Reques
 		case errors.Is(err, errShareExpired):
 			writeShareStatusError(w, http.StatusForbidden, shareStatusExpired, "分享已过期")
 		case errors.Is(err, errShareRevoked):
-			writeShareStatusError(w, http.StatusForbidden, shareStatusRevoked, "分享已撤销")
+			writeShareStatusError(w, http.StatusNotFound, shareStatusRevoked, "分享已撤销")
 		case errors.Is(err, errShareExhausted):
 			writeShareStatusError(w, http.StatusForbidden, shareStatusExhausted, "分享的下载次数已用完")
 		case errors.Is(err, errShareNotFound):
@@ -535,7 +537,7 @@ func (s *Server) handlePublicShareZip(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, errShareExpired):
 			writeShareStatusError(w, http.StatusForbidden, shareStatusExpired, "分享已过期")
 		case errors.Is(err, errShareRevoked):
-			writeShareStatusError(w, http.StatusForbidden, shareStatusRevoked, "分享已撤销")
+			writeShareStatusError(w, http.StatusNotFound, shareStatusRevoked, "分享已撤销")
 		case errors.Is(err, errShareExhausted):
 			writeShareStatusError(w, http.StatusForbidden, shareStatusExhausted, "分享的下载次数已用完")
 		case errors.Is(err, errShareNotFound):

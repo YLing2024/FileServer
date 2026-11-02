@@ -56,7 +56,8 @@
 - **Phase 5：新前端切换为默认根路径**。React 构建产物同时服务 `/` 与 `/v2/`
   （同一 handler、同一份 `index.html`，`/v2` 精确路径 301 到 `/`）；静态资源仍为
   `/v2/assets/*`（一年 immutable），SPA fallback、CSP、缓存头保持切换前策略。
-  `/s/<token>` 继续返回新分享页。首次认证设置（口令 / TOTP）改由新前端
+  `/s/<token>` 继续返回新分享页；撤销后的公开接口改为 `404 revoked`（不再对外
+  暴露「该 token 曾经有效」）。首次认证设置（口令 / TOTP）改由新前端
   `SetupForm` 承接，不再依赖旧页面。`make check` 在 pnpm 与依赖可用时附带前端
   typecheck/lint/test/build，缺失时提示并跳过。旧原生前端与相关 E2E 脚本已移除。
   回退方式见下方「已移除」。

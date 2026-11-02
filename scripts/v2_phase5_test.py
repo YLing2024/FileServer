@@ -419,8 +419,8 @@ def main() -> int:
             )
             revoked_status = api_status(f"{base}/api/public/share/{file_token}/download")
             checks.check(
-                revoked_status in (403, 404),
-                f"撤销后公开下载接口不可用（实际 HTTP {revoked_status}）",
+                revoked_status == 404,
+                f"撤销后公开下载接口返回 404（实际 HTTP {revoked_status}）",
             )
 
             # ---- 9. 375 宽浏览与视频播放 ----

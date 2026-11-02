@@ -715,7 +715,7 @@ curl -s -X DELETE http://127.0.0.1:8080/api/share/record \
 |---|---|---|
 | `404` | `not_found` | token 不存在/记录已删除/内容已不存在 |
 | `403` | `expired` | 已过期 |
-| `403` | `revoked` | 已撤销 |
+| `404` | `revoked` | 已撤销（Phase 5 起按不存在处理，code 保留） |
 | `403` | `exhausted` | 下载次数已用完 |
 
 错误响应形如 `{"error":"分享已过期","code":"expired"}`。每次请求实时校验记录状态，
@@ -731,7 +731,7 @@ curl -s -X DELETE http://127.0.0.1:8080/api/share/record \
   服务重启后旧 cookie 失效，需要重新输入。
 - 无提取码的分享直接 `200 {"ok":true}`，不下发 cookie。
 - 错误码：`403 bad_code`（文案统一为「提取码不正确」，不区分具体原因）、
-  `403 expired/revoked/exhausted`、`404 not_found`、`429 rate_limited`。
+  `403 expired/exhausted`、`404 not_found/revoked`、`429 rate_limited`。
 - 限速：同一 IP 每分钟最多 10 次失败；第 10 次失败即返回 `429`
   （`{"error":"尝试过于频繁，请稍后再试","code":"rate_limited"}`），成功后该 IP 的
   失败计数清零。限速只影响提取码校验，不影响页面与已通过 cookie 的访问。
@@ -779,7 +779,7 @@ curl -s -X DELETE http://127.0.0.1:8080/api/share/record \
 - 成功 `200`，`Content-Disposition: attachment`，支持 Range（`http.ServeContent`）。
 - 每次成功发起下载占用 1 次额度；额度在响应头写出前于锁内校验并落盘，并发请求不能
   突破 `max_downloads`。
-- `403 expired/revoked/exhausted`、`404 not_found`、`400 bad_path`。
+- `403 expired/exhausted`、`404 not_found/revoked`、`400 bad_path`。
 - 预览接口不占用下载次数。
 - 无缓存（`Cache-Control: no-store`）；响应不包含真实磁盘路径。
 

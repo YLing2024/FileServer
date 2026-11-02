@@ -249,12 +249,12 @@ func TestShareExpiredRevokedExhausted(t *testing.T) {
 	if rev.Code != http.StatusOK {
 		t.Fatalf("撤销 = %d", rev.Code)
 	}
-	if rec := shareGet(t, srv, "/api/public/share/"+revoked.Token+"/info", nil); rec.Code != http.StatusForbidden ||
+	if rec := shareGet(t, srv, "/api/public/share/"+revoked.Token+"/info", nil); rec.Code != http.StatusNotFound ||
 		!strings.Contains(rec.Body.String(), `"code":"revoked"`) {
 		t.Fatalf("撤销后 info = %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := shareGet(t, srv, "/api/public/share/"+revoked.Token+"/download", nil); rec.Code != http.StatusForbidden {
-		t.Fatalf("撤销后下载 = %d，期望 403", rec.Code)
+	if rec := shareGet(t, srv, "/api/public/share/"+revoked.Token+"/download", nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("撤销后下载 = %d，期望 404", rec.Code)
 	}
 
 	// 次数上限：第一次成功，第二次与之后 403 exhausted
