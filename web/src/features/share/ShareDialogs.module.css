@@ -1,0 +1,238 @@
+/* 分享创建/结果/管理弹窗共用样式；颜色只用全局设计令牌。 */
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.input {
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 11px;
+  color: var(--text);
+  background: var(--card);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.mono {
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+.linkRow {
+  display: flex;
+  gap: 8px;
+}
+
+.linkRow .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.rowLabel {
+  min-width: 64px;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.select {
+  min-height: 38px;
+  padding: 7px 10px;
+  color: var(--text);
+  font-size: 13px;
+  background: var(--card);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+}
+
+.select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.check {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.check input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.codeInput {
+  width: 132px;
+  font-family: var(--mono);
+  font-size: 18px;
+  letter-spacing: 4px;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.target {
+  padding: 10px 12px;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 13.5px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.code {
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 18px;
+  letter-spacing: 3px;
+}
+
+.hint {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 12.5px;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.itemInactive {
+  opacity: 0.6;
+}
+
+.itemHead {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.itemName {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  color: var(--text-3);
+  font-size: 11.5px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.badgeActive {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.badgeDanger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.itemLink {
+  overflow-wrap: anywhere;
+  color: var(--text-2);
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+.itemMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+
+.itemActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.empty {
+  margin: 8px 0;
+  color: var(--text-3);
+  font-size: 13px;
+  text-align: center;
+}
+
+@media (width <= 520px) {
+  .linkRow {
+    flex-direction: column;
+  }
+
+  .rowLabel {
+    min-width: 100%;
+  }
+
+  .itemActions {
+    justify-content: stretch;
+  }
+
+  .itemActions > button {
+    flex: 1 1 auto;
+  }
+}
