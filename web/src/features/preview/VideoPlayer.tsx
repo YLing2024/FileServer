@@ -201,7 +201,7 @@ export function VideoPlayer({ path, name, size }: VideoPlayerProps) {
     const saved = readProgress(path, size);
     if (saved <= 1) return;
     const total = currentDuration();
-    if (total > 0 && saved >= total - 2) return;
+    if (total > 0 && saved >= total - 1) return;
     try {
       video.currentTime = saved;
     } catch {

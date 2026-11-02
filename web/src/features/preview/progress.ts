@@ -27,13 +27,13 @@ export function readProgress(path: string, size: number): number {
 }
 
 /**
- * 保存播放位置。片头 1 秒内与结尾 3 秒内不保存（避免每次打开都从 0 开始或
- * 一进来就触发「播放结束」）。
+ * 保存播放位置。片头 1 秒内与结尾 1 秒内不保存（避免每次打开都从 0 开始或
+ * 一进来就触发「播放结束」）；短片（<6 秒）也能记住中段位置。
  */
 export function saveProgress(path: string, size: number, time: number, duration: number): void {
   if (!Number.isFinite(time) || time < 1) return;
   if (!Number.isFinite(duration) || duration <= 0) return;
-  if (time >= duration - 3) {
+  if (time >= duration - 1) {
     clearProgress(path, size);
     return;
   }

@@ -51,7 +51,7 @@ export function AudioPlayer({ path, name, size }: AudioPlayerProps) {
     if (!audio || restoredRef.current) return;
     restoredRef.current = true;
     const saved = readProgress(path, size);
-    if (saved > 1 && (!Number.isFinite(audio.duration) || saved < audio.duration - 2)) {
+    if (saved > 1 && (!Number.isFinite(audio.duration) || saved < audio.duration - 1)) {
       audio.currentTime = saved;
     }
   };
