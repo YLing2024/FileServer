@@ -1,17 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="文件服务器">
-  <!-- 几何完全取自 web/src/features/browse/Toolbar.tsx 的 BrandMark：
-       机柜外框 + 两条分隔线 + 三个槽位（中间那个是 accent，代表"在线"）。
-       只为 favicon 做两处适配：加圆角深色底（标签栏明暗都看得清）、描边 26 → 30（16px 下不糊）。 -->
-  <rect width="512" height="512" rx="112" fill="#14171d"/>
-  <rect x="1" y="1" width="510" height="510" rx="111" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="2"/>
-  <g fill="none" stroke="#e8ecf4" stroke-width="30" stroke-linecap="round">
-    <rect x="128" y="112" width="256" height="288" rx="20"/>
-    <line x1="128" y1="208" x2="384" y2="208"/>
-    <line x1="128" y1="304" x2="384" y2="304"/>
-  </g>
-  <g stroke="none">
-    <rect x="232" y="148" width="48" height="22" rx="11" fill="#8a93a6"/>
-    <rect x="232" y="244" width="48" height="22" rx="11" fill="#4f8cff"/>
-    <rect x="232" y="340" width="48" height="22" rx="11" fill="#8a93a6"/>
-  </g>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img"><rect width="512" height="512" fill="#FFFFFF"/><rect x="128" y="112" width="256" height="288" rx="20" fill="none" stroke="#111111" stroke-width="26"/><line x1="128" y1="208" x2="384" y2="208" stroke="#111111" stroke-width="26"/><line x1="128" y1="304" x2="384" y2="304" stroke="#111111" stroke-width="26"/><rect x="232" y="148" width="48" height="22" rx="11" fill="#111111"/><rect x="232" y="244" width="48" height="22" rx="11" fill="#0F766E"/><rect x="232" y="340" width="48" height="22" rx="11" fill="#111111"/></svg>
