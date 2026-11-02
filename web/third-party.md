@@ -15,3 +15,14 @@ sha256sum internal/server/web/hls.min.js
 ```
 
 升级 hls.js 时：替换文件 → 重新编译 exe → 更新本表的版本 / 来源 / SHA256。
+
+## V2 前端（npm 依赖）
+
+V2（`web/`）的运行时依赖登记在 `package.json` / `pnpm-lock.yaml`：
+
+| 包 | 版本 | 许可 | 用途 |
+|---|---|---|---|
+| `react` / `react-dom` | 19.x | MIT | UI 运行时 |
+| `hls.js` | 1.5.20（与旧 vendor 同大版本，锁定精确版本） | Apache-2.0 | 冷门格式在线转码播放；按需动态加载，不进入首屏包 |
+
+除上述依赖外不引入 UI 库或其他运行时依赖；开发依赖见 `package.json`。

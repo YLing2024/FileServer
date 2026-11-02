@@ -13,12 +13,22 @@
 | `ToastProvider` / `useToast` | 全局轻提示队列，3 秒自动消失 | `children`；`showToast(text, tone?)`，`tone` 默认 `info` | `<ToastProvider><App /></ToastProvider>`；组件内 `const { showToast } = useToast()` | 必须在 Provider 内调用 hook；不要在渲染期间调用 `showToast`；容器 `aria-live=polite`，错误项 `role=alert` |
 | `ErrorBoundary` | 捕获子树渲染异常，避免白屏 | `children`、可选 `fallback`；内置“重试”复位 | `<ErrorBoundary><App /></ErrorBoundary>` | 只捕获渲染/生命周期错误，不捕获事件回调与异步异常 |
 | `ThemeToggle` | 深浅主题切换，沿用 `fs.theme` | 无 props；读取/写入 `<html data-theme>` 与 `fs.theme` | `<ThemeToggle />` | 必须在 `main.tsx` 先调用 `initTheme()`；颜色只用既有 CSS 变量；原生 button + `aria-label="切换主题"` |
-| `BrowsePage` | Phase 1 浏览页：路径/搜索/排序/分页/滚动恢复的组合层 | 无 props；依赖 `?path=`、`/api/list`、`/api/search`、`/api/info` | `<BrowsePage />` | 文件点击暂只下载原文件；预览/播放留到 Phase 2；必须在 `ToastProvider` 内使用 |
+| `BrowsePage` | 浏览页：路径/预览/搜索/排序/分页/滚动恢复的组合层 | 无 props；依赖 `?path=` / `?view=`、`/api/list`、`/api/search`、`/api/info` | `<BrowsePage />` | 图片/视频/音频/PDF/文本/代码点击进入 `?view=` 预览，其余下载；进入预览前记录滚动位置；必须在 `ToastProvider` 内使用 |
 | `Toolbar` | 品牌/回根、面包屑、搜索框、刷新、视图切换、排序、主题、冷门格式开关 | `path`、`view`、`sort`、`order`、`query`、`searching`、`hls`、`ffmpeg`、`hlsBusy`；`onHome/onNavigate/onViewChange/onSortChange/onOrderToggle/onQueryChange/onClearSearch/onRefresh/onToggleHls` | `<Toolbar path="" view="grid" ... />` | 搜索防抖在 `BrowsePage` 层；Esc 清空；`/` 聚焦搜索框；窄屏搜索独占一行、≤480 隐藏排序下拉 |
 | `GridView` / `GridSkeleton` | 网格卡片（缩略图 + 名称/大小/时间）与加载骨架 | `entries`、`query`、`serverTranscode`、`onOpen`；骨架 `count` | `<GridView entries={entries} query="" serverTranscode={false} onOpen={open} />` | 卡片是原生 button，`aria-label` 为条目名；目录/文件都由 `onOpen` 分发 |
 | `ListView` / `ListSkeleton` | 列表三列（名称/大小/修改时间），名称可点 | `entries`、`query`、`onOpen`；骨架 `count` | `<ListView entries={entries} query="" onOpen={open} />` | 目录优先由排序函数保证；≤820 隐藏时间列，≤480 收窄大小列 |
 | `FileThumb` | 按类型渲染缩略图：图片 `/api/thumb`、视频抽帧/服务端缩略图、其余图标 | `entry`、`path`、`serverTranscode` | `<FileThumb entry={entry} path="photos/a.jpg" serverTranscode={false} />` | 视频抽帧并发 3、懒加载、卸载取消；冷门格式无 ffmpeg 时保持图标，不发 `/api/thumb-src` |
 | `Highlight` | 搜索命中高亮，纯文本拆分不注入 HTML | `text`、`query` | `<Highlight text="sample.mp4" query="mp4" />` | 大小写不敏感；空 query 原样输出 |
+| `PreviewPage` | 预览分发：图片灯箱/视频/音频/PDF/文本，统一返回与下载 | `file: PreviewFile`、`images`、`onClose`、`onChangeImage` | `<PreviewPage file={file} images={[]} onClose={close} onChangeImage={replace} />` | 图片走全屏灯箱；Esc 由 PreviewPage/灯箱统一处理；文档标题切到文件名 |
+| `Lightbox` | 图片灯箱：原图、骨架、缩放/旋转、前后切换 | `path`、`paths`、`onClose`、`onChange`、`onToast` | `<Lightbox path="a.jpg" paths={["a.jpg","b.jpg"]} ... />` | 固定深色背景 `role=dialog aria-modal`；滚轮/双指 25%–800%；切图只 replaceState 不新增历史 |
+| `VideoPlayer` | 视频播放器：直链/HLS、自绘控制条、快捷键、移动端手势 | `path`、`name`、`size` | `<VideoPlayer path="v.mp4" name="v.mp4" size={123} />` | 不自动播放；离开时 `abandon=1` + `hls.destroy()` + 释放 src；进度按 path+size 记忆 |
+| `AudioPlayer` | 原生 `<audio controls>` + 进度记忆 | `path`、`name`、`size` | `<AudioPlayer path="a.mp3" name="a.mp3" size={123} />` | 直链 `/api/file`；与视频共用 `fs.progress.<path>:<size>` |
+| `PdfPreview` | PDF 内嵌查看 + 下载兜底 | `path`、`name`、`onToast` | `<PdfPreview path="a.pdf" name="a.pdf" onToast={toast} />` | `navigator.pdfViewerEnabled === false` 时显示下载提示；下载按钮常驻 |
+| `TextPreview` | 文本/代码只读预览 | `path`、`size`、`mtime`、`onToast` | `<TextPreview path="a.txt" size={10} mtime={0} onToast={toast} />` | 超过 2 MiB 用 Range 截断并提示；编辑留 Phase 3；`size<0` 时等待目录元数据 |
+| `attachHls` | hls.js 挂载：8 秒 manifest 轮询、seek 收敛、短票重写 | `video`、`path`、`onReady/onSeekClamped/onError` | `const h = attachHls(video, path, callbacks); h.destroy()` | 仅 HLS 时动态加载 hls.js；离开预览必须 destroy；Safari 走原生 HLS |
+| `usePlayerGestures` | 移动端播放器手势 | `playerRef`、`videoRef`、`GestureOptions` | `usePlayerGestures(playerRef, videoRef, opts)` | 仅 `pointer: coarse`/`ontouchstart` 注册；长按恢复原倍速；横滑松手才 seek |
+| `progress.ts` | path+size 播放进度记忆 | `readProgress`、`saveProgress`、`clearProgress` | `saveProgress(path, size, time, duration)` | 片头 1s/结尾 3s 不保存；localStorage 不可用时静默降级 |
+| `useBrowseRoute` | `?path=` / `?view=` 双向同步与历史恢复 | 无入参；返回 `path/view/navigate/openView/replaceView/closeView` | `const route = useBrowseRoute()` | 进入预览只写 `?view=`；深链 Esc 用 replace 回目录；灯箱切图 replace 不新增历史 |
 | `useDirectory` | 目录分页数据：首页/加载更多/错误/刷新 | `path`、`sort`、`order`、`limit` | `const dir = useDirectory(path, sort, order, 300)` | 切换路径/排序取消过期请求；`loadMore` 用 `offset=entries.length` |
 | `useSearch` | `/api/search` 数据，映射为可复用条目 | `query`、`path`、`limit` | `const search = useSearch(query, path, 2000)` | query 为空返回空闲态；结果携带 `searchPath/searchDir` |
 | `useCapabilities` | 读取 `/api/info` 与 `/api/health`，切换冷门格式 | 无入参；返回 `ffmpeg/hls/searchLimit/listLimit/toggling/toggleHls` | `const caps = useCapabilities()` | 优先读 `health.hls`，当前后端无该字段时回退 `/api/info`；开关走 `POST /api/settings/ffmpeg` |
