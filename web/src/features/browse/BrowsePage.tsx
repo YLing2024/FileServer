@@ -173,7 +173,6 @@ export function BrowsePage() {
     onError: (message) => showToast(message, 'error'),
   });
 
-
   const navigate = useCallback(
     (next: string) => {
       scrollPositions.current.set(path, window.scrollY);

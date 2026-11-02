@@ -33,7 +33,11 @@ export function SelectionBar({
         已选 {count} 项
       </span>
       <div className={styles.actions}>
-        <button type="button" className={`${buttonStyles.button} ${buttonStyles.small}`} onClick={onDownload}>
+        <button
+          type="button"
+          className={`${buttonStyles.button} ${buttonStyles.small}`}
+          onClick={onDownload}
+        >
           下载
         </button>
         <button
@@ -44,10 +48,18 @@ export function SelectionBar({
         >
           重命名
         </button>
-        <button type="button" className={`${buttonStyles.button} ${buttonStyles.small}`} onClick={onMove}>
+        <button
+          type="button"
+          className={`${buttonStyles.button} ${buttonStyles.small}`}
+          onClick={onMove}
+        >
           移动
         </button>
-        <button type="button" className={`${buttonStyles.button} ${buttonStyles.small}`} onClick={onCopy}>
+        <button
+          type="button"
+          className={`${buttonStyles.button} ${buttonStyles.small}`}
+          onClick={onCopy}
+        >
           复制
         </button>
         <button

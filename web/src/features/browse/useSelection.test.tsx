@@ -16,7 +16,10 @@ function entry(name: string): BrowseEntry {
   };
 }
 
-function mouse(detail: number, modifiers: { ctrl?: boolean; shift?: boolean } = {}): MouseEvent<HTMLElement> {
+function mouse(
+  detail: number,
+  modifiers: { ctrl?: boolean; shift?: boolean } = {},
+): MouseEvent<HTMLElement> {
   return {
     detail,
     ctrlKey: Boolean(modifiers.ctrl),

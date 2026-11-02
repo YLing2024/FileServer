@@ -49,7 +49,8 @@ export function useSelection(
   const rawSelected = state.path === path ? state.selected : EMPTY_SELECTION;
   const validPaths = useMemo(() => new Set(entries.map((entry) => entry.fullPath)), [entries]);
   const selected = useMemo(
-    () => (enabled ? new Set([...rawSelected].filter((item) => validPaths.has(item))) : EMPTY_SELECTION),
+    () =>
+      enabled ? new Set([...rawSelected].filter((item) => validPaths.has(item))) : EMPTY_SELECTION,
     [enabled, rawSelected, validPaths],
   );
 

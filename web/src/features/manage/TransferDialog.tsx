@@ -7,7 +7,13 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ApiError } from '../../api/errors';
 import { fetchDirectory, type ListEntry } from '../../api/list';
-import { copyEntries, createFolder, moveEntries, type ManageFailure, type TransferPair } from '../../api/manage';
+import {
+  copyEntries,
+  createFolder,
+  moveEntries,
+  type ManageFailure,
+  type TransferPair,
+} from '../../api/manage';
 import { Modal } from '../../components/Modal';
 import { basename, joinPath, normalizePath } from '../../domain/path';
 import buttonStyles from '../../styles/buttons.module.css';
@@ -31,13 +37,7 @@ function sortDirs(entries: ListEntry[]): ListEntry[] {
     .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
 }
 
-export function TransferDialog({
-  kind,
-  paths,
-  currentPath,
-  onClose,
-  onDone,
-}: TransferDialogProps) {
+export function TransferDialog({ kind, paths, currentPath, onClose, onDone }: TransferDialogProps) {
   const [target, setTarget] = useState(normalizePath(currentPath));
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set(['']));
   const [children, setChildren] = useState<Map<string, ListEntry[]>>(() => new Map());
@@ -125,7 +125,11 @@ export function TransferDialog({
       const done = (kind === 'move' ? result.moved : result.copied) ?? [];
       onDone({ kind, done, failed: result.failed ?? [] });
     } catch (submitError) {
-      if (submitError instanceof ApiError && submitError.status === 409 && submitError.code === 'conflict') {
+      if (
+        submitError instanceof ApiError &&
+        submitError.status === 409 &&
+        submitError.code === 'conflict'
+      ) {
         setConflict(
           submitError.existing.length
             ? [...submitError.existing]

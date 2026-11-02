@@ -21,9 +21,14 @@ const scope = self as unknown as WorkerScope;
 scope.onmessage = async (event) => {
   const { file, chunkSize } = event.data;
   try {
-    const hex = await hashBlob(file, (progress) => {
-      scope.postMessage({ type: 'progress', progress });
-    }, undefined, chunkSize);
+    const hex = await hashBlob(
+      file,
+      (progress) => {
+        scope.postMessage({ type: 'progress', progress });
+      },
+      undefined,
+      chunkSize,
+    );
     scope.postMessage({ type: 'done', hex });
   } catch (error) {
     const message = error instanceof Error ? error.message : '校验失败';

@@ -42,11 +42,6 @@
   background: var(--accent-soft);
 }
 
-.table tbody tr.selected .name {
-  color: var(--accent);
-  font-weight: 600;
-}
-
 .sizeCol {
   width: 110px;
 }
@@ -94,6 +89,11 @@
 
 .nameButton:hover .name {
   color: var(--accent);
+}
+
+.table tbody tr.selected .name {
+  color: var(--accent);
+  font-weight: 600;
 }
 
 .icon {

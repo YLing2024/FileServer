@@ -45,7 +45,9 @@ function statusText(item: UploadItemView): string {
 }
 
 function isActive(status: UploadStatus): boolean {
-  return status === 'waiting' || status === 'hashing' || status === 'instant' || status === 'uploading';
+  return (
+    status === 'waiting' || status === 'hashing' || status === 'instant' || status === 'uploading'
+  );
 }
 
 function ItemActions({

@@ -40,7 +40,11 @@ export function ConfirmDialog({
       testId={testId}
       footer={
         <>
-          <button type="button" className={`${buttonStyles.button} ${buttonStyles.ghost}`} onClick={onCancel}>
+          <button
+            type="button"
+            className={`${buttonStyles.button} ${buttonStyles.ghost}`}
+            onClick={onCancel}
+          >
             {cancelLabel}
           </button>
           {thirdLabel && onThird ? (

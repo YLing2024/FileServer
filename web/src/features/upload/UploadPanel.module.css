@@ -91,14 +91,6 @@
   border-bottom: 0;
 }
 
-.item.failed .status {
-  color: var(--danger);
-}
-
-.item.failed .fill {
-  background: var(--danger);
-}
-
 .itemHead {
   display: flex;
   align-items: baseline;
@@ -137,6 +129,14 @@
   height: 100%;
   background: var(--accent);
   transition: width 0.15s var(--ease);
+}
+
+.item.failed .status {
+  color: var(--danger);
+}
+
+.item.failed .fill {
+  background: var(--danger);
 }
 
 .foot {

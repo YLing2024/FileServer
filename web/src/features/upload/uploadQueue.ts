@@ -512,8 +512,7 @@ export class UploadQueue {
 
     while (this.running.size < CONCURRENCY) {
       const next = this.items.find(
-        (item) =>
-          item.status === 'waiting' && !this.running.has(item.id) && this.groupReady(item),
+        (item) => item.status === 'waiting' && !this.running.has(item.id) && this.groupReady(item),
       );
       if (!next) break;
       this.start(next);
@@ -668,7 +667,11 @@ export class UploadQueue {
     this.markDone(item);
   }
 
-  private async chunkedUpload(item: Item, settings: UploadSettings, signal: AbortSignal): Promise<void> {
+  private async chunkedUpload(
+    item: Item,
+    settings: UploadSettings,
+    signal: AbortSignal,
+  ): Promise<void> {
     const chunkSize = Math.max(
       1,
       Math.min(settings.chunkThreshold || 8 * 1024 * 1024, settings.chunkMax || 64 * 1024 * 1024),
@@ -780,7 +783,12 @@ export class UploadQueue {
         group.status = 'error';
         return;
       }
-      if (error instanceof ApiError && error.status === 409 && error.code === 'conflict' && mode(group) === 'ask') {
+      if (
+        error instanceof ApiError &&
+        error.status === 409 &&
+        error.code === 'conflict' &&
+        mode(group) === 'ask'
+      ) {
         group.status = 'conflict';
         group.prepared = false;
         this.conflictState = {
@@ -880,7 +888,7 @@ export class UploadQueue {
     const bytes = this.items.reduce((sum, item) => sum + item.size, 0);
     const sent = this.items.reduce(
       (sum, item) =>
-        sum + item.size * (item.status === 'done' ? 100 : Math.max(0, item.progress)) / 100,
+        sum + (item.size * (item.status === 'done' ? 100 : Math.max(0, item.progress))) / 100,
       0,
     );
     const doneCount = this.items.filter((item) => item.status === 'done').length;

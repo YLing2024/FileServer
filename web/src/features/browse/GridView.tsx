@@ -38,7 +38,9 @@ export function GridView({ entries, query, serverTranscode, onOpen, interaction 
               else onOpen(entry);
             }}
             onDoubleClick={interaction ? () => interaction.onDoubleClick(entry) : undefined}
-            onPointerDown={interaction ? (event) => interaction.onPointerDown(entry, event) : undefined}
+            onPointerDown={
+              interaction ? (event) => interaction.onPointerDown(entry, event) : undefined
+            }
             onPointerMove={interaction?.onPointerMove}
             onPointerUp={interaction?.onPointerUp}
             onPointerCancel={interaction?.onPointerUp}

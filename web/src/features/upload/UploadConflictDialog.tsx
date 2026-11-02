@@ -15,7 +15,8 @@ interface UploadConflictDialogProps {
 }
 
 export function UploadConflictDialog({ conflict, onResolve }: UploadConflictDialogProps) {
-  const subject = conflict.kind === 'group' ? `文件夹「${conflict.subject}」` : `文件「${conflict.subject}」`;
+  const subject =
+    conflict.kind === 'group' ? `文件夹「${conflict.subject}」` : `文件「${conflict.subject}」`;
   return (
     <Modal
       title={conflict.kind === 'group' ? '文件夹已存在' : '文件已存在'}

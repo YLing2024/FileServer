@@ -87,13 +87,21 @@ export function TrashDialog({ onClose, onRestored, onFailures }: TrashDialogProp
     try {
       const result = await restoreTrash(ids, mode);
       const failed = result.failed ?? [];
-      showToast(failed.length ? `恢复 ${result.restored?.length ?? 0} 项，${failed.length} 项失败` : '已恢复');
+      showToast(
+        failed.length
+          ? `恢复 ${result.restored?.length ?? 0} 项，${failed.length} 项失败`
+          : '已恢复',
+      );
       setSelected(new Set());
       await load();
       if (result.restored?.length) onRestored();
       if (failed.length) onFailures('部分项目未能恢复', failed);
     } catch (restoreError) {
-      if (restoreError instanceof ApiError && restoreError.status === 409 && restoreError.code === 'conflict') {
+      if (
+        restoreError instanceof ApiError &&
+        restoreError.status === 409 &&
+        restoreError.code === 'conflict'
+      ) {
         setConflict({
           ids,
           names: restoreError.existing.length ? [...restoreError.existing] : ids,
@@ -207,7 +215,12 @@ export function TrashDialog({ onClose, onRestored, onFailures }: TrashDialogProp
 
         <div className={styles.list}>
           {items.map((item) => (
-            <label key={item.id} className={styles.row} data-testid="trash-item" data-path={item.path}>
+            <label
+              key={item.id}
+              className={styles.row}
+              data-testid="trash-item"
+              data-path={item.path}
+            >
               <input
                 type="checkbox"
                 checked={selected.has(item.id)}

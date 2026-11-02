@@ -136,7 +136,10 @@ export function fetchTrash(signal?: AbortSignal): Promise<TrashListResponse> {
 }
 
 /** 恢复回收站条目；原位置冲突且 mode=ask 时返回 409。 */
-export function restoreTrash(ids: string[], mode: 'ask' | 'rename' = 'ask'): Promise<RestoreResponse> {
+export function restoreTrash(
+  ids: string[],
+  mode: 'ask' | 'rename' = 'ask',
+): Promise<RestoreResponse> {
   return requestJson<RestoreResponse>('/api/trash/restore', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
