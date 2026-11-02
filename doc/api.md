@@ -681,8 +681,8 @@ curl -s -X DELETE http://127.0.0.1:8080/api/share/record \
 独立公开页（不复用管理页脚本/HTML），无需登录。页面本身不区分 token 是否存在，
 不包含任何文件信息；数据由下方公开接口按 token + 可选提取码返回。
 
-- Phase 4 起返回 V2 多入口构建产物 `web-dist/share.html`（React），静态资源
-  与 `/v2/assets/*` 同源；前端尚未构建时回退旧内嵌模板。
+- 返回 V2 多入口构建产物 `web-dist/share.html`（React），静态资源与
+  `/v2/assets/*` 同源；前端尚未构建时返回 404。
 - 响应头：`X-Robots-Tag: noindex, nofollow`、`Referrer-Policy: no-referrer`、
   `Cache-Control: no-store`、严格 CSP（仅同源脚本/样式，禁止被嵌入）。
 - 页面支持单文件（信息 + 预览 + 下载）与目录（列表 + 单文件预览/下载 + 打包 zip），

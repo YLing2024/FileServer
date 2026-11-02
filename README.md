@@ -227,9 +227,17 @@ FileServer.exe --dir D:\static --allow-upload
 跨平台：Linux/macOS/WSL 用根目录 `Makefile`，Windows 可用 `build.bat`（首次自动下载
 Go 工具链到 `.tools\`，免安装）。
 
+前端是 React + TypeScript + Vite（源码 `web/`），构建产物提交在
+`internal/server/web-dist` 并被嵌入 exe。首次构建或改前端后需要 pnpm 12 / Node 24：
+
 ```
+# 前端（可选，仅改前端或首次检出时需要）
+make web-install   # pnpm install --frozen-lockfile
+make web-build     # 构建到 internal/server/web-dist
+make web-check     # typecheck + lint + test + build
+
 # Linux / macOS / WSL
-make check      # 提交前必跑：fmt + 三平台 vet/build + go test
+make check      # 提交前必跑：fmt + 三平台 vet/build + go test（有 pnpm 时附带前端检查）
 make build-all  # 构建 dist/FileServer-<os>-<arch>
 
 # Windows
@@ -237,17 +245,18 @@ build.bat                  # 构建到 dist\FileServer.exe
 release.ps1 -Version 1.2.3 # 打包 dist\FileServer-lite-<版本>.zip 与 -full-<版本>.zip
 ```
 
+没有 pnpm 或未安装 `web/node_modules` 时，`make check` 会提示并跳过前端检查，
+不阻断 Go 构建；CI 的 frontend job 仍会跑完整前端四段。
+
 端到端测试（Python 3.12 + Playwright，需先启动服务）：
 
 ```
 dist\FileServer.exe --dir .\testdata --port 8099 --no-qr
-python scripts\smoke_test.py        # 冒烟
-python scripts\regression_test.py   # 回归
-python scripts\mobile_test.py       # 移动端 + 灯箱 + zip
-python scripts\nav_test.py          # 导航/历史
-python scripts\special_e2e_test.py  # 特殊文件端到端
-python scripts\hls_e2e_test.py      # HLS 端到端
-python scripts\frontthumb_test.py   # 前端抽帧（需无 ffmpeg 服务）
+python scripts\v2_phase1_test.py    # 浏览：网格/列表/搜索/排序/缩略图/窄屏
+python scripts\v2_phase2_test.py    # 预览：灯箱/文本/视频/HLS/移动手势
+python scripts\v2_phase3_test.py    # 上传：分片/秒传/冲突/管理/回收站
+python scripts\v2_phase4_test.py    # 分享、会话、设置、公开页
+python scripts\v2_phase5_test.py    # Phase 5 全量回归（根路径 + 分享 + 认证 + 375）
 ```
 
 ## 项目结构
@@ -255,11 +264,12 @@ python scripts\frontthumb_test.py   # 前端抽帧（需无 ffmpeg 服务）
 ```
 cmd/fileserver/          入口：参数解析、局域网 IP 探测、控制台输出与二维码、优雅退出
 internal/server/         HTTP 服务：路由、文件与视频、播放决策、缩略图、文本编辑、认证、HLS、安全与路径
-internal/server/web/     内嵌前端（index.html / style.css / app.js / hls.min.js）
+internal/server/web-dist/ Vite 构建产物（go:embed 嵌入，根路径与 /v2/ 共用）
+web/                     React + TypeScript + Vite 前端源码（浏览器、预览、上传、管理、分享）
 internal/auth/           认证：自研 Argon2id/BLAKE2b、TOTP、会话与限速
 internal/qrcode/         纯 Go 二维码编码与终端渲染（+ TOTP 绑定二维码 SVG）
 internal/platform/       OS 差异（控制台编码、打开浏览器、进程组/Job Object 子进程回收）
-scripts/                 Playwright 测试脚本
+scripts/                 Playwright 端到端脚本（v2_phase1–5）
 testdata/ + doc/         测试样本（*.mp4 不入库）；项目文档
 build.bat + release.ps1  构建与打包
 ```

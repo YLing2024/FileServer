@@ -25,7 +25,9 @@ internal/server/
 ├── thumb.go        缩略图缓存（内存 LRU + 磁盘 + 失败记忆 + 忙碌计数）、冷门格式服务端抽帧
 ├── text.go         文本文件新建/预览/编辑（白名单 + 原子写 + 版本校验）
 ├── auth_handlers.go 认证 HTTP 层（引导/登录/会话/门禁，见 internal/auth）
-└── web/            内嵌前端（原生 HTML/CSS/JS，无构建；Go embed.FS）
+├── webdist.go      根路径与 /v2/ 共用的 Vite 构建产物（go:embed all:web-dist）
+└── web-dist/       React 前端构建产物（提交入库）
+web/                React + TypeScript + Vite 源码
 internal/auth/      认证状态机：自研 Argon2id/BLAKE2b、TOTP、会话与限速
 internal/platform/  OS 差异（控制台编码、打开浏览器、进程组/Job Object 子进程回收）
 internal/qrcode/    终端二维码 + TOTP 绑定二维码（SVG）
@@ -98,6 +100,7 @@ internal/qrcode/    终端二维码 + TOTP 绑定二维码（SVG）
 5. **缓存全在服务目录内**：`.FileServer\`（thumb/ hls/），不写系统目录。
    旧版本遗留的 `.FileServer\backup\` 为历史原文件备份，FileServer 不再写入或清理，
    请用 mp4norm 处理或手工恢复。
-6. **前端无构建**：原生 JS + embed.FS，改前端即改 Go 代码重新编译。
+6. **前端有构建但产物内嵌**：React + TypeScript + Vite（`web/`）构建到
+   `internal/server/web-dist`，再由 `go:embed` 嵌入 exe；改前端需 `pnpm build` 并重新编译。`/` 与 `/v2/` 共用同一份产物。
 7. **冷门格式支持可动态切换**：`transcodeEnabled` 原子变量，前端工具栏 🎬 按钮
    调 `/api/settings/ffmpeg` 即时开关并记忆选择（localStorage），无需重启服务。

@@ -139,7 +139,17 @@ build.bat                  # build to dist\FileServer.exe
 release.ps1 -Version 1.2.3 # package dist\FileServer-lite-<version>.zip and -full-<version>.zip
 ```
 
-Manual build and test:
+The frontend is React + TypeScript + Vite (`web/`); its build output is committed in
+`internal/server/web-dist` and embedded into the executable. pnpm 12 / Node 24 are only
+needed when changing the frontend:
+
+```
+make web-install   # pnpm install --frozen-lockfile
+make web-build     # build into internal/server/web-dist
+make web-check     # typecheck + lint + test + build
+```
+
+Manual Go build and test:
 
 ```
 .tools\go\bin\go.exe vet ./...
@@ -151,13 +161,11 @@ End-to-end tests (Python 3.12 + Playwright, service must be started first):
 
 ```
 dist\FileServer.exe --dir .\testdata --port 8099 --no-qr
-python scripts\smoke_test.py        # smoke
-python scripts\regression_test.py   # regression
-python scripts\mobile_test.py       # mobile + lightbox + zip
-python scripts\nav_test.py          # navigation/history
-python scripts\special_e2e_test.py  # special files end-to-end
-python scripts\hls_e2e_test.py      # HLS end-to-end
-python scripts\frontthumb_test.py   # frontend frame extraction (needs a server without ffmpeg)
+python scripts\v2_phase1_test.py    # browsing: grid/list/search/sort/thumbnails/narrow screen
+python scripts\v2_phase2_test.py    # preview: lightbox/text/video/HLS/mobile gestures
+python scripts\v2_phase3_test.py    # upload: chunks/instant/conflicts/manage/trash
+python scripts\v2_phase4_test.py    # sharing, sessions, settings, public page
+python scripts\v2_phase5_test.py    # phase 5 full regression (root + share + auth + 375px)
 ```
 
 ## Project structure
@@ -165,10 +173,11 @@ python scripts\frontthumb_test.py   # frontend frame extraction (needs a server 
 ```
 cmd/fileserver/          entry: flag parsing, LAN IP detection, console output and QR code, graceful exit
 internal/server/         HTTP service: routing, files and video, playback decisions, thumbnails, HLS, security and paths
-internal/server/web/     embedded frontend (index.html / style.css / app.js / hls.min.js)
+internal/server/web-dist/ Vite build output (embedded via go:embed; served at / and /v2/)
+web/                     React + TypeScript + Vite frontend sources
 internal/qrcode/         pure-Go QR encoding and terminal rendering
 internal/platform/       OS differences (console encoding, opening the browser, child process reaping)
-scripts/                 Playwright test scripts
+scripts/                 Playwright end-to-end scripts (v2_phase1–5)
 testdata/ + doc/         test samples (*.mp4 not committed); project docs
 build.bat + release.ps1  build and packaging
 ```

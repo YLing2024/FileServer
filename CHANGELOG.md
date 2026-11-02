@@ -53,6 +53,13 @@
 
 ### Changed
 
+- **Phase 5：新前端切换为默认根路径**。React 构建产物同时服务 `/` 与 `/v2/`
+  （同一 handler、同一份 `index.html`，`/v2` 精确路径 301 到 `/`）；静态资源仍为
+  `/v2/assets/*`（一年 immutable），SPA fallback、CSP、缓存头保持切换前策略。
+  `/s/<token>` 继续返回新分享页。首次认证设置（口令 / TOTP）改由新前端
+  `SetupForm` 承接，不再依赖旧页面。`make check` 在 pnpm 与依赖可用时附带前端
+  typecheck/lint/test/build，缺失时提示并跳过。旧原生前端与相关 E2E 脚本已移除。
+  回退方式见下方「已移除」。
 - 移动端响应式：窄屏/触屏指针（`pointer: coarse`）下工具栏与面包屑按钮 ≥44px、视图切换等
   图标按钮 ≥32×32、搜索框与表单控件 ≥44px 高且字号 ≥16px（防 iOS 聚焦放大整页）、相邻操作
   间距 ≥8px；登录/新建弹窗窄屏按钮单列；可见小字号抬到 ≥12px。断点媒体查询不覆盖 ≥992px
@@ -68,6 +75,18 @@
 - `release.ps1 -Version` 现在真的把版本注入 exe，并输出 `dist/SHA256SUMS.txt`。
 - Windows 专属 syscall 隔离进 `internal/platform/`，`internal/server` 在非 Windows 上也
   可编译与测试。
+
+### Removed
+
+- 旧原生前端 `internal/server/web/`（`app.js`、`manage.js`、`share.js`、
+  `share-admin.js`、`share.css`、`sha256.js`、`hash-worker.js`、`hls.min.js`、
+  `style.css` 等）及相关 E2E 脚本；不再保留运行时新旧切换开关。
+- **回退到旧前端**：旧代码已从当前树删除，只能依赖 git 历史。执行
+  `git log -- internal/server/web` 找到删除前的提交，恢复该目录，并把
+  `internal/server/server.go` 的 `/` 路由与 `internal/server/webdist.go` 恢复到
+  切换前版本（旧 `frontendHandler`）。更简单的整仓回退：
+  `git checkout <切换前提交> -- internal/server web`，然后重新 `go build`；
+  不要只恢复页面文件而保留新路由，否则会出现两套 index。
 
 ### Fixed
 

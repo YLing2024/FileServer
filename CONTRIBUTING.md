@@ -9,8 +9,10 @@
 make check
 ```
 
-一条命令跑完 `gofmt` 断言 + `GOOS=windows` 交叉 `vet`/`build` + `go test ./...`，
-**必须 exit 0**。CI（`.github/workflows/ci.yml`）会重复同样的检查并拦下不合规提交。
+一条命令跑完 `gofmt` 断言 + 三平台交叉 `vet`/`build` + `go test ./...`；
+检测到 pnpm 与 `web/node_modules` 时附带前端 typecheck/lint/test/build，缺失则提示
+跳过，**Go 部分必须 exit 0**。CI（`.github/workflows/ci.yml`）会重复同样的检查并
+用独立 `frontend` job 跑完整前端四段。
 
 常用子命令：
 
@@ -43,9 +45,10 @@ Windows 侧等价入口：`build.bat`（vet + build）、`release.ps1 -Version x
 需要 Python 3.12 + Playwright，并先启动被测服务（默认 `http://127.0.0.1:8099`）：
 
 ```bash
-python scripts/smoke_test.py
-python scripts/regression_test.py
-python scripts/hls_e2e_test.py
+python scripts/v2_phase1_test.py   # 浏览
+python scripts/v2_phase2_test.py   # 预览/播放
+python scripts/v2_phase4_test.py   # 分享/会话
+python scripts/v2_phase5_test.py   # Phase 5 全量回归
 ```
 
 详见 `doc/build-and-test.md`。

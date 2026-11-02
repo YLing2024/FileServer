@@ -7,7 +7,7 @@
 - golangci-lint v2.14.0（可选，本地复现 CI 的 lint；CI 会自动安装同版本）。
 - ffmpeg：可选组件，测试视频生成与 GPU 转码需要。
 - Python 3.12 + Playwright（浏览器端到端测试）。
-- 前端（仅 V2 前端与 `make web-*` 需要）：Node.js >= 24、pnpm 12（见 `web/.nvmrc`）。
+- 前端：Node.js >= 24、pnpm 12（见 `web/.nvmrc`）；构建产物已提交，只有改前端时才需要。
 
 ## 2. 构建与校验
 
@@ -16,7 +16,7 @@
 （linux/darwin 的 amd64+arm64、windows amd64）交叉 vet/build。
 
 ```bash
-make check                 # fmt-check + 三平台 vet + 三平台 build + go test ./...（提交前必跑）
+make check                 # fmt-check + 三平台 vet + 前端检查（有 pnpm 时）+ 三平台 build + go test（提交前必跑）
 make fmt                   # gofmt -w .
 make fmt-check             # 断言无未格式化文件
 make vet                   # GOOS=windows GOARCH=amd64 go vet ./...（单目标）
@@ -37,7 +37,8 @@ make web-build             # pnpm build（Vite → internal/server/web-dist）
 make web-check             # typecheck + lint + test + build
 ```
 
-`make check` 不包含前端，避免没有 pnpm 的环境挂掉；前端改动请另跑 `make web-check`。
+`make check` 会检测 pnpm 与 `web/node_modules`：缺失时打印提示并跳过前端检查，
+不阻断 Go 构建；CI 的 `frontend` job 始终跑完整四段并校验构建产物可复现。
 
 Windows 侧：
 
@@ -170,45 +171,15 @@ $env:PYTHONIOENCODING='utf-8'   # 控制台中文输出
 
 | 脚本 | 验证内容 |
 |---|---|
-| `smoke_test.py` | 冒烟：列表/导航/下载/搜索 |
-| `regression_test.py` | 回归：三层面包屑、12 视频缩略图（浏览器抽帧 + 失败降级）、播放器释放 |
-| `nav_test.py` | URL 驱动导航（前进/后退/刷新恢复） |
-| `mobile_test.py` | 移动端视口 + zip 打包下载 |
-| `mobile_ui_check.py` | 移动端 UI 检查（布局/触控） |
-| `special_e2e_test.py` | 特殊字符文件名端到端 |
-| `create_e2e_test.py` | **新建验收**：建文件夹 → 进入 → 建空文件（0 字节）→ 建 .txt 编辑保存 → 回上级 |
-| `frontthumb_test.py` | 前端抽帧模式（需**无 ffmpeg** 服务，见下） |
-| `hls_e2e_test.py` | HLS 起播/seek（生成 HEVC/MKV 测试片） |
-| `thumbspeed_test.py` | **缩略图速度验收**：大目录冷浏览出图速度 + 抽帧中播放不受影响 |
-| `starvation_test.py` | **播放饥饿验收**：大目录浏览抽帧正忙时点开视频，起播快、播放不卡、缩略图恢复 |
-| `v2_phase1_test.py` | V2 浏览：网格/列表、搜索、排序、缩略图与 375 宽 |
-| `v2_phase2_test.py` | V2 预览：灯箱、文本、视频播放与移动端手势 |
-| `v2_phase3_test.py` | V2 上传与管理：临时目录副本 + 自动起服务；上传/冲突三选项/重命名/移动/复制/删除/回收站/多选/375 宽 |
-| `v2_phase4_test.py` | V2 分享与设置：带提取码分享/匿名下载、目录预览、取消分享、会话列表、375 宽公开页 |
+| `v2_phase1_test.py` | 浏览：网格/列表、搜索、排序、缩略图与 375 宽 |
+| `v2_phase2_test.py` | 预览：灯箱、文本、视频播放与移动端手势 |
+| `v2_phase3_test.py` | 上传与管理：临时目录副本 + 自动起服务；上传/冲突三选项/重命名/移动/复制/删除/回收站/多选/375 宽 |
+| `v2_phase4_test.py` | 分享与设置：带提取码分享/匿名下载、目录预览、取消分享、会话列表、375 宽公开页 |
+| `v2_phase5_test.py` | Phase 5 全量回归：根路径浏览/搜索/排序/主题/上传/多选删除、预览、分享与撤销、认证拒绝/登录/退出、375 宽与三平台构建检查 |
 
-`starvation_test.py`（真实目录验收，有头浏览器）：
-
-```powershell
-python scripts\starvation_test.py --base http://127.0.0.1:8080 --dir /大目录 --video 目标视频关键词
-# --dir/--video 换成被测机器上的真实大目录与目标视频
-```
-
-`thumbspeed_test.py`（缩略图速度验收，有头浏览器）：
-
-```powershell
-python scripts\thumbspeed_test.py --base http://127.0.0.1:8080 --dir /大目录 --video 目标视频关键词
-# 断言：首张缩略图 ≤8s、可见 ≥6 张、起播成功、播放推进 ≥9s/12s
-```
-
-断言：起播 ≤15s（实测 ~1s）、播放 15s 推进 ≥10s、播放期间 0 个新缩略图请求、
-返回列表后缩略图请求恢复。
-
-`frontthumb_test.py` 需要无 ffmpeg 服务（排除 PATH/LOCALAPPDATA 的 ffmpeg）：
-
-```powershell
-# 把 exe 拷到临时目录，用 cmd 包装清除 PATH/LOCALAPPDATA 后启动 8098
-$env:BASE='http://127.0.0.1:8098'; python scripts\frontthumb_test.py
-```
+旧的 `smoke_test.py` / `regression_test.py` / `mobile_test.py` / `nav_test.py` /
+`special_e2e_test.py` / `hls_e2e_test.py` / `frontthumb_test.py` / `create_e2e_test.py`
+等脚本依赖已删除的原生前端 DOM，已随 Phase 5 一并移除；新前端行为由 `v2_phase*.py` 覆盖。
 
 ### 手工验收清单（每次改动播放/缩略图相关代码后）
 
@@ -219,8 +190,8 @@ $env:BASE='http://127.0.0.1:8098'; python scripts\frontthumb_test.py
 
 ## 5. 常见问题
 
-- **测试视频生成失败**：`hls_e2e_test.py` 用 PATH 里的 `ffmpeg` 生成测试片，
-  确保 `ffmpeg` 在 PATH 或脚本同目录。
+- **HLS 用例被跳过 / 测试视频生成失败**：`v2_phase2_test.py` 的 HLS 部分需要
+  PATH 里可用的 `ffmpeg`；缺失时脚本会打印原因并跳过该段，其余用例仍执行。
 - **hevc/mkv 视频没有缩略图**：Chromium 无 HEVC 解码器，抽帧源加载失败保持图标
   ——浏览器能力限制，与服务端无关（在线播放不受影响，走 HLS 转码）。
 - **改前端不生效**：静态资源 `no-store` + exe 内嵌，需重新编译部署。

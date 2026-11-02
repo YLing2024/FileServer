@@ -1,7 +1,8 @@
-# FileServer 前端（V2）
+# FileServer 前端
 
-React + TypeScript + Vite 前端，产物由 `go:embed` 嵌入单文件 exe，挂在 `/v2/`；
-旧前端仍在 `/`。两套前端共用同一组 `/api/*`，切换前互不影响。
+React + TypeScript + Vite 前端，产物由 `go:embed` 嵌入单文件 exe，默认挂在根路径
+`/`；`/v2/` 作为兼容前缀返回同一份 `index.html`（`/v2` 精确路径 301 到 `/`）。
+旧的 `internal/server/web` 原生 JS 前端已在 Phase 5 删除，不再有两套页面。
 
 Phase 0 交付工具链与骨架，Phase 1 交付浏览视图：工具栏、网格/列表、搜索、
 排序、分页、图片/视频缩略图、空态/骨架/错误态与窄屏适配。Phase 2 交付预览与
@@ -9,6 +10,7 @@ Phase 0 交付工具链与骨架，Phase 1 交付浏览视图：工具栏、网�
 移动端手势。Phase 3 交付上传与文件管理：文件/文件夹上传、分片断点续传、秒传、
 同名冲突三选一、多选、重命名/移动/复制/删除/回收站。Phase 4 交付分享与设置：
 分享创建/管理、独立公开分享页 `/s/<token>`、会话管理、内嵌登录、关于/版本信息。
+Phase 5 把新前端切换为默认根路径并删除旧前端。
 
 ## 命令
 
@@ -32,26 +34,28 @@ make web-build
 make web-check                    # typecheck + lint + test + build
 ```
 
-`make check` 仍只跑 Go 部分；没有 pnpm 的环境不会被前端拖挂。
+`make check` 会检测 pnpm 与 `web/node_modules`：缺失时打印提示并跳过前端检查，
+不阻断 Go 构建；CI 的 frontend job 始终跑完整四段。
 
-## 构建产物与 /v2/
+## 构建产物与根路径
 
 - `vite.config.ts` 的 `base` 固定为 `/`，`assetsDir` 设为 `v2/assets`，
-  因此构建出的资源 URL 正好是 `/v2/assets/<hash>.js|css`。
+  因此构建出的资源 URL 仍是 `/v2/assets/<hash>.js|css`（Phase 5 切换后保持不变）。
 - 产物提交入库（`internal/server/web-dist`），CI 用
   `git diff --exit-code internal/server/web-dist` 验证可复现。
-- `internal/server/webdist.go` 注册 `/v2` → `/v2/` 与 `/v2/` 子树：
+- `internal/server/webdist.go` 把同一个 handler 挂到 `/` 与 `/v2/`：
     - `index.html` 与 SPA fallback：`Cache-Control: no-store`；
-    - `/v2/assets/*`：一年 immutable；
-    - 缺失的 asset 返回 404，未知页面路径回退 index.html。
+    - `/v2/assets/*`（兼容 `/assets/*`）：一年 immutable；
+    - 缺失的 asset 与带扩展名的未知文件返回 404，未知页面路径回退 index.html；
+    - `/v2` 精确路径 301 到 `/`，保留查询串。
 - `pnpm build` 最后会写 `web-dist/.keep`，保证 `//go:embed all:web-dist`
-  在产物被清空时仍能编译；运行时若缺少 `index.html`，`/v2/` 返回 503。
+  在产物被清空时仍能编译；运行时若缺少 `index.html`，根路径返回 503。
 
 ## 鉴权与主题约定
 
 - token 沿用旧前端键：`fs.token` / `fs.token.expires`，sessionStorage 优先，
   其次 localStorage；请求同时带 `X-Auth` 与 `Authorization: Bearer`。
-  401 清空凭据并跳回 `/`（认证开启时旧前端显示登录覆盖层）。
+  401 清空凭据并跳回 `/`（认证开启时显示内嵌登录）。
 - 图片/视频等浏览器原生 GET 请求通过 `POST /api/auth/ticket` 换短票，
   以 `?t=` 附加；认证关闭时不产生该请求。
 - 主题键 `fs.theme`（`dark` / `light`），未设置时跟随
@@ -77,8 +81,9 @@ make web-check                    # typecheck + lint + test + build
 - **图片灯箱**：`/api/file` 原图优先，加载骨架，滚轮/双指缩放（25%–800%）、
   旋转、左右切换、下载；键盘 `←/→/Esc/+/-/R`，触屏横滑切图；固定深色背景。
 - **PDF**：`<iframe>` 内嵌浏览器 PDF 查看器，未启用时显示下载兜底；下载入口常驻。
-- **文本/代码**：等宽只读预览（编辑留 Phase 3）；超过 2 MiB 用 Range 只取前
-  2 MiB 并提示截断。
+- **文本/代码**：等宽预览；超过 2 MiB 用 Range 只取前 2 MiB 并提示截断。
+  白名单扩展名可点「编辑」进入编辑态，保存带读取时版本；409 提示他人已修改。非白名单
+  或超限只在服务端拒绝后提示，不破坏只读预览。
 - **音频**：原生 `<audio controls>`，与视频共用进度记忆。
 - **视频播放器**：
     - `/api/video-info` 决策：`direct` 直链或 `hls`（hls.js 1.5.20，按需动态加载）；
@@ -126,12 +131,13 @@ make web-check                    # typecheck + lint + test + build
 - **会话管理**：设置 →「已登录设备/会话」列出会话（UA、登录时间、记住我、IP），
   标出当前设备并可下线其他设备。
 - **登录与失效**：`AuthGate` 探测 `/api/auth/status`；未登录时内嵌口令/TOTP/记住我
-  表单。首次 TOTP 绑定仍引导到旧版 `/`。API 401 清凭据与短票后原地重新登录。
+  表单；首次设置由 `SetupForm` 在新前端内完成（口令、TOTP 二维码/密钥、可跳过 TOTP）。
+  API 401 清凭据与短票后原地重新登录。
 - **设置/关于**：展示 `/api/health` 的版本/commit/Go/平台与 `/api/info` 的服务标识；
   冷门格式开关的说明文案与旧版一致，并提供开启/关闭按钮。
 - **多入口构建**：`vite.config.ts` 的 `rollupOptions.input` 同时包含 `index.html` 与
-  `share.html`，资源统一输出到 `/v2/assets`；Go 优先返回
-  `web-dist/share.html`，未构建时回退旧模板。
+  `share.html`，资源统一输出到 `/v2/assets`；Go 在 `/s/<token>` 返回
+  `web-dist/share.html`，产物缺失时返回 404。
 
 ## 验收脚本
 
@@ -144,7 +150,7 @@ go run ./cmd/fileserver --dir testdata --host 127.0.0.1 --port 18080 --no-qr --f
 ```
 
 Phase 1 覆盖根目录 7 项、进入 photos、图片/视频缩略图、网格/列表切换、排序、
-搜索、375×780 不溢出与旧前端 `/` 回归。Phase 2 覆盖灯箱缩放/切图/刷新恢复、文本
+搜索、375×780 不溢出与 `/v2/` 兼容入口。Phase 2 覆盖灯箱缩放/切图/刷新恢复、文本
 预览、视频播放/空格暂停/画中画、375×780 双击/长按/横滑/竖滑、返回滚动位置与
 HLS `abandon=1`；没有 ffmpeg 时跳过 HLS 并打印原因。两个脚本都会输出截图路径。
 
@@ -168,6 +174,16 @@ Phase 4 同样自包含（临时目录副本 + 随机端口 + 认证服务）：
 覆盖带提取码的文件分享创建、匿名输码下载且字节一致、目录分享与图片预览、取消分享
 后公开页不可用、会话列表标出当前设备、375 宽公开页不溢出，并输出分享创建对话框、
 公开分享页、会话列表与 375 宽公开页截图。
+
+Phase 5 是切换后的全量回归（同样自包含）：
+
+```bash
+/root/.venv/cdp/bin/python scripts/v2_phase5_test.py
+```
+
+覆盖根路径浏览/进入目录/网格列表/搜索/排序/主题/上传/多选删除、图片灯箱/视频播放/
+文本预览、带码分享到匿名下载字节一致与撤销、未登录 401 与登录/退出、375 宽浏览、
+播放与分享页，并验证旧资源路径 404 与 `/v2/` 兼容入口。
 
 ## 目录
 

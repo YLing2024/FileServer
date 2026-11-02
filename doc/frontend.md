@@ -1,256 +1,142 @@
 # 前端架构
 
-> V2 前端（React + TypeScript + Vite）已在 `/v2/` 并行开发，源码在 `web/`，
-> 构建产物在 `internal/server/web-dist`，说明见 `web/README.md` 与
-> `doc/COMPONENTS.md`。Phase 1 已交付浏览视图（工具栏/搜索/排序/网格/列表/分页/
-> 缩略图）；Phase 2 已交付 `?view=` 预览路由、图片灯箱、PDF/文本预览、音频与
-> 视频播放器（直链/HLS、控制条、快捷键、移动端手势、进度记忆）；Phase 3 已交付
-> 上传与管理（文件/文件夹/拖拽/粘贴、分片断点续传、秒传、同名冲突、多选、
-> 重命名/移动/复制/删除/回收站）；Phase 4 已交付分享与设置（分享创建/管理、
-> 独立公开页 `/s/<token>` 多入口构建、会话管理、内嵌登录、关于/版本）。
-> 下文仍描述默认 `/` 的旧原生前端，Phase 5 切换前两者并存。
+前端是 **React 19 + TypeScript + Vite** 单页应用，源码在 `web/`，构建产物在
+`internal/server/web-dist`，由 `//go:embed all:web-dist` 嵌入单文件 exe。Phase 5
+起新前端同时占据 `/` 与 `/v2/`（同一个 handler、同一份 `index.html`，不再有两套
+页面）；旧的 `internal/server/web` 原生 JS 前端已删除。公开分享页仍由 `/s/<token>`
+返回 `web-dist/share.html`（独立 Vite 入口）。
 
-原生 HTML/CSS/JS，无构建步骤，经 `embed.FS` 内嵌进 exe（`internal/server/web/`）。
-改前端 = 改源码重新编译（静态资源响应 `Cache-Control: no-store`，浏览器不缓存旧版）。
+> 组件登记见 `doc/COMPONENTS.md`，开发与构建命令见 `web/README.md`，
+> 前端检查与发布流程见 `doc/build-and-test.md`。
 
-## 1. 文件
+## 1. 目录
 
 ```
 web/
-├── index.html   单页壳：浏览视图 + 预览视图 + 播放器骨架
-├── app.js       全部逻辑（模块化注释分区）
-├── manage.js    文件管理（多选/右键/回收站）
-├── share-admin.js 分享创建/结果/管理（管理页，依赖 app.js 全局）
-├── share.html   独立公开分享页（不加载 app.js/manage.js）
-├── share.js     公开页逻辑（token + 可选提取码）
-├── share.css    公开页与管理端分享弹窗样式
-├── sha256.js    可增量更新的 SHA-256（秒传指纹，无依赖）
-├── hash-worker.js 大文件哈希 Worker（importScripts sha256.js）
-├── style.css    深浅双主题
-└── vendor/hls.min.js  hls.js（内嵌 ~415KB，首次转码前预加载）
+├── index.html                主应用入口（/ 与 /v2/）
+├── share.html                公开分享页入口（/s/<token>）
+├── vite.config.ts            base=/、assetsDir=v2/assets、双入口、/api 与 /hls 代理
+├── src/
+│   ├── main.tsx              挂载、主题初始化
+│   ├── App.tsx               错误边界 + Toast + 认证门禁 + 浏览页
+│   ├── api/                  fetch 封装、凭据/短票、错误归一、各业务接口
+│   ├── domain/               文件类型、大小/时间格式化、路径、排序
+│   ├── components/           Toast、ErrorBoundary、ThemeToggle、Modal
+│   ├── features/auth/        认证状态探测与内嵌登录
+│   ├── features/browse/      工具栏、网格/列表、选择、搜索、缩略图、上传入口
+│   ├── features/preview/     图片灯箱、视频/音频、PDF、文本预览
+│   ├── features/upload/      上传队列、冲突处理、拖拽/粘贴
+│   ├── features/manage/      重命名/移动/复制/删除/回收站
+│   ├── features/share/       分享创建/管理
+│   ├── features/settings/    关于/版本、会话管理
+│   ├── share/                公开分享页独立入口
+│   └── styles/               tokens.css、global.css、通用按钮
+└── scripts/                  构建产物占位文件脚本
 ```
 
-## 2. 状态与导航
+## 2. 路由与状态
 
-- `state`：path/view/sort/order/searching/entries/hasMore/hls 等。
-- **URL 驱动导航**：`?path=` 浏览目录、`?view=` 预览文件；`pushState` + `popstate`
-  统一处理——刷新/前进/后退/手机返回手势都能恢复视图。
-- 列表滚动位置在离开前记忆（`rememberScroll`），返回时恢复。
+- 浏览页由查询参数驱动：`?path=<相对路径>` 浏览目录，`?view=<相对路径>` 打开预览。
+  刷新、前进/后退、手机返回手势都由 `popstate` 恢复；不在 URL 中存凭据。
+- 视图/排序偏好沿用旧键：`fs.view`（grid/list）、`fs.sort`（name/size/time）、
+  `fs.order`（asc/desc）；主题键 `fs.theme`（dark/light），未设置时跟随系统。
+- 前端路由只有查询参数，不依赖 History API 的路径段，因此 Go 端的 SPA fallback
+  只需把未知的非资源路径交回 `index.html`。
 
-## 3. 视频缩略图（纯浏览器抽帧）
+## 3. 服务端静态资源约定
 
-**视频缩略图 100% 由浏览器生成**（服务端不再生成视频缩略图；图片缩略图仍走
-服务端 Go 原生解码）。
+- `vite.config.ts` 的 `base` 为 `/`，`assetsDir` 为 `v2/assets`，哈希资源 URL 仍是
+  `/v2/assets/<hash>.js|css`，与 Phase 4 保持一致。
+- `internal/server/webdist.go` 把同一个 handler 挂到 `/` 与 `/v2/`：
+  - `/`、`/v2/`：同一份 `index.html`，`Cache-Control: no-store`；
+  - `/v2/assets/*`（兼容 `/assets/*`）：一年 `immutable`；
+  - 其他静态文件：`no-store`；
+  - 未知页面路径回退 `index.html`；带扩展名的未知文件（如旧 `/app.js`）返回 404；
+  - `/v2` 精确路径 301 到 `/`，保留查询串；
+  - 未匹配的 `/api/*` 不会被 SPA 吞掉，仍返回 404。
+- CSP、Referrer-Policy、nosniff 与切换前一致，未放宽；公开分享页使用更严格的
+  独立 CSP（不允许内联样式）。
+- 产物缺失时根路径返回 503，API 不受影响；`web-dist/.keep` 保证 embed 可编译。
 
-### 3.1 抽帧源（`/api/thumb-src`）
+## 4. 浏览视图
 
-- 关键背景：Chromium 对 `<video>` 源发出**开区间 Range**（`bytes=0-`）——
-  直接给原文件会把整个 1.4GB 视频全传一遍（磁盘/网络/内存打爆，曾实测
-  单张抽帧整段下载 500MB+）。
-- 服务端返回**截短的合法 MP4**（≤16MB）：moov 在头部的文件截头部 16MB；
-  moov 在尾部的文件返回头部 16MB + moov 拼接（样本偏移不变仍合法）。
-- 浏览器把截短文件当完整文件解析：元数据秒读、seek 到 `min(1, dur*0.1)`，
-  样本命中 → canvas 截帧 → dataURL（`thumbCache` 会话 LRU，200 条）。
+- 工具栏：品牌回根、面包屑、搜索、刷新、上传（可选）、回收站、分享、冷门格式开关、
+  网格/列表切换、排序、主题、设置。
+- 网格：图片走 `/api/thumb`；MP4/M4V/MOV/WebM 走 `/api/thumb-src` + `<video>`
+  seek + canvas 抽帧（IntersectionObserver 懒加载、最多 3 路并发、卸载取消）；
+  冷门格式在开启服务端转码时走 `/api/thumb`，否则显示图标。
+- 列表：名称/大小/修改时间三列，目录优先，名称按钮可进入目录或下载文件。
+- 分页：`/api/list` 使用 `limit=300` + `offset`，滚动到底或点击「加载更多」追加。
+- 搜索：输入 250ms 防抖后请求 `/api/search`，Esc 清空并回到目录；命中片段高亮。
+- 文件点击：图片/视频/音频/PDF/文本/代码进入预览，其余类型直接下载。
+- 选择：登录管理会话下桌面单击选中、Ctrl/⌘ 增减、Shift 连选、Ctrl/⌘+A 全选、
+  Esc 清空；移动端长按进入选择。选择条提供下载、分享、重命名、移动、复制、删除。
+- 空态、骨架屏、错误态与重试按钮统一，不静默失败。
 
-### 3.2 队列与并发
+## 5. 预览与播放
 
-- 卡片进入视口（IntersectionObserver，400px 预加载区）→ `enqueueFrontThumb`
-  入队；`pumpVideoThumbs` 按 **3 路并发**消费。
-- 每个任务：隐藏 `<video preload=metadata>` + 20s 超时；解码不支持
-  （HEVC/MKV）/损坏文件 → 保持图标，绝不硬拉；偶发网络错误重试一次。
+- **图片灯箱**：`/api/file` 原图，滚轮/双指缩放（25%–800%）、旋转、左右切换、
+  下载；键盘 `←/→/Esc/+/-/R`，触屏横滑切图。
+- **视频**：先查 `/api/video-info`，原生格式直链 `<video>`；需要转码时由 hls.js
+  拉 `/api/hls`。不自动播放；空格播放/暂停、←→ ±5s、↑↓ 音量、M 静音、F 全屏。
+  离开预览时 `abandon=1` 终止服务端转码并销毁 hls 实例。
+- **音频**：一律直链，浏览器原生控件。
+- **PDF**：同源 `<iframe>`，未启用时显示下载兜底。
+- **文本/代码**：等宽预览走 `/api/file`（超 2 MiB 用 Range 截断）；点击「编辑」按钮时
+  才请求 `/api/text` 获取内容与版本，保存带版本校验，409 提示他人已修改；白名单与
+  2 MiB 上限由服务端判定，超限仍可只读预览。
+- 移动端手势：双击左/右 1/3 快退/快进 10s、中间播放暂停；长按 350ms 临时 2x；
+  横滑 seek（松手才提交）；右侧竖滑调音量。桌面鼠标环境不注册这些手势。
 
-### 3.3 播放绝对优先（核心体验）
+## 6. 上传与文件管理
 
-- `thumbPaused` 全局开关：点开视频的瞬间置 true，不再启动新抽帧；
-- `pauseThumbs`：**中止所有在途抽帧 video 元素**（`activeGrabsSet` 统一
-  `src=''`，立即释放连接与磁盘 IO 给播放）；
-- 返回列表（`showBrowse`）：置 false，重新渲染的卡片自动重新抽帧。
+- 上传默认关闭：`/api/info` 的 `allow_upload=false` 时不渲染上传入口，端点自身也
+  拒绝。开启后支持文件多选、文件夹（`webkitdirectory` / `webkitGetAsEntry`）、
+  整页拖拽与粘贴；目标目录在选择时快照。
+- 队列逐文件显示校验/秒传检查/上传进度，可取消与重试；文件夹先 `POST /api/upload/mkdir`
+  保留空目录，单次最多 2000 文件。
+- >8 MiB 文件按 8 MiB 分片，`upload_id` 由前 1 MiB + 大小 + 名称派生，中断后重新
+  选择同一文件只补缺片；`POST /api/upload/complete` 合并。
+- 秒传：前端流式 SHA-256（>200 MiB 用 Worker，失败回退主线程）后调
+  `POST /api/upload/instant`；命中直接落位，未命中继续上传。
+- 同名冲突：`mode=ask`，409 `{code:"conflict", existing:[...]}` 弹窗选择覆盖 /
+  自动改名 / 取消，对剩余整批生效。
+- 文件管理（仅登录会话）：重命名、移动、复制、删除到回收站、恢复/彻底删除/清空；
+  批量逐项返回成功与失败明细，部分失败不静默。删除仅移入 `.FileServer/trash/`，
+  不改用户原文件之外的路径。
 
-## 4. 播放器
+## 7. 分享与认证
 
-- 视频决策：`video-info`（会话级缓存）→ direct（`<video src>`）或 hls（hls.js）。
-- **不自动播放**：点卡片进预览，用户点大播放键（或空格）起播——避免误触发
-  与自动播放策略问题；播放意图在源就绪前记录（`__wantPlay`），就绪后自动续播。
-- HLS：
-  - `attachHls`：VOD 快照流 + 8s manifest 轮询（`startLoad`）+ seek 收敛
-    （超前 seek 收敛到已生成范围并提示）；
-  - hls.js 参数与服务端分片等待上限对齐（30s 超时、4 次重试）；
-  - 离开预览页：`abandon=1` 通知服务端终止转码，`hls.destroy()` + 释放媒体资源。
-- 快捷键：空格播放/暂停、←→ ±5s、↑↓ 音量、M 静音、F 全屏。
-- 进度条：拖拽 seek、缓冲进度显示、tooltip 预览时间；HLS 转码初期时长未知时
-  用服务端 ffprobe 时长兜底显示。
-- 音频：一律直链（浏览器原生）。
-- 画中画（`#pbPip`，位于全屏按钮左侧）：Chromium 用
-  `document.pictureInPictureEnabled` + `video.requestPictureInPicture()`；iOS Safari 用
-  `video.webkitSupportsPresentationMode('picture-in-picture')` +
-  `video.webkitSetPresentationMode('picture-in-picture')`（退出传 `inline`）。两种能力都不支持时
-  按钮 `display:none`，不占位。`enterpictureinpicture` / `leavepictureinpicture` /
-  `webkitpresentationmodechanged` 同步图标与 `aria-pressed`；快捷键 `P`。
-  **离开预览页**：若仍在 PiP，先 `document.exitPictureInPicture()`（iOS 设回 `inline`），
-  再走 `stopPreview()` 的 `abandon=1` 与 `hls.destroy()`，避免演示窗口拖住媒体释放。
-- 移动端手势：仅在触摸设备注册（`matchMedia('(pointer: coarse)').matches ||
-  'ontouchstart' in window`），桌面鼠标环境完全不注册，键盘与按钮行为不变。
-  手势区域是播放器画面；`.player-bar` 与其他按钮上的触摸不参与判定。画面中央的
-  大播放键是覆盖在画面上的按钮，保留「单击起播」，同时作为手势面（否则长按/双击在
-  画面正中失效）；它上面的单击不计入双击判定。
-  | 手势 | 区域 | 行为 |
-  |---|---|---|
-  | 双击 | 左 1/3 | `currentTime -= 10s`，中央浮层提示 `-10s` |
-  | 双击 | 右 1/3 | `currentTime += 10s`，中央浮层提示 `+10s` |
-  | 双击 | 中间 1/3 | 播放 / 暂停 |
-  | 长按 350ms | 画面任意处 | 临时 2x，中央常驻「2x 倍速播放中」 |
-  | 横滑 | 画面任意处 | 累计位移 >10px 进入 seek 预览，松手提交 |
-  | 竖滑 | 右侧 1/3 | 调音量（同步 `#pbVol`），松手结束 |
+- 分享创建：文件或文件夹、1/7/30 天或永久、可选 4 位提取码、下载次数上限、
+  预览开关与备注；创建成功展示绝对链接与提取码，可复制。
+- 分享管理：列表展示状态/有效期/下载次数，可复制链接、撤销（立即失效）、删除记录。
+- 公开分享页：独立 `share.html`，匿名访问，支持提取码、单文件预览/下载、目录浏览、
+  目录内单文件预览与当前目录 zip；不加载管理端组件，错误页不显示真实路径。
+- 认证：`AuthGate` 探测 `/api/auth/status`；未登录时内嵌口令/TOTP/记住我表单。
+  首次设置由 `SetupForm` 在新前端内完成（口令、TOTP 二维码/密钥、可跳过 TOTP），
+  不再依赖旧前端。凭据键仍为 `fs.token` / `fs.token.expires`，sessionStorage 优先、
+  其次 localStorage；请求带 `Authorization: Bearer`，媒体/下载等原生请求用
+  `POST /api/auth/ticket` 换 5 分钟短票并以 `?t=` 附加。401 清凭据与短票后原地重新登录。
+  默认认证关闭。
 
-  - 双击间隔 <300ms；单击不做事（起播仍由大播放键负责）。
-  - 长按倍速会记录 `originalRate`（用户可能已选 1.5x），松手 / `touchcancel` / 位移超过 10px
-    时恢复原值，而不是重置为 1；长按结束后 300ms 内忽略 tap，防误触。
-  - 横滑只更新浮层里的「目标时间 / 总时长」，滑动期间不 seek（转码分片按需生成，连续 seek
-    会打爆服务端），松手才写 `currentTime`。
-  - 左侧竖滑不实现（浏览器无法调亮度，避免误导）。
-  - 手势区域 `touch-action: none`，播放器内滑动不滚动页面；进度条拖动仍用原有 `pointerdown`
-    逻辑。需要 `preventDefault()` 的监听统一 `{ passive: false }`。
-- 图片：灯箱预览；PDF/文本：内嵌查看；其余：下载。
-- 文本编辑：白名单扩展名（`/api/info` 的 `text_exts`）且未超限时可切到编辑态，
-  保存走 `POST /api/text`（带读取时版本；409 时提示他人已修改并载入最新内容）；
-  工具栏「新建」弹窗（文件 / 文件夹二选一）调用 `POST /api/create`；选「文件」时
-  仅当扩展名在 `text_exts` 白名单内才显示初始内容框，否则提示「该类型只创建空文件」。
+## 8. 构建与测试
 
-## 5. 搜索
+```bash
+make web-install       # pnpm install --frozen-lockfile
+make web-build         # 构建到 internal/server/web-dist
+make web-check         # typecheck + lint + test + build
+make check             # Go 门禁；有 pnpm 与依赖时附带 web-check
+```
 
-- 输入 320ms 防抖 → `/api/search`；结果条目可点击进入所在目录。
-- 搜索模式下点视频同样走预览流程（含缩略图暂停）。
+没有 pnpm 或未安装 `web/node_modules` 时，`make check` 会打印提示并跳过前端检查，
+不阻断 Go 构建；CI 的 `frontend` job 仍强制跑完整四段并校验构建产物可复现。
 
-## 6. 移动端适配
+端到端脚本在 `scripts/v2_phase*.py`，Phase 5 起根路径即新前端；完整回归见
+`scripts/v2_phase5_test.py`。
 
-- 响应式：网格列数自适应（`auto-fill, minmax`）；触屏手势（swipe 返回、进度条拖拽）。
-- 触摸目标（`@media (max-width:991px), (pointer:coarse)`）：工具栏/面包屑按钮 ≥44px、
-  视图切换等图标按钮 ≥32×32、搜索框与表单控件 ≥44px 高且字号 ≥16px（防 iOS 聚焦放大整页）、
-  相邻操作间距 ≥8px；触屏无 hover 时列表行操作常显。窄屏工具栏换行、搜索框独占一行、
-  登录/新建弹窗按钮单列。可见小字号抬到 ≥12px。该查询不覆盖 ≥992px 细指针桌面，桌面观感不变。
-- 播放器全屏按钮：iOS Safari 用 `webkitEnterFullscreen`，其余 `requestFullscreen`。
-- 物理返回键：popstate 统一处理（预览 → 列表 → 上级目录）。
-- 列表/网格视图切换记忆在 localStorage（`fs.view`/`fs.sort`/`fs.order`）。
+## 9. 回退
 
-## 7. 性能注意
-
-- 大目录（上千文件）卡片惰性渲染 + IntersectionObserver 懒抽帧，
-  只有进入视口的卡片才发 `thumb-src` 请求（每张 ≤16MB，3 路并发）。
-- 前端缩略图缓存 LRU 防内存膨胀；重复浏览同一目录秒显（dataURL 命中）。
-
-## 8. 认证页与凭据 / 媒体 URL
-
-- 启动时 `bootstrap()` 先查 `/api/auth/status`：`needs_setup` → 引导页，未认证 → 登录页，
-  否则进入主应用。引导/登录是 `#auth` 覆盖层，不渲染任何目录内容，服务端对静态资源
-  不设门禁、对 `/api/*` 设门禁，故未认证也拿不到目录数据。
-- 引导页按模式显示：口令（两次输入，≥8 位）、TOTP 二维码（`/api/auth/totp-qr`，SVG）+
-  手输密钥 + 6 位码确认；`password+totp` 提供「跳过 TOTP」。登录页支持「记住我」
-  （勾选=7 天内免登录；不勾=关闭浏览器后需重新登录）。
-- **凭据真源在前端存储**：登录响应体返回明文 `token`（服务端不再下发 cookie），
-  `remember=false` 写 `sessionStorage`、`remember=true` 写 `localStorage`（键
-  `fs.token` + `fs.token.expires`）。所有 XHR 经 `authFetch()` 附
-  `Authorization: Bearer`；任何接口 `401` → `clearToken()` 并回登录页。
-- **媒体 URL 收口 `mediaURL(url)`**：`<img>/<video>/<a download>/<embed>` 与 HLS（含
-  服务端分片 URI）等浏览器原生请求无法带 `Authorization` 头，统一拼 `?t=<短票>`；
-  短票由 `POST /api/auth/ticket` 签发（绑定会话、只对 GET 生效、默认 5 分钟），
-  前端在剩余寿命不足 60s 时自动续签；hls.js 用 `xhrSetup` 在每个 XHR 前刷新 `?t=`。
-- 工具栏在认证启用时显示登出与会话管理按钮；会话弹窗列出会话（UA/时间/IP，不显示 token）
-  并可逐个撤销。登出清前端存储并调用 `/api/auth/logout` 使服务端 token 失效。
-- 文本编辑见 §4 与 `doc/COMPONENTS.md`：白名单内文件在预览页提供「编辑」，
-  保存带版本标识，409 时提示并载入最新内容。
-
-## 9. 文件上传（可选，默认关闭）
-
-服务端开关 `--allow-upload` / `FILESERVER_ALLOW_UPLOAD` 关闭时，`/api/info`
-的 `allow_upload=false`，前端**不渲染**上传按钮、不绑定拖拽，端点自身也返回 403。
-
-- **入口**：工具栏「上传」按钮（文件多选）与「上传文件夹」按钮（`webkitdirectory`，
-  不支持该属性或未登录时隐藏）；隐藏的 `<input type=file>` 由按钮触发。桌面端整页
-  拖拽投放层（`#dropOverlay`）支持文件与文件夹，移动端 `pointer: coarse` 不显示。
-- **目标目录**：选择/投放时快照当前 `state.path`。上传完成后仅当用户仍在同一目录
-  才自动刷新并高亮新文件（高亮 3.2s）；已导航到别处则只弹提示。
-- **队列**：每个文件一条记录，单路顺序上传；进度条区分「校验 / 秒传检查 / 上传」，
-  可单独取消或失败重试。文件夹按顶层目录分组，面板标题显示 `已完成/总数`。
-- **文件夹上传**：`webkitGetAsEntry` 递归读取拖入目录（`readEntries` 分批），或使用
-  `webkitdirectory` 选择器；用相对路径还原目录结构，并在上传文件前调用
-  `POST /api/upload/mkdir` 逐级创建目录（含空目录）。单次最多 2000 个文件；顶层目录
-  同名时按目录整体三选一（覆盖=合并、自动改名=整目录改名、取消）。
-- **大文件分片**：`size > /api/info 的 upload_chunk_threshold`（默认 8 MiB）时按
-  8 MiB 切片，先 `GET /api/upload/status` 取已收索引，只传缺少分片，最后
-  `POST /api/upload/complete` 合并。刷新/断网后重新选择同一文件，`upload_id`
-  由「前 1 MiB + 大小 + 名称」派生，命中同一会话即可续传；服务端 24 小时后清理残缺会话。
-- **秒传**：所有走会话上传的文件先计算整文件 SHA-256（>200 MiB 用
-  `/hash-worker.js` Worker，避免卡 UI；不支持 Worker 时主线程分片读取），再调
-  `POST /api/upload/instant`。命中直接落位并标记完成；未命中继续上传并在完成后登记索引。
-  内容索引是 `.FileServer/blobs/<前缀>/<sha256>` 硬链接；删除只少一个链接，最后一条
-  用户链接消失后回收。认证关闭时前端回退为第 1 段的单请求上传（分片/秒传/目录接口
-  仅登录会话可用）。
-- **同名冲突**：默认 `mode=ask`。服务端 `409 {code:"conflict", existing:[...]}` →
-  弹窗选择「覆盖 / 自动改名 / 取消」，对剩余整批生效；自动改名以服务端返回的
-  实际落盘名为准。
-- **上限**：`/api/info` 的 `upload_max_bytes`（默认 1024 MiB）用于选择后即时提示；
-  超限文件不发请求，服务端仍以 413 兜底。
-- **离开确认**：队列中存在等待/上传中的条目时注册 `beforeunload`。
-- **认证**：XHR 直接带 `Authorization: Bearer <token>`；401 走统一
-  `handleUnauthorized()` 清凭据回登录页。URL 只含目录/文件名/分片参数，不含 token。
-
-## 10. 文件管理（`manage.js`）
-
-文件管理是独立脚本 `internal/server/web/manage.js`（原生 JS，无依赖），在 `app.js`
-之前加载并在 `startApp()` 中 `FSManage.init()`；所有 DOM/状态入口通过
-`window.FSManage` 暴露。只有 `/api/info` 的 `manage=true`（启用认证并已登录）时才显示
-选择与回收站入口。
-
-- **选择模型**：`Set<相对路径>`；桌面单击选中、`Ctrl/⌘+单击` 增减、`Shift+单击` 连续范围、
-  `Ctrl/⌘+A` 全选当前目录、`Esc` 清空；双击打开条目。移动端轻点打开，长按 500ms
-  进入选择模式（顶部/底部出现「已选 N 项」操作栏），选择模式下轻点改为增减。
-  切换目录、搜索刷新、操作完成都会清空选择。
-- **操作栏**（`#selBar`）：下载（目录 zip / 文件直链）、重命名（仅单选）、移动、复制、
-  删除；`F2` 重命名、`Delete` 删除。右键菜单（`#ctxMenu`）提供同样的操作。
-- **重命名**（`#renameModal`）：输入框默认只选中主名（扩展名不选）；实时校验非空、
-  不含 `/ \`、不以 `.` 开头、同目录不重名，非法时禁用确定并显示原因；成功后刷新列表
-  并把选中保持在新名字上。
-- **移动/复制**（`#transferModal`）：目录树懒加载（只显示目录，从根展开，当前目录高亮），
-  底部可直接新建文件夹作为目标；`ask` 冲突时弹窗选择「覆盖 / 自动改名 / 取消」，
-  后端逐项返回失败明细。
-- **删除与回收站**：删除前必须确认「移入回收站，可恢复」；回收站弹窗（`#trashModal`）
-  列出原路径、删除时间、大小、类型与总占用，支持勾选恢复、彻底删除（二次确认）、
-  清空（二次确认）。恢复冲突时提示自动改名或取消。
-- **失败处理**：任何批量操作只要有失败项就打开 `#resultModal` 逐项列出路径与原因，
-  同时 toast 汇总成功/失败数量；不会整体静默失败。
-- 所有弹窗复用 `.modal` + `role="dialog" aria-modal="true"`，Esc 关闭；新增按钮均为原生
-  `<button>` 并带可见文案或 `aria-label`。
-
-## 11. 分享链接
-
-### 11.1 公开页（`share.html` / `share.js` / `share.css`）
-
-> Phase 4 起 `/s/{token}` 默认返回 V2 多入口构建产物
-> `internal/server/web-dist/share.html`（React，见 `web/src/share`），旧模板仅在
-> 前端尚未构建时兜底。两者都只加载同源静态资源，沿用分享页严格 CSP；
-> 新页面同样不加载 `app.js`/`manage.js`，并新增目录内单文件预览。
-
-- **独立模板**：`GET /s/{token}` 直接返回 `share.html`，只加载 `share.css` 与
-  `share.js`，不加载 `app.js`/`manage.js`，也不渲染管理界面骨架。
-- 启动后读取 URL 末段 token 调 `GET /api/public/share/{token}/info`；有提取码且未通过时
-  只显示输入框（info 不返回文件名/大小），通过 `POST .../verify` 后写 30 分钟 cookie
-  并重新加载。
-- 文件页：名称/大小/时间 + 按类型预览（图片 `<img>`、视频/音频原生控件、PDF
-  `<iframe>`、文本/代码 fetch 后写入 `<pre>` 的 `textContent`），主按钮直链下载。
-- 目录页：面包屑 + 列表（名称/大小/时间）+ 单文件下载 + 当前目录 zip；子目录点击进入。
-- 过期/撤销/超次/无效链接显示通用错误页；文案不包含路径。移动端 375px 下隐藏时间列、
-  下载按钮占满宽度。
-
-### 11.2 管理端（`share-admin.js`）
-
-- `window.FSShare` 暴露 `init()` / `applyCapabilities()` / `openCreate(paths)` /
-  `openList()`，由 `startApp()` 初始化；工具栏「分享链接」打开管理列表，文件/文件夹
-  右键菜单与选择栏「分享」打开创建弹窗。
-- 创建弹窗：有效期（1/7/30 天/永久）、提取码开关（开启自动生成 4 位，可手改，仅
-  `A-Z0-9`）、下载上限（不限/10/100）、允许预览、分享者备注；目录分享会提示「包含生成后
-  新增的内容」。
-- 结果弹窗：展示绝对链接与提取码，支持「复制链接」「复制链接+提取码」；复制优先
-  `navigator.clipboard`，不可用时回退 `execCommand`。
-- 管理列表：文件名、链接、有效期、已下载/上限、创建时间、状态（有效/已过期/已撤销/
-  次数用完）；过期项标灰保留；每项可复制、撤销（确认后立即失效）、删除记录（确认后
-  仅删记录）。认证关闭时也允许通过选择栏分享；文件管理按钮仍只在登录后显示。
+旧原生前端已从仓库删除。如需回退到旧前端，只能依赖 git 历史：
+`git log -- internal/server/web` 找到删除前的提交，恢复该目录并把
+`internal/server/server.go` 的 `/` 路由指回旧 `frontendHandler`（同时恢复当时的
+`webdist.go`）。当前版本不再提供运行时开关或两套前端并存。
