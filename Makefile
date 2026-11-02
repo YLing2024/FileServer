@@ -14,10 +14,11 @@
 #   make test           go test ./...
 #   make test-race      go race 测试
 #   make cover          覆盖率
-#   make check          fmt-check + vet-all + build-all + test（一条命令，必须 exit 0）
-#   make web-install    安装前端依赖（需要 pnpm；不参与 check）
+#   make check          fmt-check + vet-all + 前端检查（有 pnpm 时）+ build-all + test（必须 exit 0）
+#   make web-install    安装前端依赖（需要 pnpm）
 #   make web-build      构建前端到 internal/server/web-dist
-#   make web-check      前端四段：typecheck + lint + test + build（不参与 check）
+#   make web-check      前端四段：typecheck + lint + test + build
+#   make web-check-optional  有 pnpm 与依赖时跑 web-check，否则提示后跳过
 
 GO         ?= go
 PNPM       ?= pnpm
@@ -38,7 +39,7 @@ XFLAGS     := -X $(MODULE)/internal/version.Version=$(VERSION) \
               -X $(MODULE)/internal/version.Commit=$(COMMIT) \
               -X $(MODULE)/internal/version.BuildDate=$(BUILD_DATE)
 
-.PHONY: all fmt fmt-check vet vet-all build build-all dist test test-race cover check clean web-install web-build web-check
+.PHONY: all fmt fmt-check vet vet-all build build-all dist test test-race cover check clean web-install web-build web-check web-check-optional
 
 all: check
 
@@ -91,10 +92,21 @@ cover:
 	$(GO) test -coverprofile=dist/cover.out -covermode=atomic $$pkgs && \
 	$(GO) tool cover -func=dist/cover.out | tail -1
 
-check: fmt-check vet-all build-all test
+check: fmt-check vet-all web-check-optional build-all test
 	@echo "check: all green"
 
-# 前端独立目标：没有 pnpm 的环境仍可跑 make check；web-check 只在前端任务里调用。
+# 前端检查独立于 Go 门禁：没有 pnpm 或未安装依赖时给出提示并跳过，
+# 不让前端工具链缺失阻断 Go 构建；CI 的 frontend job 仍强制跑完整四段。
+web-check-optional:
+	@if ! command -v $(PNPM) >/dev/null 2>&1; then \
+		echo "web-check: 未找到 pnpm，跳过前端检查（不阻断 Go 构建）"; \
+	elif [ ! -d web/node_modules ]; then \
+		echo "web-check: 未安装前端依赖，跳过（先运行 make web-install）"; \
+	else \
+		$(MAKE) web-check; \
+	fi
+
+# 前端独立目标：安装依赖后跑 typecheck + lint + test + build。
 web-install:
 	cd web && $(PNPM) install --frozen-lockfile
 
