@@ -7,7 +7,8 @@ Phase 0 交付工具链与骨架，Phase 1 交付浏览视图：工具栏、网�
 排序、分页、图片/视频缩略图、空态/骨架/错误态与窄屏适配。Phase 2 交付预览与
 播放：`?view=` 路由、图片灯箱、PDF/文本预览、音频、视频播放器（直链/HLS）与
 移动端手势。Phase 3 交付上传与文件管理：文件/文件夹上传、分片断点续传、秒传、
-同名冲突三选一、多选、重命名/移动/复制/删除/回收站。
+同名冲突三选一、多选、重命名/移动/复制/删除/回收站。Phase 4 交付分享与设置：
+分享创建/管理、独立公开分享页 `/s/<token>`、会话管理、内嵌登录、关于/版本信息。
 
 ## 命令
 
@@ -111,6 +112,27 @@ make web-check                    # typecheck + lint + test + build
   下载单文件走 `/api/file`，目录走 `/api/zip`。
 - **错误文案**：401/403/404/409/413 与网络错误分别给出中文提示，不使用 `any`。
 
+## 分享与设置（Phase 4）
+
+- **分享创建**：选择条「分享」为单个文件/文件夹创建链接；有效期 1/7/30 天或永久，
+  提取码默认关闭、开启时自动生成 4 位可读码并允许手改，下载次数不限/10/100，
+  可关闭在线预览并填写分享者备注。创建成功后展示绝对链接与提取码，支持复制。
+- **分享管理**：工具栏「分享」打开列表，展示链接、状态、有效期、已下载次数、创建
+  时间与备注；可复制链接、取消分享（立即失效）与删除记录（不影响源文件）。
+- **公开分享页**：独立 Vite 入口 `share.html`，由 Go 在 `/s/<token>` 返回并沿用
+  分享页严格 CSP；匿名访问，支持提取码、单文件信息/预览/下载、目录逐级浏览、
+  目录内单文件预览（图片/视频/音频/PDF/文本/代码）、单文件下载与当前目录 zip。
+  页面不加载管理端脚本，不显示上传/管理入口。
+- **会话管理**：设置 →「已登录设备/会话」列出会话（UA、登录时间、记住我、IP），
+  标出当前设备并可下线其他设备。
+- **登录与失效**：`AuthGate` 探测 `/api/auth/status`；未登录时内嵌口令/TOTP/记住我
+  表单。首次 TOTP 绑定仍引导到旧版 `/`。API 401 清凭据与短票后原地重新登录。
+- **设置/关于**：展示 `/api/health` 的版本/commit/Go/平台与 `/api/info` 的服务标识；
+  冷门格式开关的说明文案与旧版一致，并提供开启/关闭按钮。
+- **多入口构建**：`vite.config.ts` 的 `rollupOptions.input` 同时包含 `index.html` 与
+  `share.html`，资源统一输出到 `/v2/assets`；Go 优先返回
+  `web-dist/share.html`，未构建时回退旧模板。
+
 ## 验收脚本
 
 Phase 1/2 先启动服务（HLS 用例需要 `--ffmpeg`），再运行：
@@ -137,13 +159,25 @@ Phase 3 自包含：脚本复制 `testdata` 到临时目录、随机高位端口
 Ctrl 多选批量删除、Shift 连选、目录 zip 下载、375 宽上传面板，以及上传中/选择条/
 冲突对话框三张截图。
 
+Phase 4 同样自包含（临时目录副本 + 随机端口 + 认证服务）：
+
+```bash
+/root/.venv/cdp/bin/python scripts/v2_phase4_test.py
+```
+
+覆盖带提取码的文件分享创建、匿名输码下载且字节一致、目录分享与图片预览、取消分享
+后公开页不可用、会话列表标出当前设备、375 宽公开页不溢出，并输出分享创建对话框、
+公开分享页、会话列表与 375 宽公开页截图。
+
 ## 目录
 
 ```
 src/
-├── api/        fetch 封装、token/短票、错误归一、目录/搜索/能力探测/上传/管理
+├── api/        fetch 封装、token/短票、错误归一、目录/搜索/能力探测/上传/管理/分享/会话/认证
 ├── domain/     文件类型、大小/时间格式化、路径工具、排序
 ├── components/ Toast、ErrorBoundary、ThemeToggle、Modal
+├── features/auth/
+│   └── AuthGate.tsx          认证状态探测与内嵌登录表单
 ├── features/browse/
 │   ├── BrowsePage.tsx        页面组合（路径/预览/搜索/排序/分页/多选/上传/管理）
 │   ├── Toolbar.tsx           品牌/面包屑/搜索/刷新/上传/回收站/视图/排序/主题
@@ -177,6 +211,19 @@ src/
 │   ├── ConfirmDialog.tsx     通用确认
 │   ├── FailuresDialog.tsx    批量失败明细
 │   └── messages.ts           状态码 → 中文文案
+├── features/share/
+│   ├── ShareCreateDialog.tsx 创建分享（有效期/提取码/次数/预览/备注）
+│   ├── ShareListDialog.tsx   分享列表、复制、取消、删除记录
+│   ├── shareCode.ts          提取码生成与规范化
+│   └── clipboard.ts          剪贴板（含 execCommand 回退）
+├── features/settings/
+│   ├── SettingsDialog.tsx    关于/版本、冷门格式说明、账户入口
+│   └── SessionsDialog.tsx    已登录设备列表与下线
+├── share/                    公开分享页独立入口（share.html → ShareApp）
+│   ├── main.tsx              React 挂载
+│   ├── ShareApp.tsx          提取码/文件预览/目录浏览/下载
+│   ├── api.ts                /api/public/share/* 数据访问
+│   └── status.ts             公开页错误文案
 ├── styles/     tokens.css（复用旧变量）+ global.css + buttons.module.css
 └── test/       Vitest 全局 setup
 ```

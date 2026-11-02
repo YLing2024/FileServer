@@ -42,7 +42,13 @@
 | `useBrowseRoute` | `?path=` / `?view=` 双向同步与历史恢复 | 无入参；返回 `path/view/navigate/openView/replaceView/closeView` | `const route = useBrowseRoute()` | 进入预览只写 `?view=`；深链 Esc 用 replace 回目录；灯箱切图 replace 不新增历史 |
 | `useDirectory` | 目录分页数据：首页/加载更多/错误/刷新 | `path`、`sort`、`order`、`limit` | `const dir = useDirectory(path, sort, order, 300)` | 切换路径/排序取消过期请求；`loadMore` 用 `offset=entries.length` |
 | `useSearch` | `/api/search` 数据，映射为可复用条目 | `query`、`path`、`limit` | `const search = useSearch(query, path, 2000)` | query 为空返回空闲态；结果携带 `searchPath/searchDir` |
-| `useCapabilities` | 读取 `/api/info` 与 `/api/health`，切换冷门格式 | 无入参；返回 `ffmpeg/hls/searchLimit/listLimit/toggling/toggleHls` | `const caps = useCapabilities()` | 优先读 `health.hls`，当前后端无该字段时回退 `/api/info`；开关走 `POST /api/settings/ffmpeg` |
+| `useCapabilities` | 读取 `/api/info` 与 `/api/health`，切换冷门格式 | 无入参；返回 `ffmpeg/hls/searchLimit/listLimit/manage/shareAllowed/version/commit/goVersion/platform/toggling/toggleHls` | `const caps = useCapabilities()` | 优先读 `health.hls`，当前后端无该字段时回退 `/api/info`；开关走 `POST /api/settings/ffmpeg` |
+| `AuthGate` | 认证状态探测与内嵌登录（口令/TOTP/记住我）；失效后原地重新登录 | `children`、`notice?` | `<AuthGate notice={notice}><BrowsePage /></AuthGate>` | 首次设置引导到旧版 `/`；登录用裸 fetch 避免 401 触发全局清理；不渲染目录内容 |
+| `ShareCreateDialog` | 创建分享：有效期/提取码/下载次数/预览开关/备注，成功后展示链接与提取码 | `target: ShareTarget`、`onClose`、`onCreated?` | `<ShareCreateDialog target={{path,name,isDir}} onClose={close} />` | 提取码 4 位字母数字、开启时自动生成可手改；提取码只在创建响应可见；必须位于 ToastProvider 内 |
+| `ShareListDialog` | 分享列表：链接/状态/有效期/访问次数；复制、取消分享、删除记录 | `onClose` | `<ShareListDialog onClose={close} />` | 取消分享立即失效；删除记录不动源文件；过期/撤销项标灰保留 |
+| `SessionsDialog` | 已登录设备列表，标出当前设备并下线其他会话 | `onClose` | `<SessionsDialog onClose={close} />` | 不显示 token 明文；服务端拒绝下线当前会话 |
+| `SettingsDialog` | 关于/版本（health + info）、冷门格式说明与开关、会话/退出入口 | `name/version/commit/goVersion/platform/ffmpeg/hls/hlsBusy/manage`、`onToggleHls/onOpenSessions/onLogout/onClose` | `<SettingsDialog {...caps} onClose={close} … />` | 冷门格式文案与旧版一致；无 ffmpeg 时禁用开关 |
+| `ShareApp`（公开页） | 独立入口 `/s/<token>`：提取码、单文件预览/下载、目录浏览/单文件预览/zip | 无 props；token 取自 `location.pathname` | 由 `share.html` 挂载 `<ShareApp />` | 只调 `/api/public/share/*`；不发送登录凭据、不渲染管理入口；分享页 CSP 不含 `unsafe-inline`，组件不写内联样式 |
 
 V2 样式：`web/src/styles/tokens.css` 与旧 `style.css` 的深浅令牌逐项一致；
 组件样式使用 CSS Modules，不新增全局类名。
@@ -77,7 +83,7 @@ V2 样式：`web/src/styles/tokens.css` 与旧 `style.css` 的深浅令牌逐项
 | 分享创建弹窗（`#shareCreate`，`FSShare.openCreate`） | 为单个文件/文件夹生成公开链接：有效期、提取码、下载上限、预览开关、备注 | `openCreate(paths)`；`POST /api/share`；`#scDays`/`#scCodeOn`/`#scCode`/`#scMax`/`#scPreview`/`#scNote` | 工具栏/右键菜单/选择栏的「分享」调用 `FSShare.openCreate(FSManage.selectedPaths())` | 只支持单选；开启提取码时自动生成 4 位（可手改，仅字母数字）；目录分享提示包含后续新增内容；服务端二次校验 |
 | 分享结果弹窗（`#shareResult`） | 展示链接与提取码并复制 | `#srLink`/`#srCode`；`navigator.clipboard` 失败回退 `execCommand` | 创建成功后由 `FSShare` 自动打开 | 链接用 `location.origin` 拼绝对地址；提取码只在创建时可见，关闭后无法找回 |
 | 分享管理弹窗（`#shareList`，`FSShare.openList`） | 列出分享、复制、撤销、删除记录 | `GET /api/share`、`POST /api/share/revoke`、`DELETE /api/share/record` | 工具栏「分享链接」按钮打开 | 过期/撤销/超次项标灰但保留；撤销立即失效；删除记录不影响源文件；状态文案走设计令牌 |
-| 公开分享页（`share.html` / `share.js` / `share.css`） | 独立免登录页面：文件信息/预览/下载、目录列表/单文件下载/zip、提取码 | URL `/s/<token>`；`GET info/list/download/zip/preview`、`POST verify` | `GET /s/<token>` 由服务端直接返回模板 | 不加载 `app.js`/`manage.js`；文本预览写 `textContent` 不当 HTML；错误页不显示路径；375px 可用 |
+| 公开分享页（`share.html` / `share.js` / `share.css`） | 独立免登录页面：文件信息/预览/下载、目录列表/单文件下载/zip、提取码 | URL `/s/<token>`；`GET info/list/download/zip/preview`、`POST verify` | `GET /s/<token>` 由服务端直接返回模板 | Phase 4 起默认返回 V2 `web-dist/share.html`；本行旧模板仅在前端未构建时兜底；文本预览写 `textContent` 不当 HTML；错误页不显示路径；375px 可用 |
 
 ## 可访问性要点（通用）
 

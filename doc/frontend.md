@@ -6,8 +6,9 @@
 > 缩略图）；Phase 2 已交付 `?view=` 预览路由、图片灯箱、PDF/文本预览、音频与
 > 视频播放器（直链/HLS、控制条、快捷键、移动端手势、进度记忆）；Phase 3 已交付
 > 上传与管理（文件/文件夹/拖拽/粘贴、分片断点续传、秒传、同名冲突、多选、
-> 重命名/移动/复制/删除/回收站）。下文仍描述默认
-> `/` 的旧原生前端，Phase 5 切换前两者并存。
+> 重命名/移动/复制/删除/回收站）；Phase 4 已交付分享与设置（分享创建/管理、
+> 独立公开页 `/s/<token>` 多入口构建、会话管理、内嵌登录、关于/版本）。
+> 下文仍描述默认 `/` 的旧原生前端，Phase 5 切换前两者并存。
 
 原生 HTML/CSS/JS，无构建步骤，经 `embed.FS` 内嵌进 exe（`internal/server/web/`）。
 改前端 = 改源码重新编译（静态资源响应 `Cache-Control: no-store`，浏览器不缓存旧版）。
@@ -223,6 +224,11 @@ web/
 ## 11. 分享链接
 
 ### 11.1 公开页（`share.html` / `share.js` / `share.css`）
+
+> Phase 4 起 `/s/{token}` 默认返回 V2 多入口构建产物
+> `internal/server/web-dist/share.html`（React，见 `web/src/share`），旧模板仅在
+> 前端尚未构建时兜底。两者都只加载同源静态资源，沿用分享页严格 CSP；
+> 新页面同样不加载 `app.js`/`manage.js`，并新增目录内单文件预览。
 
 - **独立模板**：`GET /s/{token}` 直接返回 `share.html`，只加载 `share.css` 与
   `share.js`，不加载 `app.js`/`manage.js`，也不渲染管理界面骨架。
