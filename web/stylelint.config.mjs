@@ -1,0 +1,27 @@
+// 只校验正确性：风格规则全部交给 Prettier，避免两套规则互相冲突。
+export default {
+  extends: ['stylelint-config-standard'],
+  rules: {
+    'alpha-value-notation': null,
+    'color-function-notation': null,
+    'color-hex-length': null,
+    'custom-property-empty-line-before': null,
+    'custom-property-pattern': null,
+    'declaration-block-no-redundant-longhand-properties': null,
+    'declaration-empty-line-before': null,
+    'font-family-name-quotes': null,
+    'function-name-case': null,
+    'hue-degree-notation': null,
+    'keyframes-name-pattern': null,
+    'media-feature-range-notation': null,
+    'no-descending-specificity': [true, { severity: 'warning' }],
+    'number-max-precision': null,
+    'property-no-vendor-prefix': null,
+    'rule-empty-line-before': null,
+    'selector-class-pattern': null,
+    'selector-not-notation': null,
+    'selector-pseudo-class-no-unknown': [true, { ignorePseudoClasses: ['global', 'local'] }],
+    'shorthand-property-no-redundant-values': null,
+    'value-keyword-case': null,
+  },
+};

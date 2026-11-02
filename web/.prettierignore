@@ -1,0 +1,4 @@
+node_modules/
+../internal/server/web-dist/
+pnpm-lock.yaml
+third-party.md

@@ -1,0 +1,63 @@
+/*
+ * 设计令牌：与 internal/server/web/style.css 的深浅主题逐项一致。
+ * 新前端不新造颜色/圆角/字号，只复用这些变量，保证 / 与 /v2/ 视觉同源。
+ */
+
+:root {
+  --radius: 14px;
+  --radius-sm: 9px;
+  --font:
+    system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
+    'Noto Sans SC', sans-serif;
+  --mono: 'Cascadia Code', consolas, 'JetBrains Mono', monospace;
+  --toolbar-h: 58px;
+  --ease: cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0e1014;
+  --bg-soft: #14171d;
+  --card: #1a1e26;
+  --card-hover: #20252f;
+  --border: rgb(255 255 255 / 7%);
+  --border-strong: rgb(255 255 255 / 13%);
+  --text: #e9ecf1;
+  --text-2: #9aa3b2;
+  --text-3: #636c7c;
+  --accent: #4f8cff;
+  --accent-strong: #6ba0ff;
+  --accent-soft: rgb(79 140 255 / 16%);
+  --danger: #ff6b6b;
+  --shadow: 0 10px 30px rgb(0 0 0 / 45%);
+  --shadow-sm: 0 2px 10px rgb(0 0 0 / 35%);
+  --hover: rgb(255 255 255 / 5.5%);
+  --toolbar-bg: rgb(14 16 20 / 78%);
+  --thumb-bg: linear-gradient(145deg, #232936, #171b23);
+  --scrollbar: rgb(255 255 255 / 14%);
+  --lb-bg: rgb(6 8 12 / 93%);
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f5f6f8;
+  --bg-soft: #eceef2;
+  --card: #fff;
+  --card-hover: #f8f9fb;
+  --border: rgb(20 24 32 / 9%);
+  --border-strong: rgb(20 24 32 / 16%);
+  --text: #1c2129;
+  --text-2: #5c6572;
+  --text-3: #9aa2ae;
+  --accent: #2f6fe4;
+  --accent-strong: #1c5fd6;
+  --accent-soft: rgb(47 111 228 / 10%);
+  --danger: #e5484d;
+  --shadow: 0 10px 30px rgb(30 40 60 / 13%);
+  --shadow-sm: 0 2px 10px rgb(30 40 60 / 9%);
+  --hover: rgb(20 24 32 / 4.5%);
+  --toolbar-bg: rgb(245 246 248 / 82%);
+  --thumb-bg: linear-gradient(145deg, #e8ecf3, #dde2ea);
+  --scrollbar: rgb(20 24 32 / 22%);
+  --lb-bg: rgb(248 249 251 / 95%);
+}
