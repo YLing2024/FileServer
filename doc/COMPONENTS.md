@@ -13,7 +13,15 @@
 | `ToastProvider` / `useToast` | 全局轻提示队列，3 秒自动消失 | `children`；`showToast(text, tone?)`，`tone` 默认 `info` | `<ToastProvider><App /></ToastProvider>`；组件内 `const { showToast } = useToast()` | 必须在 Provider 内调用 hook；不要在渲染期间调用 `showToast`；容器 `aria-live=polite`，错误项 `role=alert` |
 | `ErrorBoundary` | 捕获子树渲染异常，避免白屏 | `children`、可选 `fallback`；内置“重试”复位 | `<ErrorBoundary><App /></ErrorBoundary>` | 只捕获渲染/生命周期错误，不捕获事件回调与异步异常 |
 | `ThemeToggle` | 深浅主题切换，沿用 `fs.theme` | 无 props；读取/写入 `<html data-theme>` 与 `fs.theme` | `<ThemeToggle />` | 必须在 `main.tsx` 先调用 `initTheme()`；颜色只用既有 CSS 变量；原生 button + `aria-label="切换主题"` |
-| `BrowsePage` | Phase 0 最小目录列表：名称/大小/时间、目录下钻、`?path=` 同步 | 无 props；依赖 `?path=` 与 `/api/list` | `<BrowsePage />` | 只读浏览；文件预览/排序/搜索/分页留给后续阶段；目录项是可聚焦 button |
+| `BrowsePage` | Phase 1 浏览页：路径/搜索/排序/分页/滚动恢复的组合层 | 无 props；依赖 `?path=`、`/api/list`、`/api/search`、`/api/info` | `<BrowsePage />` | 文件点击暂只下载原文件；预览/播放留到 Phase 2；必须在 `ToastProvider` 内使用 |
+| `Toolbar` | 品牌/回根、面包屑、搜索框、刷新、视图切换、排序、主题、冷门格式开关 | `path`、`view`、`sort`、`order`、`query`、`searching`、`hls`、`ffmpeg`、`hlsBusy`；`onHome/onNavigate/onViewChange/onSortChange/onOrderToggle/onQueryChange/onClearSearch/onRefresh/onToggleHls` | `<Toolbar path="" view="grid" ... />` | 搜索防抖在 `BrowsePage` 层；Esc 清空；`/` 聚焦搜索框；窄屏搜索独占一行、≤480 隐藏排序下拉 |
+| `GridView` / `GridSkeleton` | 网格卡片（缩略图 + 名称/大小/时间）与加载骨架 | `entries`、`query`、`serverTranscode`、`onOpen`；骨架 `count` | `<GridView entries={entries} query="" serverTranscode={false} onOpen={open} />` | 卡片是原生 button，`aria-label` 为条目名；目录/文件都由 `onOpen` 分发 |
+| `ListView` / `ListSkeleton` | 列表三列（名称/大小/修改时间），名称可点 | `entries`、`query`、`onOpen`；骨架 `count` | `<ListView entries={entries} query="" onOpen={open} />` | 目录优先由排序函数保证；≤820 隐藏时间列，≤480 收窄大小列 |
+| `FileThumb` | 按类型渲染缩略图：图片 `/api/thumb`、视频抽帧/服务端缩略图、其余图标 | `entry`、`path`、`serverTranscode` | `<FileThumb entry={entry} path="photos/a.jpg" serverTranscode={false} />` | 视频抽帧并发 3、懒加载、卸载取消；冷门格式无 ffmpeg 时保持图标，不发 `/api/thumb-src` |
+| `Highlight` | 搜索命中高亮，纯文本拆分不注入 HTML | `text`、`query` | `<Highlight text="sample.mp4" query="mp4" />` | 大小写不敏感；空 query 原样输出 |
+| `useDirectory` | 目录分页数据：首页/加载更多/错误/刷新 | `path`、`sort`、`order`、`limit` | `const dir = useDirectory(path, sort, order, 300)` | 切换路径/排序取消过期请求；`loadMore` 用 `offset=entries.length` |
+| `useSearch` | `/api/search` 数据，映射为可复用条目 | `query`、`path`、`limit` | `const search = useSearch(query, path, 2000)` | query 为空返回空闲态；结果携带 `searchPath/searchDir` |
+| `useCapabilities` | 读取 `/api/info` 与 `/api/health`，切换冷门格式 | 无入参；返回 `ffmpeg/hls/searchLimit/listLimit/toggling/toggleHls` | `const caps = useCapabilities()` | 优先读 `health.hls`，当前后端无该字段时回退 `/api/info`；开关走 `POST /api/settings/ffmpeg` |
 
 V2 样式：`web/src/styles/tokens.css` 与旧 `style.css` 的深浅令牌逐项一致；
 组件样式使用 CSS Modules，不新增全局类名。

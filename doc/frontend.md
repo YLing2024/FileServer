@@ -2,7 +2,9 @@
 
 > V2 前端（React + TypeScript + Vite）已在 `/v2/` 并行开发，源码在 `web/`，
 > 构建产物在 `internal/server/web-dist`，说明见 `web/README.md` 与
-> `doc/COMPONENTS.md`。下文仍描述默认 `/` 的旧原生前端，Phase 5 切换前两者并存。
+> `doc/COMPONENTS.md`。Phase 1 已交付浏览视图（工具栏/搜索/排序/网格/列表/分页/
+> 缩略图），文件预览与播放器留到 Phase 2。下文仍描述默认 `/` 的旧原生前端，
+> Phase 5 切换前两者并存。
 
 原生 HTML/CSS/JS，无构建步骤，经 `embed.FS` 内嵌进 exe（`internal/server/web/`）。
 改前端 = 改源码重新编译（静态资源响应 `Cache-Control: no-store`，浏览器不缓存旧版）。
