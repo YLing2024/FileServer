@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 3 验收：/v2/ 上传与管理。
+"""Phase 3 验收：根路径上传与管理。
 
 脚本自己把 testdata 复制到临时目录并启动一个独立服务（随机高位端口、
 password 认证），因此不会污染 testdata；结束后停止服务并删除临时目录。
@@ -162,7 +162,7 @@ def main() -> int:
             page = context.new_page()
             page.on("pageerror", lambda error: page_errors.append(str(error)))
 
-            page.goto(f"{base}/v2/", wait_until="networkidle")
+            page.goto(f"{base}/", wait_until="networkidle")
             page.wait_for_selector('[data-testid="entry-card"]', timeout=10000)
             checks.check(
                 page.locator('[data-testid="toolbar-upload"]').count() == 1
@@ -437,7 +437,7 @@ def main() -> int:
                 % (json.dumps(session["token"]), json.dumps(str(session["expires"])))
             )
             page = context.new_page()
-            page.goto(f"{base}/v2/", wait_until="networkidle")
+            page.goto(f"{base}/", wait_until="networkidle")
             page.wait_for_selector('[data-testid="entry-card"]', timeout=10000)
             page.locator('input[type="file"]').first.set_input_files(str(mobile_file))
             page.wait_for_selector('[data-testid="upload-panel"]', timeout=10000)

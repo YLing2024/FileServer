@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 4 验收：/v2/ 分享、会话、设置与公开分享页 /s/<token>。
+"""Phase 4 验收：根路径分享、会话、设置与公开分享页 /s/<token>。
 
 脚本把 testdata 复制到临时目录并启动独立服务（随机高位端口、password 认证），
 不会污染 testdata；结束后停止服务并删除临时目录。
@@ -157,7 +157,7 @@ def main() -> int:
             page.on("pageerror", lambda error: page_errors.append(str(error)))
 
             # ---- 1. 为 upload/a.bin 创建带提取码的分享 ----
-            page.goto(f"{base}/v2/?path=upload", wait_until="networkidle")
+            page.goto(f"{base}/?path=upload", wait_until="networkidle")
             wait_entries(page)
             page.locator('[data-testid="entry-card"][data-entry-name="a.bin"]').click()
             page.get_by_test_id("selection-share").click()
@@ -208,7 +208,7 @@ def main() -> int:
             )
 
             # ---- 3. 目录分享：进入目录并预览图片 ----
-            page.goto(f"{base}/v2/?path=", wait_until="networkidle")
+            page.goto(f"{base}/?path=", wait_until="networkidle")
             wait_entries(page)
             page.locator('[data-testid="entry-card"][data-entry-name="photos"]').click()
             page.get_by_test_id("selection-share").click()
@@ -255,7 +255,7 @@ def main() -> int:
 
             # ---- 5. 会话列表能看到当前设备，并可下线其他设备 ----
             login(base)  # 再登录一次，制造另一台“设备”的会话
-            page.goto(f"{base}/v2/", wait_until="networkidle")
+            page.goto(f"{base}/", wait_until="networkidle")
             wait_entries(page)
             page.get_by_test_id("toolbar-settings").click()
             page.wait_for_selector('[data-testid="settings-dialog"]', timeout=5000)
@@ -276,10 +276,10 @@ def main() -> int:
             )
             page.keyboard.press("Escape")
 
-            # ---- 5b. 未登录访问 /v2/ 显示内嵌登录，成功后进入浏览页 ----
+            # ---- 5b. 未登录访问根路径显示内嵌登录，成功后进入浏览页 ----
             login_context = browser.new_context(viewport={"width": 1280, "height": 900})
             login_page = login_context.new_page()
-            login_page.goto(f"{base}/v2/", wait_until="networkidle")
+            login_page.goto(f"{base}/", wait_until="networkidle")
             login_page.wait_for_selector('[data-testid="login-password"]', timeout=10000)
             login_page.get_by_test_id("login-password").fill(PASSWORD)
             login_page.get_by_test_id("login-submit").click()

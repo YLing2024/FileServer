@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 1 验收：/v2/ 浏览视图（工具栏/网格/列表/搜索/排序/分页/缩略图/窄屏）。
+"""Phase 1 验收：根路径浏览视图（工具栏/网格/列表/搜索/排序/分页/缩略图/窄屏）。
 
 先启动服务（示例）：
     go run ./cmd/fileserver --dir testdata --host 127.0.0.1 --port 18080
@@ -59,7 +59,7 @@ def main() -> int:
         )
 
         # 1) 根目录 7 项
-        page.goto(f"{BASE}/v2/", wait_until="networkidle")
+        page.goto(f"{BASE}/", wait_until="networkidle")
         page.wait_for_selector('[data-testid="entry-card"]', timeout=10000)
         names = card_names(page)
         assert len(names) == 7, f"根目录应为 7 项，实际 {len(names)}: {names}"
@@ -131,7 +131,7 @@ def main() -> int:
         print("PASS Esc 清除搜索并恢复根目录")
 
         # 7) 视频缩略图：浏览器抽帧得到 dataURL img
-        page.goto(f"{BASE}/v2/?path=videos", wait_until="networkidle")
+        page.goto(f"{BASE}/?path=videos", wait_until="networkidle")
         page.wait_for_selector('[data-testid="entry-card"]', timeout=10000)
         page.wait_for_function(
             """() => {
@@ -147,7 +147,7 @@ def main() -> int:
         # 8) 375×780 不横向溢出
         mobile = browser.new_page(viewport={"width": 375, "height": 780})
         mobile.on("pageerror", lambda error: errors.append(str(error)))
-        mobile.goto(f"{BASE}/v2/", wait_until="networkidle")
+        mobile.goto(f"{BASE}/", wait_until="networkidle")
         mobile.wait_for_selector('[data-testid="entry-card"]', timeout=10000)
         overflow = mobile.evaluate(
             """() => ({
@@ -163,12 +163,12 @@ def main() -> int:
         )
         mobile.close()
 
-        # 9) 旧前端 / 不受影响
-        page.goto(f"{BASE}/", wait_until="networkidle")
-        page.wait_for_selector("#grid .card", timeout=10000)
-        expect(page.locator("#grid .card").first).to_be_visible()
+        # 9) /v2/ 兼容入口仍返回同一套新前端
+        page.goto(f"{BASE}/v2/", wait_until="networkidle")
+        page.wait_for_selector('[data-testid="entry-card"]', timeout=10000)
+        expect(page.locator('[data-testid="entry-card"]').first).to_be_visible()
         expect(page.locator("body")).to_contain_text("videos")
-        print("PASS 旧前端 / 仍正常列出目录")
+        print("PASS /v2/ 兼容入口正常列出目录")
 
         browser.close()
 

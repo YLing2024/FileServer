@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 2 验收：/v2/ 预览路由、图片灯箱、视频播放器与移动端手势。
+"""Phase 2 验收：根路径预览路由、图片灯箱、视频播放器与移动端手势。
 
 先启动服务（示例，HLS 用例需要 --ffmpeg）：
     go run ./cmd/fileserver --dir testdata --host 127.0.0.1 --port 18080 --no-qr --ffmpeg
@@ -94,7 +94,7 @@ def main() -> int:
         )
 
         # 1) 图片灯箱：原图、缩放、切图、URL 同步、刷新恢复
-        page.goto(f"{BASE}/v2/?path=photos", wait_until="networkidle")
+        page.goto(f"{BASE}/?path=photos", wait_until="networkidle")
         page.wait_for_selector('[data-testid="entry-card"]', timeout=10000)
         page.locator(
             '[data-testid="entry-card"][data-entry-name="sample.jpg"]'
@@ -135,7 +135,7 @@ def main() -> int:
         print("PASS Esc 退出灯箱并回到浏览视图")
 
         # 2) 文本预览
-        page.goto(f"{BASE}/v2/?view=README.txt", wait_until="networkidle")
+        page.goto(f"{BASE}/?view=README.txt", wait_until="networkidle")
         pre = page.wait_for_selector('[data-testid="text-preview"]', timeout=10000)
         assert "FileServer" in pre.inner_text()
         assert "monospace" in pre.evaluate("el => getComputedStyle(el).fontFamily")
@@ -144,7 +144,7 @@ def main() -> int:
         page.wait_for_selector('[data-testid="entry-card"]', timeout=10000)
 
         # 3) 视频播放：进度前进、空格暂停、画中画、离开释放
-        page.goto(f"{BASE}/v2/?view=videos%2Fsample.mp4", wait_until="networkidle")
+        page.goto(f"{BASE}/?view=videos%2Fsample.mp4", wait_until="networkidle")
         page.wait_for_selector('[data-testid="video-player"]', timeout=10000)
         page.locator('button[aria-label="播放"]').first.click()
         page.wait_for_function(
@@ -183,7 +183,7 @@ def main() -> int:
             viewport={"width": 375, "height": 780}, has_touch=True, is_mobile=True
         )
         mobile.on("pageerror", lambda error: errors.append(str(error)))
-        mobile.goto(f"{BASE}/v2/?view=videos%2Fsample.mp4", wait_until="networkidle")
+        mobile.goto(f"{BASE}/?view=videos%2Fsample.mp4", wait_until="networkidle")
         mobile.wait_for_selector('[data-testid="video-player"]', timeout=10000)
         mobile.wait_for_timeout(500)
         mobile.locator('button[aria-label="播放"]').first.click()
@@ -268,10 +268,10 @@ def main() -> int:
             hls_page = browser.new_page(viewport={"width": 1280, "height": 900})
             hls_errors: list[str] = []
             hls_page.on("pageerror", lambda error: hls_errors.append(str(error)))
-            hls_page.goto(f"{BASE}/v2/?path=", wait_until="networkidle")
+            hls_page.goto(f"{BASE}/?path=", wait_until="networkidle")
             hls_page.wait_for_selector('[data-testid="entry-card"]', timeout=10000)
             hls_page.goto(
-                f"{BASE}/v2/?view={os.path.basename(fixture)}", wait_until="networkidle"
+                f"{BASE}/?view={os.path.basename(fixture)}", wait_until="networkidle"
             )
             hls_page.wait_for_selector('[data-testid="video-player"]', timeout=10000)
             hls_page.wait_for_function(
@@ -289,7 +289,7 @@ def main() -> int:
 
         # 6) 滚动位置：进入预览再返回保持不变
         scroll_page = browser.new_page(viewport={"width": 375, "height": 780})
-        scroll_page.goto(f"{BASE}/v2/?path=manyvideos", wait_until="networkidle")
+        scroll_page.goto(f"{BASE}/?path=manyvideos", wait_until="networkidle")
         scroll_page.wait_for_selector('[data-testid="entry-card"]', timeout=10000)
         scroll_page.evaluate("window.scrollTo(0, 600)")
         scroll_page.wait_for_timeout(200)
