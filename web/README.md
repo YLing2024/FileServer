@@ -34,9 +34,9 @@ make web-check                    # typecheck + lint + test + build
 - 产物提交入库（`internal/server/web-dist`），CI 用
   `git diff --exit-code internal/server/web-dist` 验证可复现。
 - `internal/server/webdist.go` 注册 `/v2` → `/v2/` 与 `/v2/` 子树：
-  - `index.html` 与 SPA fallback：`Cache-Control: no-store`；
-  - `/v2/assets/*`：一年 immutable；
-  - 缺失的 asset 返回 404，未知页面路径回退 index.html。
+    - `index.html` 与 SPA fallback：`Cache-Control: no-store`；
+    - `/v2/assets/*`：一年 immutable；
+    - 缺失的 asset 返回 404，未知页面路径回退 index.html。
 - `pnpm build` 最后会写 `web-dist/.keep`，保证 `//go:embed web-dist`
   在产物被清空时仍能编译；运行时若缺少 `index.html`，`/v2/` 返回 503。
 
