@@ -236,9 +236,7 @@ func TestCreateConcurrentDir(t *testing.T) {
 // Windows 不支持用目录权限位表达“只读”：0o555 只影响 FILE_ATTRIBUTE_READONLY，
 // 不阻止在该目录下创建文件，因此跳过（行为差异来自平台，不是服务端缺陷）。
 func TestCreateReadOnly(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Windows 目录权限位不阻止创建子项")
-	}
+	skipIfReadOnlyDirUnsupported(t)
 	ts, _, root := newTestHTTPServer(t)
 	roDir := filepath.Join(root, "rodir")
 	if err := os.Mkdir(roDir, 0o555); err != nil {

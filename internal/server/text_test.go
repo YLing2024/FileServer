@@ -161,6 +161,7 @@ func TestTextConflict(t *testing.T) {
 
 // TestTextReadOnly 只读文件/目录保存失败，且不留临时文件残留。
 func TestTextReadOnly(t *testing.T) {
+	skipIfReadOnlyDirUnsupported(t)
 	ts, _, root := newTestHTTPServer(t)
 	roFile := filepath.Join(root, "ro.txt")
 	os.WriteFile(roFile, []byte("x"), 0o444)

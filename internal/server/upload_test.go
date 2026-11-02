@@ -306,6 +306,7 @@ func TestUploadTooLarge(t *testing.T) {
 
 // TestUploadReadOnlyAndBadDir 只读目录 403；目录不存在/不是目录 400。
 func TestUploadReadOnlyAndBadDir(t *testing.T) {
+	skipIfReadOnlyDirUnsupported(t)
 	ts, root := newUploadTS(t, 0)
 	ro := filepath.Join(root, "ro")
 	if err := os.Mkdir(ro, 0o555); err != nil {
