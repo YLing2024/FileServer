@@ -334,6 +334,14 @@ def main() -> int:
             page.wait_for_selector('[data-testid="text-preview"]', timeout=10000)
             text = page.get_by_test_id("text-preview").inner_text()
             checks.check("FileServer" in text, "文本预览加载 README.txt 内容")
+            page.get_by_test_id("text-edit").click()
+            page.wait_for_selector('[data-testid="text-editor"]', timeout=10000)
+            edited = text + "\nphase5-edit-marker\n"
+            page.get_by_test_id("text-editor").fill(edited)
+            page.get_by_test_id("text-save").click()
+            page.wait_for_selector('[data-testid="text-preview"]', timeout=10000)
+            saved_text = (service_dir / "README.txt").read_text(encoding="utf-8-sig")
+            checks.check("phase5-edit-marker" in saved_text, "文本编辑保存到原文件")
             page.keyboard.press("Escape")
 
             # ---- 6. 带提取码分享 → 匿名下载 → 撤销 ----
