@@ -1,0 +1,77 @@
+/**
+ * 浏览器原生媒体 URL 的凭据处理。
+ *
+ * `<img>` / `<video>` / `<a download>` 无法携带 Authorization 头，旧前端通过
+ * `POST /api/auth/ticket` 换一张只对 GET 生效的短票，再以 `?t=` 附加到 URL。
+ * 新前端沿用同一约定；认证关闭时 ensureTicket 直接返回空串，不产生额外请求。
+ */
+import { requestJson } from './client';
+import { readToken } from './token';
+
+interface TicketState {
+  value: string;
+  expires: number;
+  inflight: Promise<string> | null;
+}
+
+const state: TicketState = { value: '', expires: 0, inflight: null };
+
+/** 短票剩余寿命是否仍大于 60 秒；不足则重新签发，避免长页面中途失效。 */
+function ticketFresh(): boolean {
+  return state.value !== '' && state.expires * 1000 - Date.now() > 60_000;
+}
+
+/** 获取当前会话短票；未登录或认证关闭时返回空串。 */
+export function ensureTicket(): Promise<string> {
+  if (!readToken()) return Promise.resolve('');
+  if (ticketFresh()) return Promise.resolve(state.value);
+  if (state.inflight) return state.inflight;
+
+  state.inflight = requestJson<{ ticket?: string; expires?: number }>('/api/auth/ticket', {
+    method: 'POST',
+  })
+    .then((body) => {
+      if (typeof body.ticket === 'string') state.value = body.ticket;
+      state.expires = typeof body.expires === 'number' ? body.expires : 0;
+      return state.value;
+    })
+    .catch(() => '')
+    .finally(() => {
+      state.inflight = null;
+    });
+  return state.inflight;
+}
+
+/** 清除缓存的短票（401 或主动登出后调用）。 */
+export function clearTicket(): void {
+  state.value = '';
+  state.expires = 0;
+  state.inflight = null;
+}
+
+/** 给 URL 追加短票；无票时原样返回。 */
+export function withTicket(url: string, ticket: string): string {
+  if (!ticket) return url;
+  return `${url}${url.includes('?') ? '&' : '?'}t=${encodeURIComponent(ticket)}`;
+}
+
+/** 图片缩略图 URL（服务端 Go 解码缩放）。 */
+export function thumbUrl(path: string, width = 300, height = 300): string {
+  const params = new URLSearchParams({ path, w: String(width), h: String(height) });
+  return `/api/thumb?${params.toString()}`;
+}
+
+/** 视频抽帧专用源 URL（服务端返回截短的合法 MP4）。 */
+export function thumbSrcUrl(path: string): string {
+  return `/api/thumb-src?${new URLSearchParams({ path }).toString()}`;
+}
+
+/** 原始文件下载 URL。 */
+export function fileDownloadUrl(path: string): string {
+  return `/api/file?${new URLSearchParams({ path, dl: '1' }).toString()}`;
+}
+
+/** 原始文件直链 URL（不强制附件下载）。 */
+export function fileUrl(path: string): string {
+  return `/api/file?${new URLSearchParams({ path }).toString()}`;
+}

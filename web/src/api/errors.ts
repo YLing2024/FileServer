@@ -15,3 +15,10 @@ export class ApiError extends Error {
     this.code = code;
   }
 }
+
+/** 把未知异常收窄成可展示文案；非 ApiError 一律用调用方给的兜底文案。 */
+export function errorMessage(error: unknown, fallback: string): string {
+  if (error instanceof ApiError && error.message) return error.message;
+  if (error instanceof Error && error.message) return error.message;
+  return fallback;
+}
