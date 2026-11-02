@@ -13,7 +13,7 @@ jobs:
     # Windows 原生构建：产物是 Windows exe，Windows runner 上直接可测。
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: actions/setup-go@v5
