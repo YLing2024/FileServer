@@ -1,0 +1,72 @@
+/* 会话列表：设备信息单行、操作右对齐，窄屏换行。 */
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 13px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.device {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.current {
+  padding: 1px 7px;
+  color: var(--accent);
+  font-size: 11.5px;
+  font-weight: 500;
+  background: var(--accent-soft);
+  border-radius: 999px;
+}
+
+.detail {
+  overflow-wrap: anywhere;
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+
+.hint {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 13px;
+  text-align: center;
+}
+
+.error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 12.5px;
+  text-align: center;
+}
+
+@media (width <= 520px) {
+  .row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

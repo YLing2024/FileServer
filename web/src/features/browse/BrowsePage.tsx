@@ -17,7 +17,9 @@ import {
 import { errorMessage } from '../../api/errors';
 import type { SortKey, SortOrder } from '../../api/list';
 import { deleteEntries, type ManageFailure } from '../../api/manage';
-import { downloadFile, downloadZip } from '../../api/media';
+import { clearTicket, downloadFile, downloadZip } from '../../api/media';
+import { logout } from '../../api/sessions';
+import { clearToken } from '../../api/token';
 import { useToast } from '../../components/Toast';
 import { kindOf, kindOfEntry } from '../../domain/fileType';
 import { basename, joinPath, normalizePath } from '../../domain/path';
@@ -29,6 +31,10 @@ import { TransferDialog } from '../manage/TransferDialog';
 import { TrashDialog } from '../manage/TrashDialog';
 import { manageErrorMessage } from '../manage/messages';
 import { PreviewPage, type PreviewFile } from '../preview/PreviewPage';
+import { SettingsDialog } from '../settings/SettingsDialog';
+import { SessionsDialog } from '../settings/SessionsDialog';
+import { ShareCreateDialog, type ShareTarget } from '../share/ShareCreateDialog';
+import { ShareListDialog } from '../share/ShareListDialog';
 import { collectFolderFiles, supportsDirectoryPicker } from '../upload/collect';
 import { DropOverlay } from '../upload/DropOverlay';
 import { UploadConflictDialog } from '../upload/UploadConflictDialog';
@@ -130,6 +136,10 @@ export function BrowsePage() {
   const [deleteTargets, setDeleteTargets] = useState<string[] | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [failures, setFailures] = useState<{ title: string; failed: ManageFailure[] } | null>(null);
+  const [shareTarget, setShareTarget] = useState<ShareTarget | null>(null);
+  const [shareListOpen, setShareListOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [sessionsOpen, setSessionsOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const folderPickerSupported = useMemo(() => supportsDirectoryPicker(), []);
@@ -237,6 +247,27 @@ export function BrowsePage() {
     () => entries.filter((entry) => selection.selected.has(entry.fullPath)),
     [entries, selection.selected],
   );
+
+  const handleShareSelected = useCallback(() => {
+    if (selectedEntries.length !== 1) {
+      showToast('分享只支持单个文件或文件夹', 'error');
+      return;
+    }
+    const entry = selectedEntries[0];
+    if (!entry) return;
+    setShareTarget({ path: entry.fullPath, name: entry.name, isDir: entry.is_dir });
+  }, [selectedEntries, showToast]);
+
+  const handleLogout = useCallback(async () => {
+    try {
+      await logout();
+    } catch {
+      // 会话可能已失效；本地凭据仍必须清掉。
+    }
+    clearToken();
+    clearTicket();
+    window.location.reload();
+  }, []);
 
   const handleEntryClick = useCallback(
     (entry: BrowseEntry, event: ReactMouseEvent<HTMLElement>) => {
@@ -502,6 +533,7 @@ export function BrowsePage() {
         folderUploadAllowed={capabilities.manage && folderPickerSupported}
         manageEnabled={capabilities.manage}
         uploadBusy={upload.snapshot.busy}
+        shareAllowed={capabilities.shareAllowed}
         onHome={() => navigate('')}
         onNavigate={navigate}
         onViewChange={setView}
@@ -516,6 +548,8 @@ export function BrowsePage() {
         onUpload={() => fileInputRef.current?.click()}
         onUploadFolder={() => folderInputRef.current?.click()}
         onTrash={() => setTrashOpen(true)}
+        onOpenShare={() => setShareListOpen(true)}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
 
       <input
@@ -601,6 +635,7 @@ export function BrowsePage() {
         onDownload={() => {
           void handleDownload();
         }}
+        onShare={handleShareSelected}
         onRename={() => {
           if (selectedEntries.length === 1 && selectedEntries[0]) {
             setRenameTarget(selectedEntries[0]);
@@ -665,6 +700,43 @@ export function BrowsePage() {
           onClose={() => setFailures(null)}
         />
       ) : null}
+
+      {shareTarget ? (
+        <ShareCreateDialog
+          target={shareTarget}
+          onClose={() => setShareTarget(null)}
+          onCreated={() => selection.clear()}
+        />
+      ) : null}
+
+      {shareListOpen ? <ShareListDialog onClose={() => setShareListOpen(false)} /> : null}
+
+      {settingsOpen ? (
+        <SettingsDialog
+          name={capabilities.serverName}
+          version={capabilities.version}
+          commit={capabilities.commit}
+          goVersion={capabilities.goVersion}
+          platform={capabilities.platform}
+          ffmpeg={capabilities.ffmpeg}
+          hls={capabilities.hls}
+          hlsBusy={capabilities.toggling}
+          manage={capabilities.manage}
+          onToggleHls={() => {
+            void handleToggleHls();
+          }}
+          onOpenSessions={() => {
+            setSettingsOpen(false);
+            setSessionsOpen(true);
+          }}
+          onLogout={() => {
+            void handleLogout();
+          }}
+          onClose={() => setSettingsOpen(false)}
+        />
+      ) : null}
+
+      {sessionsOpen ? <SessionsDialog onClose={() => setSessionsOpen(false)} /> : null}
 
       <UploadPanel
         snapshot={upload.snapshot}

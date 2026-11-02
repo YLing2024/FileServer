@@ -22,6 +22,7 @@ interface ToolbarProps {
   folderUploadAllowed: boolean;
   manageEnabled: boolean;
   uploadBusy: boolean;
+  shareAllowed: boolean;
   onHome: () => void;
   onNavigate: (path: string) => void;
   onViewChange: (view: ViewMode) => void;
@@ -34,6 +35,8 @@ interface ToolbarProps {
   onUpload: () => void;
   onUploadFolder: () => void;
   onTrash: () => void;
+  onOpenShare: () => void;
+  onOpenSettings: () => void;
 }
 
 function BrandMark() {
@@ -223,6 +226,24 @@ function TrashIcon() {
   );
 }
 
+function ShareIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.4 1.4" />
+      <path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.4-1.4" />
+    </svg>
+  );
+}
+
+function SettingsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.6 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+    </svg>
+  );
+}
+
 /** 工具栏；所有控件都是原生 button/select/input，键盘可达。 */
 export function Toolbar({
   path,
@@ -238,6 +259,7 @@ export function Toolbar({
   folderUploadAllowed,
   manageEnabled,
   uploadBusy,
+  shareAllowed,
   onHome,
   onNavigate,
   onViewChange,
@@ -250,6 +272,8 @@ export function Toolbar({
   onUpload,
   onUploadFolder,
   onTrash,
+  onOpenShare,
+  onOpenSettings,
 }: ToolbarProps) {
   const hlsTitle = !ffmpeg
     ? '冷门格式支持不可用（服务端无 ffmpeg）'
@@ -326,6 +350,19 @@ export function Toolbar({
           </button>
         ) : null}
 
+        {shareAllowed ? (
+          <button
+            type="button"
+            className={styles.iconButton}
+            aria-label="分享链接"
+            title="分享链接管理"
+            onClick={onOpenShare}
+            data-testid="toolbar-share"
+          >
+            <ShareIcon />
+          </button>
+        ) : null}
+
         <button
           type="button"
           className={`${styles.iconButton} ${hls ? styles.active : ''}`}
@@ -384,6 +421,16 @@ export function Toolbar({
         </button>
 
         <ThemeToggle />
+        <button
+          type="button"
+          className={styles.iconButton}
+          aria-label="设置"
+          title="设置与关于"
+          onClick={onOpenSettings}
+          data-testid="toolbar-settings"
+        >
+          <SettingsIcon />
+        </button>
         {searching ? <span className={styles.srOnly}>搜索中</span> : null}
       </div>
     </header>

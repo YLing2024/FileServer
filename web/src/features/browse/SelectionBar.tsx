@@ -10,6 +10,7 @@ import styles from './SelectionBar.module.css';
 interface SelectionBarProps {
   count: number;
   onDownload: () => void;
+  onShare: () => void;
   onRename: () => void;
   onMove: () => void;
   onCopy: () => void;
@@ -20,6 +21,7 @@ interface SelectionBarProps {
 export function SelectionBar({
   count,
   onDownload,
+  onShare,
   onRename,
   onMove,
   onCopy,
@@ -39,6 +41,14 @@ export function SelectionBar({
           onClick={onDownload}
         >
           下载
+        </button>
+        <button
+          type="button"
+          className={`${buttonStyles.button} ${buttonStyles.small}`}
+          onClick={onShare}
+          data-testid="selection-share"
+        >
+          分享
         </button>
         <button
           type="button"

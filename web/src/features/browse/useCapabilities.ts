@@ -11,10 +11,16 @@ interface CapabilitiesState {
   searchLimit: number;
   listLimit: number;
   manage: boolean;
+  shareAllowed: boolean;
   uploadAllowed: boolean;
   uploadMaxBytes: number;
   chunkThreshold: number;
   chunkMax: number;
+  serverName: string;
+  version: string;
+  commit: string;
+  goVersion: string;
+  platform: string;
   ready: boolean;
 }
 
@@ -29,10 +35,16 @@ const INITIAL_STATE: CapabilitiesState = {
   searchLimit: DEFAULT_SEARCH_LIMIT,
   listLimit: DEFAULT_LIST_LIMIT,
   manage: false,
+  shareAllowed: true,
   uploadAllowed: false,
   uploadMaxBytes: DEFAULT_UPLOAD_MAX,
   chunkThreshold: DEFAULT_CHUNK_THRESHOLD,
   chunkMax: DEFAULT_CHUNK_MAX,
+  serverName: 'FileServer',
+  version: '',
+  commit: '',
+  goVersion: '',
+  platform: '',
   ready: false,
 };
 
@@ -60,10 +72,16 @@ export function useCapabilities() {
         searchLimit: info?.search_limit ?? DEFAULT_SEARCH_LIMIT,
         listLimit: info?.list_limit ?? DEFAULT_LIST_LIMIT,
         manage: Boolean(info?.manage),
+        shareAllowed: info?.share !== false,
         uploadAllowed: Boolean(info?.allow_upload),
         uploadMaxBytes: info?.upload_max_bytes ?? DEFAULT_UPLOAD_MAX,
         chunkThreshold: info?.upload_chunk_threshold ?? DEFAULT_CHUNK_THRESHOLD,
         chunkMax: info?.upload_chunk_max ?? DEFAULT_CHUNK_MAX,
+        serverName: info?.name ?? 'FileServer',
+        version: health?.version ?? info?.version ?? '',
+        commit: health?.commit ?? '',
+        goVersion: health?.go ?? '',
+        platform: health?.platform ?? '',
         ready: true,
       });
     });
