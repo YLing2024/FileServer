@@ -138,16 +138,6 @@
   background: rgb(255 255 255 / 16%);
 }
 
-.button:focus-visible,
-.bigPlay:focus-visible,
-.retry:focus-visible,
-.rate:focus-visible,
-.progressInput:focus-visible,
-.volumeInput:focus-visible {
-  outline: 2px solid var(--accent-strong);
-  outline-offset: 2px;
-}
-
 .button svg {
   width: 21px;
   height: 21px;
@@ -260,6 +250,16 @@
 .rate option {
   color: #1c2129;
   background: #fff;
+}
+
+.button:focus-visible,
+.bigPlay:focus-visible,
+.retry:focus-visible,
+.rate:focus-visible,
+.progressInput:focus-visible,
+.volumeInput:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
 }
 
 @media (max-width: 600px) {

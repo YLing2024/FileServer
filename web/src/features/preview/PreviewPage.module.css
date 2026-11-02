@@ -33,6 +33,11 @@
   cursor: pointer;
 }
 
+.download {
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
 .back:hover,
 .download:hover {
   color: var(--accent-strong);
@@ -63,11 +68,6 @@
   color: var(--text-3);
   font-size: 12px;
   white-space: nowrap;
-}
-
-.download {
-  color: var(--accent-strong);
-  background: var(--accent-soft);
 }
 
 .main {
