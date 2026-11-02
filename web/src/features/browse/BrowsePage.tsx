@@ -256,9 +256,6 @@ export function BrowsePage() {
           </div>
         ) : null}
 
-        {!searching && !directory.truncated && entries.length > 0 ? (
-          <p className={styles.footer}>共 {directory.total ?? entries.length} 项</p>
-        ) : null}
       </main>
     </>
   );
