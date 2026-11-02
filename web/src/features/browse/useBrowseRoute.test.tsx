@@ -44,7 +44,11 @@ describe('useBrowseRoute', () => {
   });
 
   it('灯箱切图只 replace 当前记录，不新增历史', () => {
-    window.history.replaceState({ path: 'photos', fsView: 'photos/a.jpg' }, '', '/v2/?view=photos%2Fa.jpg');
+    window.history.replaceState(
+      { path: 'photos', fsView: 'photos/a.jpg' },
+      '',
+      '/v2/?view=photos%2Fa.jpg',
+    );
     const { result } = renderHook(() => useBrowseRoute());
     const length = window.history.length;
 

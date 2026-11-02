@@ -2,15 +2,18 @@
  * 浏览页：工具栏 + 网格/列表 + 搜索 + 分页。
  *
  * 数据获取全部在 hooks（useDirectory / useSearch / useCapabilities），组件只负责
- * 展示与事件分发；文件预览/播放留到 Phase 2，本阶段文件点击走下载。
+ * 展示与事件分发。可预览的文件进入 `?view=`，关闭时由路由恢复目录与滚动位置；
+ * 其余类型直接下载。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { errorMessage } from '../../api/errors';
 import type { SortKey, SortOrder } from '../../api/list';
-import { ensureTicket, fileDownloadUrl, withTicket } from '../../api/media';
+import { downloadFile } from '../../api/media';
 import { useToast } from '../../components/Toast';
-import { joinPath, normalizePath } from '../../domain/path';
+import { kindOf, kindOfEntry } from '../../domain/fileType';
+import { basename, joinPath, normalizePath } from '../../domain/path';
 import { isSortKey, isSortOrder, sortEntries } from '../../domain/sort';
+import { PreviewPage, type PreviewFile } from '../preview/PreviewPage';
 import { GridSkeleton, GridView } from './GridView';
 import { ListSkeleton, ListView } from './ListView';
 import { Toolbar, type ViewMode } from './Toolbar';
@@ -19,7 +22,7 @@ import { useDebouncedValue } from './useDebouncedValue';
 import { useDirectory } from './useDirectory';
 import { usePersistentChoice } from './usePersistentChoice';
 import { useSearch } from './useSearch';
-import { useUrlPath } from './useUrlPath';
+import { useBrowseRoute } from './useBrowseRoute';
 import { clearVideoThumbCache } from './videoThumb';
 import type { BrowseEntry } from './types';
 import styles from './BrowsePage.module.css';
@@ -45,7 +48,14 @@ function EmptyState({ searching }: { searching: boolean }) {
 /** 目录浏览页；路径由 ?path= 驱动，视图/排序偏好持久化到 localStorage。 */
 export function BrowsePage() {
   const { showToast } = useToast();
-  const [path, navigateRaw] = useUrlPath();
+  const {
+    path,
+    view: previewView,
+    navigate: navigateRaw,
+    openView,
+    replaceView,
+    closeView,
+  } = useBrowseRoute();
   const [query, setQuery] = useState('');
   const [view, setView] = usePersistentChoice<ViewMode>('fs.view', 'grid', isViewMode);
   const [sort, setSort] = usePersistentChoice<SortKey>('fs.sort', 'name', isSortKey);
@@ -106,17 +116,25 @@ export function BrowsePage() {
         navigate(entry.searchDir ?? entry.fullPath);
         return;
       }
-      // Phase 1 只读浏览：文件点击下载原文件，预览/播放留到 Phase 2。
-      void ensureTicket().then((ticket) => {
-        const link = document.createElement('a');
-        link.href = withTicket(fileDownloadUrl(entry.fullPath), ticket);
-        link.download = entry.name;
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
+      const kind = kindOfEntry(entry);
+      if (
+        kind === 'image' ||
+        kind === 'video' ||
+        kind === 'audio' ||
+        kind === 'pdf' ||
+        kind === 'text' ||
+        kind === 'code'
+      ) {
+        // 记录列表滚动位置必须在切换视图前完成；预览关闭后由此恢复。
+        scrollPositions.current.set(path, window.scrollY);
+        openView(entry.fullPath);
+        return;
+      }
+      void downloadFile(entry.fullPath, entry.name).catch(() => {
+        showToast('下载失败', 'error');
       });
     },
-    [navigate],
+    [navigate, openView, path, showToast],
   );
 
   const handleRefresh = useCallback(() => {
@@ -140,11 +158,11 @@ export function BrowsePage() {
   }, [capabilities, directory, search, searching, showToast]);
 
   useEffect(() => {
-    if (loading || searching) return;
+    if (previewView || loading || searching) return;
     const saved = scrollPositions.current.get(path) ?? 0;
     const frame = window.requestAnimationFrame(() => window.scrollTo(0, saved));
     return () => window.cancelAnimationFrame(frame);
-  }, [path, loading, searching]);
+  }, [path, loading, searching, previewView]);
 
   useEffect(() => {
     if (!searching) return;
@@ -173,6 +191,42 @@ export function BrowsePage() {
     directory.entries.length,
     loadMore,
   ]);
+
+  const previewFile = useMemo<PreviewFile | null>(() => {
+    if (!previewView) return null;
+    const match =
+      browseEntries.find((entry) => entry.fullPath === previewView) ??
+      searchEntries.find((entry) => entry.fullPath === previewView);
+    return {
+      path: previewView,
+      name: match?.name ?? basename(previewView),
+      size: match?.size ?? -1,
+      mtime: match?.mtime ?? 0,
+      kind: match ? kindOfEntry(match) : kindOf(basename(previewView), false),
+    };
+  }, [previewView, browseEntries, searchEntries]);
+
+  const previewImages = useMemo(() => {
+    const seen = new Set<string>();
+    const paths: string[] = [];
+    for (const entry of [...browseEntries, ...searchEntries]) {
+      if (entry.is_dir || kindOfEntry(entry) !== 'image' || seen.has(entry.fullPath)) continue;
+      seen.add(entry.fullPath);
+      paths.push(entry.fullPath);
+    }
+    return paths;
+  }, [browseEntries, searchEntries]);
+
+  if (previewView && previewFile) {
+    return (
+      <PreviewPage
+        file={previewFile}
+        images={previewImages}
+        onClose={closeView}
+        onChangeImage={replaceView}
+      />
+    );
+  }
 
   const meta = loading
     ? '正在加载…'
@@ -255,7 +309,6 @@ export function BrowsePage() {
             <div ref={loadMoreRef} className={styles.sentinel} aria-hidden="true" />
           </div>
         ) : null}
-
       </main>
     </>
   );
