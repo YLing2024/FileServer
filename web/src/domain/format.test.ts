@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatBytes, formatTime } from './format';
+import { formatBytes, formatDuration, formatTime } from './format';
 
 describe('formatBytes', () => {
   it('按 1024 进位并保留合适精度', () => {
@@ -15,6 +15,15 @@ describe('formatBytes', () => {
     expect(formatBytes(-1)).toBe('');
     expect(formatBytes(Number.NaN)).toBe('');
     expect(formatBytes(Number.POSITIVE_INFINITY)).toBe('');
+  });
+});
+
+describe('formatDuration', () => {
+  it('秒转 m:ss / h:mm:ss，非法值按 0', () => {
+    expect(formatDuration(0)).toBe('0:00');
+    expect(formatDuration(Number.NaN)).toBe('0:00');
+    expect(formatDuration(65.9)).toBe('1:05');
+    expect(formatDuration(3725)).toBe('1:02:05');
   });
 });
 
