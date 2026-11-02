@@ -2,13 +2,13 @@
  * 认证门禁：认证开启时先探测 `/api/auth/status`，未登录则内嵌登录表单。
  *
  * 与旧前端保持一致：勾选“记住我”写 localStorage，否则写 sessionStorage；
- * 首次绑定 TOTP 仍需去旧前端 `/` 完成（V2 不复制引导流程）。登录失效时
- * 由 App 传入 notice 并重新挂载本组件，用户留在 V2 直接重新登录。
+ * 首次设置（口令 / TOTP 绑定）也由默认入口承接，不再依赖已删除的旧前端。
  */
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { authModeLabel, fetchAuthStatus, login, type AuthStatus } from '../../api/auth';
 import { ApiError, errorMessage } from '../../api/errors';
 import buttonStyles from '../../styles/buttons.module.css';
+import { SetupForm } from './SetupForm';
 import styles from './AuthGate.module.css';
 
 interface AuthGateProps {
@@ -107,23 +107,7 @@ export function AuthGate({ children, notice = '' }: AuthGateProps) {
   }
 
   if (status.needs_setup) {
-    return (
-      <div className={styles.page}>
-        <div className={styles.card}>
-          <h1 className={styles.title}>首次设置</h1>
-          <p className={styles.hint}>
-            需要先在旧版页面完成初始化（设置访问口令、绑定 TOTP），完成后回到这里登录。
-          </p>
-          <button
-            type="button"
-            className={`${buttonStyles.button} ${buttonStyles.primary}`}
-            onClick={() => window.location.assign('/')}
-          >
-            前往完成设置
-          </button>
-        </div>
-      </div>
-    );
+    return <SetupForm onDone={() => void load()} />;
   }
 
   const needPassword =

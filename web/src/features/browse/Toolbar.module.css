@@ -77,15 +77,6 @@
   white-space: nowrap;
 }
 
-.badge {
-  flex: none;
-  padding: 1px 7px;
-  color: var(--accent-strong);
-  font-size: 11px;
-  background: var(--accent-soft);
-  border-radius: 999px;
-}
-
 .crumbs {
   display: flex;
   align-items: center;
@@ -427,8 +418,7 @@
     display: none;
   }
 
-  .brandName,
-  .badge {
+  .brandName {
     display: none;
   }
 }

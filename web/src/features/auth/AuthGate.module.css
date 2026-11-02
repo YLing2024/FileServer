@@ -99,3 +99,24 @@
   color: var(--danger);
   font-size: 12.5px;
 }
+
+.qr {
+  align-self: center;
+  width: min(220px, 100%);
+  height: auto;
+  background: #fff;
+  border-radius: 8px;
+}
+
+.secret {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.secret code {
+  color: var(--text-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}

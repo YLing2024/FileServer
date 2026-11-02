@@ -293,7 +293,6 @@ export function Toolbar({
         >
           <BrandMark />
           <span className={styles.brandName}>文件服务器</span>
-          <span className={styles.badge}>V2 预览</span>
         </button>
         <Breadcrumbs path={path} onNavigate={onNavigate} />
       </div>

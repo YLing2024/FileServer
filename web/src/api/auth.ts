@@ -29,6 +29,22 @@ export interface LoginInput {
   remember: boolean;
 }
 
+/** `/api/auth/setup` 响应：当前认证模式与待绑定的 TOTP 信息。 */
+export interface SetupStatus {
+  mode: string;
+  need_password: boolean;
+  need_totp: boolean;
+  totp_secret: string;
+  otpauth_url: string;
+}
+
+/** 首次设置提交内容。 */
+export interface SetupInput {
+  password: string;
+  code: string;
+  skipTOTP: boolean;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
@@ -102,6 +118,42 @@ export async function login(input: LoginInput, signal?: AbortSignal): Promise<vo
   }
   const expires = typeof body.expires === 'number' ? body.expires : 0;
   writeToken(body.token, expires, input.remember);
+}
+
+/** 读取首次设置状态；失败时返回可展示的 ApiError。 */
+export async function fetchSetup(signal?: AbortSignal): Promise<SetupStatus> {
+  const response = await fetch('/api/auth/setup', { signal, cache: 'no-store' });
+  const body = await parseBody(response);
+  if (!response.ok || !isRecord(body)) {
+    const message = isRecord(body) && typeof body.error === 'string' ? body.error : '无法读取设置状态';
+    throw new ApiError(response.status, message);
+  }
+  return {
+    mode: typeof body.mode === 'string' ? body.mode : 'password',
+    need_password: body.need_password === true,
+    need_totp: body.need_totp === true,
+    totp_secret: typeof body.totp_secret === 'string' ? body.totp_secret : '',
+    otpauth_url: typeof body.otpauth_url === 'string' ? body.otpauth_url : '',
+  };
+}
+
+/** 提交首次设置（口令 / TOTP / 两者）；成功后服务端会标记配置完成。 */
+export async function completeSetup(input: SetupInput, signal?: AbortSignal): Promise<void> {
+  const response = await fetch('/api/auth/setup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      password: input.password,
+      code: input.code,
+      skip_totp: input.skipTOTP,
+    }),
+    signal,
+  });
+  const body = await parseBody(response);
+  if (!response.ok) {
+    const message = isRecord(body) && typeof body.error === 'string' ? body.error : '设置失败';
+    throw new ApiError(response.status, message);
+  }
 }
 
 /** 认证模式的中文说明，与旧前端保持一致。 */

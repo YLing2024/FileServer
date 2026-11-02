@@ -93,7 +93,7 @@ describe('AuthGate', () => {
     expect(screen.queryByText('APP')).toBeNull();
   });
 
-  it('首次设置引导到旧前端完成 TOTP 绑定', async () => {
+  it('首次设置在新前端内显示口令与 TOTP 表单', async () => {
     stubFetch({
       '/api/auth/status': () =>
         json({
@@ -102,6 +102,14 @@ describe('AuthGate', () => {
           authenticated: false,
           needs_setup: true,
         }),
+      '/api/auth/setup': () =>
+        json({
+          mode: 'password+totp',
+          need_password: true,
+          need_totp: true,
+          totp_secret: 'JBSWY3DPEHPK3PXP',
+          otpauth_url: 'otpauth://totp/FileServer?secret=JBSWY3DPEHPK3PXP',
+        }),
     });
     render(
       <AuthGate>
@@ -109,7 +117,9 @@ describe('AuthGate', () => {
       </AuthGate>,
     );
     expect(await screen.findByText('首次设置')).toBeTruthy();
-    expect(screen.getByRole('button', { name: '前往完成设置' })).toBeTruthy();
+    expect(await screen.findByTestId('setup-password')).toBeTruthy();
+    expect(screen.getByTestId('setup-code')).toBeTruthy();
+    expect(screen.getByTestId('setup-submit')).toBeTruthy();
   });
 
   it('登录失效提示显示在表单顶部', async () => {
