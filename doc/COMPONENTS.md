@@ -1,6 +1,26 @@
 # 前端组件登记
 
-本仓库前端是**内嵌原生 JS（`internal/server/web/app.js`，无构建链、无组件框架）**，
+本仓库前端有两条并行链路：
+
+- **旧前端（默认 `/`）**：内嵌原生 JS（`internal/server/web/app.js`，无构建链、无组件框架）。
+- **V2 前端（`/v2/`，Phase 0 起）**：React + TypeScript + Vite（`web/src`），
+  产物经 `go:embed` 嵌入。新增可复用组件必须在本文件登记，文件头写 TSDoc。
+
+## V2 React 组件（`web/src`）
+
+| 组件 | 用途 | 关键 props / 事件 | 最小示例 | 注意事项 |
+|---|---|---|---|---|
+| `ToastProvider` / `useToast` | 全局轻提示队列，3 秒自动消失 | `children`；`showToast(text, tone?)`，`tone` 默认 `info` | `<ToastProvider><App /></ToastProvider>`；组件内 `const { showToast } = useToast()` | 必须在 Provider 内调用 hook；不要在渲染期间调用 `showToast`；容器 `aria-live=polite`，错误项 `role=alert` |
+| `ErrorBoundary` | 捕获子树渲染异常，避免白屏 | `children`、可选 `fallback`；内置“重试”复位 | `<ErrorBoundary><App /></ErrorBoundary>` | 只捕获渲染/生命周期错误，不捕获事件回调与异步异常 |
+| `ThemeToggle` | 深浅主题切换，沿用 `fs.theme` | 无 props；读取/写入 `<html data-theme>` 与 `fs.theme` | `<ThemeToggle />` | 必须在 `main.tsx` 先调用 `initTheme()`；颜色只用既有 CSS 变量；原生 button + `aria-label="切换主题"` |
+| `BrowsePage` | Phase 0 最小目录列表：名称/大小/时间、目录下钻、`?path=` 同步 | 无 props；依赖 `?path=` 与 `/api/list` | `<BrowsePage />` | 只读浏览；文件预览/排序/搜索/分页留给后续阶段；目录项是可聚焦 button |
+
+V2 样式：`web/src/styles/tokens.css` 与旧 `style.css` 的深浅令牌逐项一致；
+组件样式使用 CSS Modules，不新增全局类名。
+
+## 旧前端可复用 UI 单元
+
+本仓库旧前端是**内嵌原生 JS（`internal/server/web/app.js`，无构建链、无组件框架）**，
 不存在框架级组件。下表登记的是可复用的 UI 单元（函数/视图），供维护者快速定位与修改。
 新增可复用 UI 单元必须同一笔登记。
 

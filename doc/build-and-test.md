@@ -7,6 +7,7 @@
 - golangci-lint v2.14.0（可选，本地复现 CI 的 lint；CI 会自动安装同版本）。
 - ffmpeg：可选组件，测试视频生成与 GPU 转码需要。
 - Python 3.12 + Playwright（浏览器端到端测试）。
+- 前端（仅 V2 前端与 `make web-*` 需要）：Node.js >= 24、pnpm 12（见 `web/.nvmrc`）。
 
 ## 2. 构建与校验
 
@@ -27,6 +28,16 @@ make test-race             # go test -race ./...
 make cover                 # 覆盖率
 make dist VERSION=1.2.3    # 发布构建：注入版本 / commit / 构建时间（windows/amd64）
 ```
+
+前端（`web/`，产物嵌入 `internal/server/web-dist`）：
+
+```bash
+make web-install           # pnpm install --frozen-lockfile
+make web-build             # pnpm build（Vite → internal/server/web-dist）
+make web-check             # typecheck + lint + test + build
+```
+
+`make check` 不包含前端，避免没有 pnpm 的环境挂掉；前端改动请另跑 `make web-check`。
 
 Windows 侧：
 
@@ -49,6 +60,9 @@ release.ps1 -Version 1.2.3        rem 构建注入版本的 exe + lite/full zip 
   `darwin/arm64`、`windows/amd64` 五目标逐一 `go vet` + `go build`。
 - **lint**（`ubuntu-latest`，矩阵 `GOOS=linux` / `GOOS=windows`）：`golangci-lint`
   v2.14.0（配置见 `.golangci.yml`）。
+- **frontend**（`ubuntu-latest`）：`pnpm install --frozen-lockfile` →
+  `typecheck` → `lint` → `test` → `build`，最后 `git diff --exit-code
+  internal/server/web-dist` 证明提交的构建产物可复现。
 
 `.github/workflows/release.yml`：打 `v*` tag 时在 `windows-latest` 上构建注入版本的 exe，
 产出 `FileServer-lite-<v>.zip` 与 `SHA256SUMS.txt`，创建 GitHub Release。
