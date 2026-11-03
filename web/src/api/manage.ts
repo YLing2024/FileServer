@@ -166,3 +166,17 @@ export function createFolder(dir: string, name: string): Promise<{ ok: boolean; 
     body: JSON.stringify({ dir, kind: 'dir', name }),
   });
 }
+
+/** 新建空文件或文件夹（工具栏「新建」）。文字白名单内的文件可带初始内容。 */
+export function createEntry(
+  dir: string,
+  kind: 'file' | 'dir',
+  name: string,
+  content?: string,
+): Promise<{ ok: boolean; path: string }> {
+  return requestJson<{ ok: boolean; path: string }>('/api/create', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(content ? { dir, kind, name, content } : { dir, kind, name }),
+  });
+}

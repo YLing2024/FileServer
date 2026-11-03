@@ -34,9 +34,21 @@ interface ToolbarProps {
   onToggleHls: () => void;
   onUpload: () => void;
   onUploadFolder: () => void;
+  /** 新建文件 / 文件夹（仅登录后可用）。 */
+  onCreate: () => void;
   onTrash: () => void;
   onOpenShare: () => void;
   onOpenSettings: () => void;
+}
+
+function NewEntryIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M6 3h8l4 4v14H6z" />
+      <path d="M14 3v4h4" />
+      <path d="M12 11v6M9 14h6" />
+    </svg>
+  );
 }
 
 function BrandMark() {
@@ -271,6 +283,7 @@ export function Toolbar({
   onToggleHls,
   onUpload,
   onUploadFolder,
+  onCreate,
   onTrash,
   onOpenShare,
   onOpenSettings,
@@ -333,6 +346,19 @@ export function Toolbar({
             data-testid="toolbar-upload-folder"
           >
             <FolderUploadIcon />
+          </button>
+        ) : null}
+
+        {manageEnabled ? (
+          <button
+            type="button"
+            className={styles.iconButton}
+            aria-label="新建文件或文件夹"
+            title="新建文件 / 文件夹"
+            onClick={onCreate}
+            data-testid="toolbar-create"
+          >
+            <NewEntryIcon />
           </button>
         ) : null}
 

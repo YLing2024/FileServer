@@ -13,6 +13,8 @@ interface CapabilitiesState {
   manage: boolean;
   shareAllowed: boolean;
   uploadAllowed: boolean;
+  /** 可编辑文本扩展名白名单（含点，小写）。 */
+  textExts: readonly string[];
   uploadMaxBytes: number;
   chunkThreshold: number;
   chunkMax: number;
@@ -29,6 +31,13 @@ const DEFAULT_UPLOAD_MAX = 1024 * 1024 * 1024;
 const DEFAULT_CHUNK_THRESHOLD = 8 * 1024 * 1024;
 const DEFAULT_CHUNK_MAX = 64 * 1024 * 1024;
 
+/** 服务端未返回 text_exts 时的兜底白名单（与 internal/server 默认值一致的常用项）。 */
+const DEFAULT_TEXT_EXTS: readonly string[] = [
+  '.txt', '.md', '.markdown', '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg',
+  '.conf', '.log', '.csv', '.tsv', '.xml', '.html', '.css', '.js', '.ts', '.jsx',
+  '.tsx', '.py', '.go', '.rs', '.sh', '.sql', '.srt', '.vtt',
+];
+
 const INITIAL_STATE: CapabilitiesState = {
   ffmpeg: false,
   hls: false,
@@ -37,6 +46,7 @@ const INITIAL_STATE: CapabilitiesState = {
   manage: false,
   shareAllowed: true,
   uploadAllowed: false,
+  textExts: DEFAULT_TEXT_EXTS,
   uploadMaxBytes: DEFAULT_UPLOAD_MAX,
   chunkThreshold: DEFAULT_CHUNK_THRESHOLD,
   chunkMax: DEFAULT_CHUNK_MAX,
@@ -74,6 +84,7 @@ export function useCapabilities() {
         manage: Boolean(info?.manage),
         shareAllowed: info?.share !== false,
         uploadAllowed: Boolean(info?.allow_upload),
+        textExts: info?.text_exts?.length ? info.text_exts.map((ext) => ext.toLowerCase()) : DEFAULT_TEXT_EXTS,
         uploadMaxBytes: info?.upload_max_bytes ?? DEFAULT_UPLOAD_MAX,
         chunkThreshold: info?.upload_chunk_threshold ?? DEFAULT_CHUNK_THRESHOLD,
         chunkMax: info?.upload_chunk_max ?? DEFAULT_CHUNK_MAX,

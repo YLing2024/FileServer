@@ -28,6 +28,7 @@ import { FailuresDialog } from '../manage/FailuresDialog';
 import { ConfirmDialog } from '../manage/ConfirmDialog';
 import { RenameDialog } from '../manage/RenameDialog';
 import { TransferDialog } from '../manage/TransferDialog';
+import { CreateEntryDialog } from '../manage/CreateEntryDialog';
 import { TrashDialog } from '../manage/TrashDialog';
 import { manageErrorMessage } from '../manage/messages';
 import { PreviewPage, type PreviewFile } from '../preview/PreviewPage';
@@ -133,6 +134,7 @@ export function BrowsePage() {
   const [renameTarget, setRenameTarget] = useState<BrowseEntry | null>(null);
   const [transfer, setTransfer] = useState<{ kind: 'move' | 'copy'; paths: string[] } | null>(null);
   const [trashOpen, setTrashOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
   const [deleteTargets, setDeleteTargets] = useState<string[] | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [failures, setFailures] = useState<{ title: string; failed: ManageFailure[] } | null>(null);
@@ -547,6 +549,7 @@ export function BrowsePage() {
         }}
         onUpload={() => fileInputRef.current?.click()}
         onUploadFolder={() => folderInputRef.current?.click()}
+        onCreate={() => setCreateOpen(true)}
         onTrash={() => setTrashOpen(true)}
         onOpenShare={() => setShareListOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
@@ -667,6 +670,19 @@ export function BrowsePage() {
           currentPath={path}
           onClose={() => setTransfer(null)}
           onDone={handleTransferDone}
+        />
+      ) : null}
+
+      {createOpen ? (
+        <CreateEntryDialog
+          dir={path}
+          textExts={capabilities.textExts}
+          onClose={() => setCreateOpen(false)}
+          onCreated={(name) => {
+            setCreateOpen(false);
+            showToast(`已创建 ${name}`);
+            refreshCurrent();
+          }}
         />
       ) : null}
 

@@ -1,0 +1,77 @@
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.kinds {
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px;
+  background: var(--menu-hover);
+  border-radius: 9px;
+  align-self: flex-start;
+}
+
+.kind {
+  min-height: 30px;
+  padding: 0 14px;
+  color: var(--text-2);
+  font-size: 13px;
+  border-radius: 7px;
+}
+
+.kindActive {
+  color: var(--text);
+  background: var(--card);
+  box-shadow: var(--shadow-sm, 0 1px 2px rgb(0 0 0 / 8%));
+}
+
+.label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.input,
+.textarea {
+  width: 100%;
+  padding: 8px 11px;
+  color: var(--text);
+  background: var(--card);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.input {
+  min-height: 38px;
+}
+
+.textarea {
+  min-height: 120px;
+  font-family: var(--mono);
+  resize: vertical;
+}
+
+.input:focus,
+.textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.hint,
+.path {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.error {
+  margin: 0;
+  color: var(--danger, #d33);
+  font-size: 12.5px;
+}

@@ -22,6 +22,8 @@ export interface ServerInfo {
   manage?: boolean;
   /** 分享功能是否可用（当前服务端恒为 true，字段留给未来开关）。 */
   share?: boolean;
+  /** 可编辑文本的扩展名白名单（含点，小写）；新建文件时决定是否显示「初始内容」。 */
+  text_exts?: string[];
 }
 
 /**
